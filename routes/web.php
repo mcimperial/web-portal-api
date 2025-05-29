@@ -15,7 +15,8 @@ use Illuminate\Http\Request;
 */
 
 Route::get('/', function () {
-    return ['Laravel' => app()->version()];
+    //return ['Laravel' => app()->version()];
+    return ['Laravel' => "Version " . app()->version()];
 });
 
 Route::get('/csrf-token', function () {
