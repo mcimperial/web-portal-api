@@ -1,5 +1,7 @@
 {
     "TestModule": true,
     "TestTry": true,
-    "TestMod": true
+    "TestMod": true,
+    "ModuleName": true,
+    "ClientMasterlist": true
 }

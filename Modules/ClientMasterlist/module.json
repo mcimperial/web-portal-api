@@ -1,0 +1,11 @@
+{
+    "name": "ClientMasterlist",
+    "alias": "clientmasterlist",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\ClientMasterlist\\App\\Providers\\ClientMasterlistServiceProvider"
+    ],
+    "files": []
+}

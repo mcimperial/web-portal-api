@@ -1,0 +1,61 @@
+# --- MODULE CREATION COMMANDS:
+
+# Create a new module
+php artisan module:make ModuleName
+
+# Create a new module with specific options
+php artisan module:make ModuleName --api    # Creates an API module
+php artisan module:make ModuleName --plain  # Creates a plain module
+php artisan module:make ModuleName --force  # Overwrite existing module
+
+# --- GENERATE MODULE COMPONENTS:
+
+# Generate a controller
+php artisan module:make-controller ControllerName ModuleName
+# Generate a model
+php artisan module:make-model ModelName ModuleName
+# Generate a migration
+php artisan module:make-migration create_table_name ModuleName
+# Generate a seeder
+php artisan module:make-seed SeederName ModuleName
+# Generate a factory
+php artisan module:make-factory FactoryName ModuleName
+# Generate a provider
+php artisan module:make-provider ProviderName ModuleName
+# Generate a request
+php artisan module:make-request RequestName ModuleName
+# Generate a resource
+php artisan module:make-resource ResourceName ModuleName
+
+# --- MODULE MANAGEMENT:
+
+# List all modules
+php artisan module:list
+# Enable a module
+php artisan module:enable ModuleName
+# Disable a module
+php artisan module:disable ModuleName
+# Delete a module
+php artisan module:delete ModuleName
+
+# --- DATABASE COMMANDS:
+
+# Run migrations for a specific module
+php artisan module:migrate ModuleName
+# Rollback migrations for a specific module
+php artisan module:migrate-rollback ModuleName
+# Refresh migrations (rollback and migrate again)
+php artisan module:migrate-refresh ModuleName
+# Run seeders for a specific module
+php artisan module:seed ModuleName
+
+# --- OTHER USEFUL COMMANDS:
+
+# Generate a test file
+php artisan module:make-test TestName ModuleName
+# Generate module routes
+php artisan module:route-provider ModuleName
+# Create a new middleware
+php artisan module:make-middleware MiddlewareName ModuleName
+# Generate module configuration
+php artisan module:make-config ModuleName
