@@ -11,10 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('cm_attachments', function (Blueprint $table) {
+        Schema::create('cm_attachment', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('principal_id')->constrained('cm_principal')->onDelete('cascade');
+            $table->foreignId('principal_id')->nullable()->constrained('cm_principal')->onDelete('cascade');
             $table->foreignId('dependent_id')->nullable()->constrained('cm_dependent')->onDelete('cascade');
+            $table->foreignId('notification_id')->nullable()->constrained('cm_notification')->onDelete('cascade');
+            $table->string('attachment_for');
             $table->string('file_path');
             $table->string('file_name');
             $table->string('file_type');
@@ -27,6 +29,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('cm_attachments');
+        Schema::dropIfExists('cm_attachment');
     }
 };

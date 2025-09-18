@@ -16,6 +16,10 @@ use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\UserController;
 
+use App\Http\Controllers\Api\CompanyController;
+
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/user', [UserController::class, 'current']);
+
+    Route::apiResource('company', CompanyController::class);
 });

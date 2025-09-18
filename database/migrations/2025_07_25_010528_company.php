@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->string('uuid')->unique();
             $table->string('company_code')->unique();
-            $table->string('name')->unique();
+            $table->string('company_name')->unique();
             $table->string('address')->nullable();
             $table->string('phone1')->nullable();
             $table->string('phone2')->nullable();
@@ -24,6 +24,9 @@ return new class extends Migration
             $table->string('website')->nullable();
             $table->string('tax_id')->nullable();
             $table->string('logo')->nullable(); // Path to the company logo
+            $table->string('status')->default('ACTIVE');
+            $table->softDeletes(); // For soft delete functionality
+            $table->string('deleted_by')->nullable(); // User who deleted the record
             $table->timestamps();
         });
     }

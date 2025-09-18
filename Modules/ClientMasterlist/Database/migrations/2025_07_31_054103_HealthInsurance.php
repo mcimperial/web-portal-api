@@ -15,16 +15,17 @@ return new class extends Migration
             $table->id();
             $table->foreignId('principal_id')->nullable()->constrained('cm_principal')->onDelete('cascade');
             $table->foreignId('dependent_id')->nullable()->constrained('cm_dependent')->onDelete('cascade');
+            $table->float('premium')->default(0);
+            $table->string('plan')->nullable();
+            $table->float('principal_mbl')->nullable();
+            $table->string('principal_room_and_board')->nullable();
+            $table->float('dependent_mbl')->nullable();
+            $table->string('dependent_room_and_board')->nullable();
             $table->boolean('is_renewal')->default(false);
             $table->boolean('is_company_paid')->default(true);
             $table->string('coverage')->nullable();
             $table->date('coverage_start_date')->nullable();
             $table->date('coverage_end_date')->nullable();
-            $table->string('provider')->nullable();
-            $table->string('vendor')->nullable();
-            $table->string('plan')->nullable();
-            $table->string('mbl')->nullable();
-            $table->string('room_and_board')->nullable();
             $table->string('certificate_number')->nullable();
             $table->date('certificate_date_issued')->nullable();
             $table->boolean('is_skipping')->default(false);
@@ -33,6 +34,7 @@ return new class extends Migration
             $table->boolean('is_kyc_approved')->default(false);
             $table->date('kyc_datestamp')->nullable();
             $table->boolean('is_card_delivered')->default(false);
+            $table->date('card_delivery_date')->nullable();
             $table->string('notes')->nullable();
             $table->string('status')->default('ACTIVE'); // e.g., active, inactive
             $table->timestamps();

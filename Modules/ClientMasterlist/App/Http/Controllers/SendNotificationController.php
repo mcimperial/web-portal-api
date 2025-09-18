@@ -1,0 +1,411 @@
+<?php
+
+namespace Modules\ClientMasterlist\App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Routing\Controller;
+use Modules\ClientMasterlist\App\Models\Notification;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Modules\ClientMasterlist\App\Services\EmailSender;
+use Modules\ClientMasterlist\App\Models\Attachment;
+
+class SendNotificationController extends Controller
+{
+    /**
+     * Handle sending a notification email.
+     */
+    public function send(Request $request)
+    {
+        $data = $request->validate([
+            'notification_id' => 'required|integer|exists:cm_notification,id',
+            'to' => 'required|string',
+            'cc' => 'nullable|string',
+            'use_saved' => 'sometimes|boolean',
+            'send_as_multiple' => 'sometimes|boolean',
+        ]);
+
+        $notification = Notification::find($data['notification_id']);
+        if (!$notification) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Notification not found',
+            ], 404);
+        }
+
+        try {
+            // If 'to' is a list of enrollee IDs, handle in a separate function
+            if ($this->isIdList($data['to'])) {
+                return $this->sendToEnrolleeIds($data, $notification);
+            }
+
+            $data['enrollee_id'] = $data['enrollee_id'] ?? 6;
+
+            // If send_as_multiple is set and there are multiple emails, handle in a separate function
+            if (!empty($data['send_as_multiple'])) {
+                return $this->sendToMultipleEmails($data, $notification);
+            }
+
+            // Otherwise, send as a single email (default)
+            return $this->sendSingleEmail($data, $notification);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to send email: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Send notification to each email in a comma-separated list (manual mode, send_as_multiple)
+     * In multiple mode: send one email per recipient (each gets their own email, only their address in TO)
+     */
+    private function sendToMultipleEmails($data, $notification)
+    {
+        $toRaw = rtrim(trim($data['to']), ',');
+        $to = array_filter(array_map('trim', explode(',', $toRaw)), function ($email) {
+            return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
+        });
+
+        if (empty($to)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No valid recipient email addresses provided after filtering.',
+            ], 422);
+        }
+        $results = [];
+        foreach ($to as $email) {
+            $singleData = $data;
+            $singleData['to'] = $email;
+            $singleData['cc'] = $data['cc'] ?? null;
+            unset($singleData['send_as_multiple']);
+            $response = $this->sendSingleEmail($singleData, $notification);
+            $responseData = $response->getData(true);
+            $results[] = [
+                'to' => $email,
+                'success' => $responseData['success'] ?? false,
+                'message' => $responseData['message'] ?? ''
+            ];
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Notifications sent to multiple recipients.',
+            'results' => $results
+        ]);
+    }
+
+    /**
+     * Send a single notification email (default path)
+     * In single mode: send one email to all recipients in the TO array (everyone sees all addresses)
+     */
+    private function sendSingleEmail($data, $notification)
+    {
+        $toRaw = rtrim(trim($data['to']), ',');
+        $to = array_filter(array_map('trim', explode(',', $toRaw)), function ($email) {
+            return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
+        });
+        $ccRaw = isset($data['cc']) ? rtrim(trim($data['cc']), ',') : '';
+        $cc = $ccRaw != ''
+            ? array_filter(array_map('trim', explode(',', $ccRaw)), function ($email) {
+                return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
+            })
+            : [];
+        if (empty($to)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No valid recipient email addresses provided after filtering.',
+            ], 422);
+        }
+
+        // Get attachments for this notification (use file_path directly from DO Spaces)
+        $attachments = [];
+        $attachmentModels = Attachment::where('notification_id', $notification->id)->get();
+
+        foreach ($attachmentModels as $att) {
+            if (!empty($att->file_path)) {
+                $attachments[] = $att->file_path;
+            }
+        }
+
+        $replacements = $this->getVariableReplacements($notification, $data);
+        $messageBody  = $this->replaceVariables($notification->message, $replacements);
+        $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
+
+        if (env('EMAIL_PROVIDER_SETTING') === 'infobip') {
+            $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
+
+            $tempFiles = [];
+            $infobipAttachments = [];
+
+            foreach ($attachmentModels as $att) {
+                if (!empty($att->file_path)) {
+                    $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
+                    $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';
+                    $objectKey = ltrim(str_replace($publicUrlPrefix, '', $att->file_path), '/');
+                    $fileContents = Storage::disk('spaces')->get($objectKey);
+                    $originalName = $att->file_name ?? basename($objectKey);
+                    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+                    if (in_array($ext, $blockedExtensions)) {
+                        $safeName = $originalName . '.txt';
+                        $tmp = tempnam(sys_get_temp_dir(), 'attach_');
+                        $tmpTxt = $tmp . '.txt';
+                        file_put_contents($tmpTxt, $fileContents);
+                        $tempFiles[] = $tmpTxt;
+                        $infobipAttachments[] = [
+                            'path' => $tmpTxt,
+                            'name' => $safeName
+                        ];
+                    } else {
+                        $tmp = tempnam(sys_get_temp_dir(), 'attach_');
+                        file_put_contents($tmp, $fileContents);
+                        $tempFiles[] = $tmp;
+                        $infobipAttachments[] = [
+                            'path' => $tmp,
+                            'name' => $originalName
+                        ];
+                    }
+                }
+            }
+
+            $emailService = new EmailSender(
+                $to, // pass as array
+                $notification->is_html ? $messageBody : nl2br($messageBody),
+                $subjectBody ?? 'Notification',
+                'default',
+                $infobipAttachments, // pass array of ['path','name']
+                $cc, // pass as array
+                [] // bcc
+            );
+
+            $result = $emailService->send();
+            foreach ($tempFiles as $tmp) {
+                @unlink($tmp);
+            }
+
+            if (!$result) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Infobip error: Failed to send email via service',
+                ], 500);
+            }
+        } else {
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
+                $message->to($to)
+                    ->subject($subjectBody ?? 'Notification');
+                if ($notification->is_html) {
+                    $message->html($messageBody ?? '');
+                } else {
+                    $message->text($messageBody ?? '');
+                }
+                if (!empty($cc)) {
+                    $message->cc($cc);
+                }
+                if (env('MAIL_FROM_ADDRESS')) {
+                    $message->from(env('MAIL_FROM_ADDRESS'), env('MAIL_FROM_NAME', 'Notification'));
+                }
+                if (!empty($attachments)) {
+                    foreach ($attachments as $file) {
+                        $message->attach($file);
+                    }
+                }
+            });
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Notification sent successfully',
+        ]);
+    }
+
+    /**
+     * Check if the 'to' string is a comma-separated list of IDs
+     */
+    private function isIdList($toRaw)
+    {
+        return preg_match('/^\s*\d+(\s*,\s*\d+)*\s*$/', $toRaw);
+    }
+
+    /**
+     * Send notification to each enrollee ID in the list
+     */
+    private function sendToEnrolleeIds($data, $notification)
+    {
+        $toRaw = $data['to'];
+        $ids = array_filter(array_map('trim', explode(',', $toRaw)), function ($id) {
+            return is_numeric($id);
+        });
+        if (empty($ids)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No valid enrollee IDs provided.',
+            ], 422);
+        }
+        $results = [];
+        foreach ($ids as $enrolleeId) {
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::find($enrolleeId);
+            if (!$enrollee || empty($enrollee->email1)) {
+                $results[] = [
+                    'enrollee_id' => $enrolleeId,
+                    'success' => false,
+                    'message' => 'Enrollee not found or missing email.'
+                ];
+                continue;
+            }
+            $singleData = $data;
+            $singleData['to'] = $enrollee->email1;
+            $singleData['enrollee_id'] = $enrolleeId;
+
+            // For each enrollee, respect send_as_multiple flag
+            $result = $this->sendToMultipleEmails($singleData, $notification);
+
+            $responseData = $result->getData(true);
+            $results[] = [
+                'enrollee_id' => $enrolleeId,
+                'success' => $responseData['success'] ?? false,
+                'message' => $responseData['message'] ?? ''
+            ];
+        }
+        return response()->json([
+            'success' => true,
+            'message' => 'Notifications sent to multiple enrollees.',
+            'results' => $results
+        ]);
+    }
+
+    /**
+     * Handle sending scheduled notifications (for cronjob)
+     */
+
+    public function sendScheduled()
+    {
+
+        $now = now();
+        $dueNotifications = Notification::whereNotNull('schedule')
+            ->where(function ($q) use ($now) {
+                $q->whereNull('last_sent_at')
+                    ->orWhere('last_sent_at', '<', $now->subMinute());
+            })
+            ->get();
+
+        foreach ($dueNotifications as $notification) {
+            if (!$this->isCronDue($notification->schedule, $now)) continue;
+
+            $request = new Request([
+                'notification_id' => $notification->id,
+                'to' => $notification->to,
+                'cc' => $notification->cc,
+                'use_saved' => true,
+            ]);
+
+            $this->send($request);
+
+            $notification->last_sent_at = $now;
+            $notification->save();
+        }
+
+        return response()->json(['success' => true, 'message' => 'Scheduled notifications processed.']);
+    }
+
+    /**
+     * Check if a cron expression is due now
+     */
+    private function isCronDue($cron, $now)
+    {
+        try {
+            $cronExp = \Cron\CronExpression::factory($cron);
+            return $cronExp->isDue($now);
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Replace variable placeholders in the message/subject with actual data.
+     * Example: {{employee_name}}, {{enrollment_date}}, etc.
+     * Extend this as needed to support more variables.
+     */
+    private function replaceVariables($text, $replacements = [])
+    {
+        if (!$text) return $text;
+        foreach ($replacements as $key => $value) {
+            $text = str_replace('{{' . $key . '}}', $value, $text);
+        }
+        return $text;
+    }
+
+    /**
+     * Get variable replacements for a notification.
+     * You can expand this to fetch from DB or other sources as needed.
+     */
+    private function getVariableReplacements($notification, $data = [])
+    {
+        // Determine which enrollee to use: prefer enrollee_id from $data, else from notification->enrollment_id
+        $enrollee = null;
+        if (!empty($data['enrollee_id'])) {
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::where('id', $data['enrollee_id'])
+                ->whereNull('deleted_at')
+                ->first();
+        }
+
+        if (!$enrollee && $notification && isset($notification->enrollment_id)) {
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $notification->enrollment_id)
+                ->whereNull('deleted_at')
+                ->first();
+        }
+
+        $baseUrl = env('FRONTEND_URL');
+        $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
+        $link = '<a href="' . $link . '">Enrollment Link</a>';
+
+        $replacements = [
+            'enrollment_link' => $data['enrollment_link'] ?? $link ?? '',
+            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime('+1 month', strtotime($enrollee->coverage_start_date))),
+            'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
+            'certification_table' => $this->certificationTable($enrollee),
+        ];
+        return $replacements;
+    }
+
+    private function certificationTable($enrollee = null)
+    {
+        if (!$enrollee) {
+            return '';
+        }
+
+        // Prepare rows: principal first, then dependents
+        $rows = [];
+        // Principal
+        $rows[] = [
+            'relation' => 'PRINCIPAL',
+            'name' => trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
+            'certificate_number' => $enrollee->certificate_number ?? '',
+            'enrollment_status' => $enrollee->enrollment_status ?? '',
+        ];
+
+        // Dependents
+        if (method_exists($enrollee, 'dependents')) {
+            foreach ($enrollee->dependents as $dep) {
+                $rows[] = [
+                    'relation' => 'DEPENDENT',
+                    'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
+                    'certificate_number' => $dep->certificate_number ?? '',
+                    'enrollment_status' => $dep->enrollment_status ?? '',
+                ];
+            }
+        }
+
+        // Build HTML table
+        $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Certificate #</th><th>Status</th></tr></thead><tbody>';
+        foreach ($rows as $row) {
+            $html .= '<tr>';
+            $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['certificate_number']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
+            $html .= '</tr>';
+        }
+        $html .= '</tbody></table>';
+        return $html;
+    }
+}

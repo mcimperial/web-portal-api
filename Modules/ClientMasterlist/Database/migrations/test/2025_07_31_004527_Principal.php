@@ -17,28 +17,27 @@ return new class extends Migration
             $table->foreignId('enrollment_id')->nullable()->constrained('cm_enrollment')->onDelete('cascade');
             $table->foreignId('company_id')->nullable()->constrained('company')->onDelete('cascade');
             $table->string('member_id')->nullable();
-            $table->string('employee_id');
+            $table->string('employee_id')->unique();
             $table->string('department')->nullable();
             $table->string('position')->nullable();
             $table->date('employment_start_date')->nullable();
             $table->date('employment_end_date')->nullable();
-            $table->string('first_name')->nullable();
-            $table->string('last_name')->nullable();
+            $table->string('first_name');
+            $table->string('last_name');
             $table->string('middle_name')->nullable();
             $table->date('birth_date')->nullable();
             $table->string('gender')->nullable();
+            $table->string('nationality')->nullable();
             $table->string('marital_status')->nullable();
-            $table->string('email1')->nullable();
+            $table->string('email1');
             $table->string('email2')->nullable();
             $table->string('phone1')->nullable();
             $table->string('phone2')->nullable();
             $table->string('address')->nullable();
-            $table->boolean('with_dependents')->default(true);
             $table->string('notes')->nullable();
-            $table->string('enrollment_status')->default('PENDING');
-            $table->string('status')->default('ACTIVE');
             $table->softDeletes(); // For soft delete functionality
             $table->string('deleted_by')->nullable(); // User who deleted the record
+            $table->string('status')->default('ACTIVE');
             $table->timestamps();
         });
     }
