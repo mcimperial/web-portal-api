@@ -244,6 +244,7 @@ class EnrolleeManageDependentController extends Controller
                 'notification_id' => $notification->id,
                 'to' => $email,
                 'cc' => $notification->cc,
+                'bcc' => $notification->bcc,
                 'enrollee_id' => $enrollee_id,
                 'send_as_multiple' => false,
             ]);
