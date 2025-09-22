@@ -117,6 +117,7 @@ class SendNotificationController extends Controller
             $singleData = $data;
             $singleData['to'] = $email;
             $singleData['cc'] = $data['cc'] ?? null;
+            $singleData['bcc'] = $data['bcc'] ?? null;
             unset($singleData['send_as_multiple']);
             $response = $this->sendSingleEmail($singleData, $notification);
             $responseData = $response->getData(true);
@@ -235,7 +236,7 @@ class SendNotificationController extends Controller
                 ], 500);
             }
         } else {
-            /* Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -257,7 +258,7 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
-            }); */
+            });
         }
 
         return response()->json([
@@ -302,6 +303,8 @@ class SendNotificationController extends Controller
             }
             $singleData = $data;
             $singleData['to'] = $enrollee->email1;
+            $singleData['cc'] = $data['cc'] ?? null;
+            $singleData['bcc'] = $data['bcc'] ?? null;
             $singleData['enrollee_id'] = $enrolleeId;
 
             // For each enrollee, respect send_as_multiple flag
