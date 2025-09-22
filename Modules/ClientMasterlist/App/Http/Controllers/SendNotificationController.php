@@ -177,65 +177,65 @@ class SendNotificationController extends Controller
         $messageBody  = $this->replaceVariables($notification->message, $replacements);
         $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
 
-        //if (env('EMAIL_PROVIDER_SETTING') == 'infobip') {
-        $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
+        if (env('EMAIL_PROVIDER_SETTING') === 'infobip') {
+            $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
 
-        $tempFiles = [];
-        $infobipAttachments = [];
+            $tempFiles = [];
+            $infobipAttachments = [];
 
-        foreach ($attachmentModels as $att) {
-            if (!empty($att->file_path)) {
-                $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
-                $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';
-                $objectKey = ltrim(str_replace($publicUrlPrefix, '', $att->file_path), '/');
-                $fileContents = Storage::disk('spaces')->get($objectKey);
-                $originalName = $att->file_name ?? basename($objectKey);
-                $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
-                if (in_array($ext, $blockedExtensions)) {
-                    $safeName = $originalName . '.txt';
-                    $tmp = tempnam(sys_get_temp_dir(), 'attach_');
-                    $tmpTxt = $tmp . '.txt';
-                    file_put_contents($tmpTxt, $fileContents);
-                    $tempFiles[] = $tmpTxt;
-                    $infobipAttachments[] = [
-                        'path' => $tmpTxt,
-                        'name' => $safeName
-                    ];
-                } else {
-                    $tmp = tempnam(sys_get_temp_dir(), 'attach_');
-                    file_put_contents($tmp, $fileContents);
-                    $tempFiles[] = $tmp;
-                    $infobipAttachments[] = [
-                        'path' => $tmp,
-                        'name' => $originalName
-                    ];
+            foreach ($attachmentModels as $att) {
+                if (!empty($att->file_path)) {
+                    $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
+                    $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';
+                    $objectKey = ltrim(str_replace($publicUrlPrefix, '', $att->file_path), '/');
+                    $fileContents = Storage::disk('spaces')->get($objectKey);
+                    $originalName = $att->file_name ?? basename($objectKey);
+                    $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+                    if (in_array($ext, $blockedExtensions)) {
+                        $safeName = $originalName . '.txt';
+                        $tmp = tempnam(sys_get_temp_dir(), 'attach_');
+                        $tmpTxt = $tmp . '.txt';
+                        file_put_contents($tmpTxt, $fileContents);
+                        $tempFiles[] = $tmpTxt;
+                        $infobipAttachments[] = [
+                            'path' => $tmpTxt,
+                            'name' => $safeName
+                        ];
+                    } else {
+                        $tmp = tempnam(sys_get_temp_dir(), 'attach_');
+                        file_put_contents($tmp, $fileContents);
+                        $tempFiles[] = $tmp;
+                        $infobipAttachments[] = [
+                            'path' => $tmp,
+                            'name' => $originalName
+                        ];
+                    }
                 }
             }
-        }
 
-        $emailService = new EmailSender(
-            $to, // pass as array
-            $notification->is_html ? $messageBody : nl2br($messageBody),
-            $subjectBody ?? 'Notification',
-            'default',
-            $infobipAttachments, // pass array of ['path','name']
-            $cc, // pass as array
-            $bcc, // pass as array
-            []
-        );
+            $emailService = new EmailSender(
+                $to, // pass as array
+                $notification->is_html ? $messageBody : nl2br($messageBody),
+                $subjectBody ?? 'Notification',
+                'default',
+                $infobipAttachments, // pass array of ['path','name']
+                $cc, // pass as array
+                $bcc, // pass as array
+                []
+            );
 
-        $result = $emailService->send();
-        foreach ($tempFiles as $tmp) {
-            @unlink($tmp);
-        }
+            $result = $emailService->send();
+            foreach ($tempFiles as $tmp) {
+                @unlink($tmp);
+            }
 
-        if (!$result) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Infobip error: Failed to send email via service',
-            ], 500);
-        }
-        /* } else {
+            if (!$result) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Infobip error: Failed to send email via service',
+                ], 500);
+            }
+        } else {
             Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
@@ -259,7 +259,7 @@ class SendNotificationController extends Controller
                     }
                 }
             });
-        } */
+        }
 
         return response()->json([
             'success' => true,
