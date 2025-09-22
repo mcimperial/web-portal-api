@@ -49,6 +49,7 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
         Route::get('notifications/single/{enrolleeId}', 'single');
         Route::post('notifications', 'store');
         Route::put('notifications/{id}', 'update');
+        Route::delete('notifications/{id}', 'destroy');
     });
 
     // Send Notification API
@@ -57,15 +58,12 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
 // Public Attachments CRUD (no auth)
 Route::prefix('v1')->name('api.')->group(function () {
-    Route::apiResource('attachments', AttachmentController::class)->only(['index', 'store', 'destroy']);
+    Route::apiResource('attachments', AttachmentController::class);
 
-    // Enrollee by UUID
-    Route::get('principal-enrollees/uuid/{uuid}', [\Modules\ClientMasterlist\App\Http\Controllers\EnrolleeUuidController::class, 'show']);
-    Route::put('principal-enrollees/uuid/{uuid}', [\Modules\ClientMasterlist\App\Http\Controllers\EnrolleeUuidController::class, 'update']);
-
-    // Nested: Create dependent for enrollee
-    Route::post('principal-enrollees/{enrollee}/dependents', [EnrolleeManageDependentController::class, 'store']);
-
-    // Batch create dependents for enrollee
-    Route::post('principal-enrollees/{enrollee}/dependents/batch', [EnrolleeManageDependentController::class, 'storeBatch']);
+    Route::controller(EnrolleeManageDependentController::class)->group(function () {
+        Route::get('enrollee-manage-information/{uuid}', 'show');
+        Route::put('enrollee-manage-information/{uuid}', 'update');
+        Route::put('enrollee-manage-information/gender-and-marital-status/{uuid}', 'updateGenderAndMaritalStatus');
+        Route::post('enrollee-manage-dependents/{enrollee}/dependents/batch', 'storeBatch');
+    });
 });

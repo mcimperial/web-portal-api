@@ -6,12 +6,15 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\Notification;
 use Modules\ClientMasterlist\App\Models\Enrollee;
+use Modules\ClientMasterlist\App\Models\Attachment;
 
+use Illuminate\Support\Facades\Schema;
 use \App\Http\Traits\UppercaseInput;
+use \App\Http\Traits\PasswordDeleteValidation;
 
 class NotificationController extends Controller
 {
-    use UppercaseInput;
+    use UppercaseInput, PasswordDeleteValidation;
 
     // List enrollees for notification
     public function enrollees()
@@ -41,6 +44,7 @@ class NotificationController extends Controller
             'notification_type' => 'nullable|string',
             'to' => 'nullable|string',
             'cc' => 'nullable|string',
+            'bcc' => 'nullable|string',
             'title' => 'required|string',
             'subject' => 'required|string',
             'message' => 'required|string',
@@ -66,6 +70,7 @@ class NotificationController extends Controller
             'notification_type' => 'nullable|string',
             'to' => 'nullable|string',
             'cc' => 'nullable|string',
+            'bcc' => 'nullable|string',
             'title' => 'sometimes|string',
             'subject' => 'sometimes|string',
             'message' => 'sometimes|string',
@@ -81,5 +86,21 @@ class NotificationController extends Controller
         }
         $notification->update($upperData);
         return response()->json($notification);
+    }
+
+    public function destroy(Request $request, $id)
+    {
+        $user = $this->validateDeletePassword($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) {
+            return $user;
+        }
+        $notification = Notification::findOrFail($id);
+        // If the model has a deleted_by column, set it
+        if (Schema::hasColumn($notification->getTable(), 'deleted_by')) {
+            $notification->deleted_by = $user ? $user->id : null;
+            $notification->save();
+        }
+        $notification->delete();
+        return response()->json(['message' => 'Deleted successfully']);
     }
 }

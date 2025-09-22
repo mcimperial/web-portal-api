@@ -17,12 +17,50 @@ class SendNotificationController extends Controller
      */
     public function send(Request $request)
     {
+        $enrolleeStatus = $request->input('enrollee_status');
+
+        // If enrollee_status is provided, find all enrollees with that status for this enrollment
+        if ($enrolleeStatus && $request->has('notification_id')) {
+            $notificationId = $request->input('notification_id');
+            $notification = Notification::find($notificationId);
+            if ($notification && isset($notification->enrollment_id)) {
+                $enrollmentId = $notification->enrollment_id;
+                // Find enrollees with the given status and enrollment_id
+                $enrolleeQuery = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $enrollmentId)
+                    ->where('enrollment_status', $enrolleeStatus)
+                    ->whereNull('deleted_at');
+                $enrollees = $enrolleeQuery->get();
+                if ($enrollees->count() > 0) {
+                    // Collect their IDs
+                    $enrolleeIds = $enrollees->pluck('id')->toArray();
+                    // Set 'to' as a comma-separated list of IDs
+                    $request->merge([
+                        'to' => implode(',', $enrolleeIds)
+                    ]);
+                } else {
+                    // No enrollees found with that status
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'No enrollees found with status: ' . $enrolleeStatus,
+                    ], 422);
+                }
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Notification or enrollment not found for status filter.',
+                ], 422);
+            }
+        }
+
         $data = $request->validate([
             'notification_id' => 'required|integer|exists:cm_notification,id',
             'to' => 'required|string',
             'cc' => 'nullable|string',
+            'bcc' => 'nullable|string',
+            'attach_enrollee_id' => 'sometimes|nullable|integer',
             'use_saved' => 'sometimes|boolean',
             'send_as_multiple' => 'sometimes|boolean',
+            'enrollee_id' => 'sometimes|nullable|integer',
         ]);
 
         $notification = Notification::find($data['notification_id']);
@@ -39,7 +77,8 @@ class SendNotificationController extends Controller
                 return $this->sendToEnrolleeIds($data, $notification);
             }
 
-            $data['enrollee_id'] = $data['enrollee_id'] ?? 6;
+            // If use_saved is true, ignore 'to' and 'cc' from request and use saved values
+            $data['enrollee_id'] = $data['attach_enrollee_id'] ?? $data['enrollee_id'];
 
             // If send_as_multiple is set and there are multiple emails, handle in a separate function
             if (!empty($data['send_as_multiple'])) {
@@ -110,6 +149,12 @@ class SendNotificationController extends Controller
                 return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
             })
             : [];
+        $bccRaw = isset($data['bcc']) ? rtrim(trim($data['bcc']), ',') : '';
+        $bcc = $bccRaw != ''
+            ? array_filter(array_map('trim', explode(',', $bccRaw)), function ($email) {
+                return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
+            })
+            : [];
         if (empty($to)) {
             return response()->json([
                 'success' => false,
@@ -174,7 +219,8 @@ class SendNotificationController extends Controller
                 'default',
                 $infobipAttachments, // pass array of ['path','name']
                 $cc, // pass as array
-                [] // bcc
+                $bcc, // pass as array
+                []
             );
 
             $result = $emailService->send();
@@ -199,6 +245,9 @@ class SendNotificationController extends Controller
                 }
                 if (!empty($cc)) {
                     $message->cc($cc);
+                }
+                if (!empty($bcc)) {
+                    $message->bcc($bcc);
                 }
                 if (env('MAIL_FROM_ADDRESS')) {
                     $message->from(env('MAIL_FROM_ADDRESS'), env('MAIL_FROM_NAME', 'Notification'));
@@ -275,10 +324,8 @@ class SendNotificationController extends Controller
     /**
      * Handle sending scheduled notifications (for cronjob)
      */
-
     public function sendScheduled()
     {
-
         $now = now();
         $dueNotifications = Notification::whereNotNull('schedule')
             ->where(function ($q) use ($now) {
@@ -355,18 +402,76 @@ class SendNotificationController extends Controller
 
         $baseUrl = env('FRONTEND_URL');
         $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
-        $link = '<a href="' . $link . '">Enrollment Link</a>';
+        $link = '<a href="' . $link . '">Self-Enrollment Portal</a>';
 
         $replacements = [
             'enrollment_link' => $data['enrollment_link'] ?? $link ?? '',
             'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime('+1 month', strtotime($enrollee->coverage_start_date))),
             'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
             'certification_table' => $this->certificationTable($enrollee),
+            'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
         ];
         return $replacements;
     }
 
     private function certificationTable($enrollee = null)
+    {
+        if (!$enrollee) {
+            return '';
+        }
+
+        // Helper to get certificate_number from joined health_insurance if available
+        $getCertificateNumber = function ($person) {
+            // If relation loaded, use it; otherwise fallback
+            if (isset($person->health_insurance) && !empty($person->health_insurance->certificate_number)) {
+                return $person->health_insurance->certificate_number;
+            }
+            return $person->certificate_number ?? '';
+        };
+
+        // Prepare rows: principal first, then dependents
+        $rows = [];
+        // Principal
+        $rows[] = [
+            'relation' => 'PRINCIPAL',
+            'name' => trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
+            'certificate_number' => $getCertificateNumber($enrollee),
+            'enrollment_status' => $enrollee->enrollment_status ?? '',
+        ];
+
+        // Dependents
+        if (method_exists($enrollee, 'dependents')) {
+            foreach ($enrollee->dependents as $dep) {
+                $status = strtoupper($dep->status ?? '');
+                $enrollmentStatus = strtoupper($dep->enrollment_status ?? '');
+                if ($enrollmentStatus === 'SKIPPED' || $status === 'INACTIVE') {
+                    continue;
+                }
+                $rows[] = [
+                    'relation' => 'DEPENDENT',
+                    'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
+                    'certificate_number' => $getCertificateNumber($dep),
+                    'enrollment_status' => $dep->enrollment_status ?? '',
+                ];
+            }
+        }
+
+        // Build HTML table
+        $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Certificate #</th><th>Status</th></tr></thead><tbody>';
+        foreach ($rows as $row) {
+            $html .= '<tr>';
+            $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['certificate_number']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
+            $html .= '</tr>';
+        }
+        $html .= '</tbody></table>';
+        return $html;
+    }
+
+    private function submissionTable($enrollee = null)
     {
         if (!$enrollee) {
             return '';
@@ -395,13 +500,12 @@ class SendNotificationController extends Controller
         }
 
         // Build HTML table
-        $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
-        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Certificate #</th><th>Status</th></tr></thead><tbody>';
+        $html = '<b>Below is the summary of your enrollment:</b><br /><table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Status</th></tr></thead><tbody>';
         foreach ($rows as $row) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
-            $html .= '<td>' . htmlspecialchars($row['certificate_number']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
             $html .= '</tr>';
         }

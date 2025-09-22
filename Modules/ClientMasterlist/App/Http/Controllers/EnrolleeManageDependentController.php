@@ -2,48 +2,123 @@
 
 namespace Modules\ClientMasterlist\App\Http\Controllers;
 
+use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use Illuminate\Routing\Controller;
-use Modules\ClientMasterlist\App\Models\Dependent;
-
-use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Storage;
-
+use Modules\ClientMasterlist\App\Models\Enrollee;
 use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use Modules\ClientMasterlist\App\Models\Attachment;
-use Modules\ClientMasterlist\App\Models\Enrollee;
+use Modules\ClientMasterlist\App\Models\Dependent;
+use Modules\ClientMasterlist\App\Models\Notification;
+
+use Modules\ClientMasterlist\App\Http\Controllers\SendNotificationController;
 
 use App\Http\Traits\UppercaseInput;
 
 class EnrolleeManageDependentController extends Controller
 {
     use UppercaseInput;
-    /**
-     * Display a listing of the dependents.
-     */
-    public function index(Request $request): JsonResponse
+
+    public function show($uuid)
     {
-        $query = Dependent::query();
-        if ($request->has('principal_id')) {
-            $query->where('principal_id', $request->input('principal_id'));
+        $enrollee = Enrollee::with(['dependents.health_insurance', 'enrollment'])->where('uuid', $uuid)->first();
+
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
         }
 
+        // Map dependents to include skip hierarchy fields from health_insurance
+        $dependentsWithSkipHierarchy = collect($enrollee->dependents)->map(function ($dep) {
+            $health = $dep->health_insurance;
+            return [
+                'id' => $dep->id,
+                'first_name' => $dep->first_name,
+                'last_name' => $dep->last_name,
+                'middle_name' => $dep->middle_name,
+                'relation' => $dep->relation,
+                'birth_date' => $dep->birth_date,
+                'gender' => $dep->gender,
+                'marital_status' => $dep->marital_status,
+                'enrollment_status' => $dep->enrollment_status,
+                // ... add other dependent fields as needed ...
+                'health_insurance' => $health,
+                // Populate skip hierarchy fields from health_insurance if present
+                'is_skipping' => $health ? $health->is_skipping : null,
+                'reason_for_skipping' => $health ? $health->reason_for_skipping : null,
+                'attachment_for_skipping' => $health ? $health->attachment_for_skipping : null,
+            ];
+        });
+
+        // Return enrollee with dependents including skip hierarchy fields
+        $enrolleeArr = $enrollee->toArray();
+        $enrolleeArr['dependents'] = $dependentsWithSkipHierarchy;
+
+        return response()->json($enrolleeArr);
+    }
+
+    public function updateGenderAndMaritalStatus(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $validated = $request->validate([
+            'gender' => 'required|string|max:255',
+            'marital_status' => 'required|string|max:255'
+        ]);
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
         return response()->json([
-            'data' => $query->get()
+            'success' => true,
+            'message' => 'Enrollee updated successfully',
+            'enrollee' => $enrollee
+        ]);
+    }
+
+    public function update(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $validated = $request->validate([
+            'first_name' => 'required|string|max:255',
+            'last_name' => 'required|string|max:255',
+            'middle_name' => 'nullable|string|max:255',
+            'birth_date' => 'required|date',
+            'gender' => 'required|string|max:255',
+            'marital_status' => 'required|string|max:255',
+            'address' => 'nullable|string|max:255',
+            'enrollment_status' => 'required|string'
+        ]);
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
+        $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Enrollee updated successfully',
+            'enrollee' => $enrollee
         ]);
     }
 
     /**
      * Batch store dependents for an enrollee.
      */
-    public function storeBatch($enrolleeId, Request $request): JsonResponse
+    public function storeBatch($enrolleeId, Request $request)
     {
+        $results = [];
+        $errors = [];
+
         $dependents = $request->input('dependents', []);
         // Get the employee_id of the principal enrollee
         $principal = Enrollee::find($enrolleeId);
         $employeeId = $principal ? $principal->employee_id : null;
-        $results = [];
-        $errors = [];
 
         // Get all current dependents for this enrollee
         $currentDependents = Dependent::where('principal_id', $enrolleeId)->get();
@@ -69,10 +144,15 @@ class EnrolleeManageDependentController extends Controller
                 ])->validate();
 
                 $validated['principal_id'] = $enrolleeId;
+
                 if ($employeeId) {
                     $validated['employee_id'] = $employeeId;
                 }
+
                 $validated['enrollment_status'] = 'PENDING';
+
+                isset($dep['is_skipping']) && $dep['is_skipping'] ? $validated['enrollment_status'] = 'SKIPPED' : null;
+                // Uppercase string fields
                 $validated = $this->uppercaseStrings($validated);
 
                 // Save/update dependent
@@ -106,7 +186,6 @@ class EnrolleeManageDependentController extends Controller
                         $health->update($skipFields);
                     } else {
                         $skipFields['dependent_id'] = $dependentModel->id;
-                        $skipFields['principal_id'] = $enrolleeId;
                         HealthInsurance::create($skipFields);
                     }
                 } else {
@@ -139,11 +218,34 @@ class EnrolleeManageDependentController extends Controller
         $principal->enrollment_status = 'SUBMITTED';
         $principal->save();
 
+        $this->sendEmailNotification($principal->enrollment_id, $enrolleeId, $principal->email1);
 
         return response()->json([
             'message' => 'Batch dependents processed',
             'created' => $results,
             'errors' => $errors
         ], count($errors) ? 207 : 201);
+    }
+
+    private function sendEmailNotification($enrollment_id, $enrollee_id, $email)
+    {
+        $notification = Notification::where('enrollment_id', $enrollment_id)
+            ->where('notification_type', 'RESPONSE: SUBMISSION OF ENROLLMENT (SUBMITTED)')
+            ->whereNull('deleted_at')
+            ->orderBy('updated_at', 'desc')
+            ->first();
+
+        if ($notification) {
+            $notificationController = new SendNotificationController();
+            $notificationRequest = new \Illuminate\Http\Request();
+            $notificationRequest->replace([
+                'notification_id' => $notification->id,
+                'to' => $email,
+                'cc' => $notification->cc,
+                'enrollee_id' => $enrollee_id,
+                'send_as_multiple' => false,
+            ]);
+            $notificationController->send($notificationRequest);
+        }
     }
 }

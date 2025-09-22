@@ -17,6 +17,7 @@ class Notification extends Model
         'notification_type',
         'to',
         'cc',
+        'bcc',
         'title',
         'subject',
         'message',
