@@ -11,9 +11,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('notification_logs', function (Blueprint $table) {
+        Schema::create('cm_notification_logs', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('notification_id')->nullable()->constrained('notifications')->onDelete('cascade');
+            $table->foreignId('notification_id')->nullable()->constrained('cm_notification')->onDelete('cascade');
             $table->foreignId('principal_id')->nullable()->constrained('cm_principal')->onDelete('cascade');
             $table->date('date_sent')->nullable();
             $table->string('status')->nullable();
@@ -27,6 +27,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('notification_logs');
+        Schema::dropIfExists('cm_notification_logs');
     }
 };
