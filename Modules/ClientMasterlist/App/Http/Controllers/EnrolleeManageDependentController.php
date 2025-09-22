@@ -98,7 +98,9 @@ class EnrolleeManageDependentController extends Controller
         $enrollee->fill($validated);
         $enrollee->save();
 
-        $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
+        if ($enrollee->enrollment_status === 'SUBMITTED') {
+            $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
+        }
 
         return response()->json([
             'success' => true,
