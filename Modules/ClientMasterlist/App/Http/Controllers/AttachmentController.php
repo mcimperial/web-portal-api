@@ -37,7 +37,7 @@ class AttachmentController extends Controller
             'employee_id' => 'nullable|string',
             'company_code' => 'nullable|string',
             'provider' => 'nullable|string',
-            'attachment_for' => 'required|in:skip_hierarchy,birth_certificate,other',
+            'attachment_for' => 'required|in:skip_hierarchy,birth_certificate,required_document,other',
             'file' => 'required|file',
         ]);
 
