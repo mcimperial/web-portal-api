@@ -235,7 +235,7 @@ class SendNotificationController extends Controller
                 ], 500);
             }
         } else {
-            Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
+            /* Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -257,7 +257,7 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
-            });
+            }); */
         }
 
         return response()->json([
