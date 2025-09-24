@@ -15,21 +15,6 @@ class Enrollee extends Model
 {
     use HasFactory, SoftDeletes;
 
-    protected static function boot()
-    {
-        parent::boot();
-        static::creating(function ($model) {
-            if (empty($model->uuid)) {
-                $model->uuid = (string) Str::uuid();
-            }
-            if (empty($model->employee_id)) {
-                // Generate a unique employee_id (e.g., based on timestamp and random)
-                $model->employee_id = 'EMP-' . now()->format('YmdHis') . '-' . mt_rand(1000, 9999);
-            }
-        });
-    }
-    use HasFactory, SoftDeletes;
-
     protected $table = 'cm_principal';
 
     protected $fillable = [
@@ -60,6 +45,20 @@ class Enrollee extends Model
         'deleted_by',
         'status',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::creating(function ($model) {
+            if (empty($model->uuid)) {
+                $model->uuid = (string) Str::uuid();
+            }
+            if (empty($model->employee_id)) {
+                // Generate a unique employee_id (e.g., based on timestamp and random)
+                $model->employee_id = 'EMP-' . now()->format('YmdHis') . '-' . mt_rand(1000, 9999);
+            }
+        });
+    }
 
     // Principal belongs to an enrollment
     public function enrollment()

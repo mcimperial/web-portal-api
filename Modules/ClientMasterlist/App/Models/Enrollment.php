@@ -18,6 +18,8 @@ class Enrollment extends Model
         'note',
         'with_address',
         'with_skip_hierarchy',
+        'premium',
+        'premium_computation',
         'principal_mbl',
         'principal_room_and_board',
         'dependent_mbl',

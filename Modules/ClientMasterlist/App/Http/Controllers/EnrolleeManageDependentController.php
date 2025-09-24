@@ -20,7 +20,7 @@ class EnrolleeManageDependentController extends Controller
 
     public function show($uuid)
     {
-        $enrollee = Enrollee::with(['dependents.health_insurance', 'enrollment'])->where('uuid', $uuid)->first();
+        $enrollee = Enrollee::with(['dependents.healthInsurance', 'healthInsurance',  'enrollment'])->where('uuid', $uuid)->first();
 
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
@@ -28,7 +28,7 @@ class EnrolleeManageDependentController extends Controller
 
         // Map dependents to include skip hierarchy fields from health_insurance
         $dependentsWithSkipHierarchy = collect($enrollee->dependents)->map(function ($dep) {
-            $health = $dep->health_insurance;
+            $health = $dep->healthInsurance;
             return [
                 'id' => $dep->id,
                 'first_name' => $dep->first_name,
@@ -77,9 +77,57 @@ class EnrolleeManageDependentController extends Controller
         ]);
     }
 
+    public function updateOnRenewal(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $validated = $request->validate([
+            'enrollment_status' => 'required|string|max:255'
+        ]);
+
+        // Update overage dependents' enrollment_status to OVERAGE
+        $dependents = Dependent::where('principal_id', $enrollee->id)->get();
+
+        foreach ($dependents as $dep) {
+            $birthDate = $dep->birth_date;
+            $relation = strtoupper($dep->relation);
+            $isOverage = false;
+            if ($birthDate && $relation) {
+                $age = \Carbon\Carbon::parse($birthDate)->age;
+                if (($relation === 'CHILD' || $relation === 'SIBLING') && $age > 23) {
+                    $isOverage = true;
+                } else if (($relation === 'SPOUSE' || $relation === 'PARENT' || $relation === 'DOMESTIC PARTNER') && $age > 65) {
+                    $isOverage = true;
+                }
+                // Add more rules for other relations if needed
+            }
+            if ($isOverage) {
+                $dep->enrollment_status = 'OVERAGE';
+                $dep->save();
+            }
+        }
+
+        if ($validated['enrollment_status'] === 'SUBMITTED') {
+            $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
+        }
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Enrollee renewal updated successfully',
+            'enrollee' => $enrollee
+        ]);
+    }
+
     public function update(Request $request, $uuid)
     {
         $enrollee = Enrollee::where('uuid', $uuid)->first();
+
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
@@ -239,8 +287,7 @@ class EnrolleeManageDependentController extends Controller
 
         if ($notification) {
             $notificationController = new SendNotificationController();
-            $notificationRequest = new \Illuminate\Http\Request();
-            $notificationRequest->replace([
+            $notificationRequest = new Request([
                 'notification_id' => $notification->id,
                 'to' => $email,
                 'cc' => $notification->cc,

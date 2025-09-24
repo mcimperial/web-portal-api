@@ -311,6 +311,7 @@ class SendNotificationController extends Controller
             $result = $this->sendToMultipleEmails($singleData, $notification);
 
             $responseData = $result->getData(true);
+
             $results[] = [
                 'enrollee_id' => $enrolleeId,
                 'success' => $responseData['success'] ?? false,
@@ -344,6 +345,7 @@ class SendNotificationController extends Controller
                 'notification_id' => $notification->id,
                 'to' => $notification->to,
                 'cc' => $notification->cc,
+                'bcc' => $notification->bcc,
                 'use_saved' => true,
             ]);
 

@@ -21,6 +21,9 @@ return new class extends Migration
             $table->boolean('with_address')->default(true);
             $table->boolean('with_skip_hierarchy')->default(false);
 
+            $table->float('premium')->default(0);
+            $table->string('premium_computation')->nullable();
+
             $table->float('principal_mbl')->nullable();
             $table->string('principal_room_and_board')->nullable();
             $table->float('dependent_mbl')->nullable();

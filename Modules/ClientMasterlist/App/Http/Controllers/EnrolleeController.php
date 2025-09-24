@@ -37,7 +37,6 @@ class EnrolleeController extends Controller
             'gender' => 'nullable|string|max:255',
             'marital_status' => 'nullable|string|max:255',
             'with_dependents' => 'nullable|boolean',
-            'enrollment_status' => 'required|string',
             'email1' => 'required|email',
             'email2' => 'nullable|email',
             'phone1' => 'nullable|string|max:255',
@@ -48,6 +47,7 @@ class EnrolleeController extends Controller
             'employment_start_date' => 'nullable|date',
             'employment_end_date' => 'nullable|date',
             'notes' => 'nullable|string',
+            'enrollment_status' => 'required|string',
             'status' => 'required|string|in:ACTIVE,INACTIVE',
             'enrollment_id' => 'required',
         ]);
@@ -95,7 +95,6 @@ class EnrolleeController extends Controller
             'gender' => 'nullable|string|max:255',
             'marital_status' => 'nullable|string|max:255',
             'with_dependents' => 'nullable|boolean',
-            'enrollment_status' => 'required|string',
             'email1' => 'required|email',
             'email2' => 'nullable|email',
             'phone1' => 'nullable|string|max:255',
@@ -106,6 +105,7 @@ class EnrolleeController extends Controller
             'employment_start_date' => 'nullable|date',
             'employment_end_date' => 'nullable|date',
             'notes' => 'nullable|string',
+            'enrollment_status' => 'required|string',
             'status' => 'required|string|in:ACTIVE,INACTIVE',
             'enrollment_id' => 'required',
         ]);
