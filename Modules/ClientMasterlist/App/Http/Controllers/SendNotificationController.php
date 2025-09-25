@@ -493,6 +493,7 @@ class SendNotificationController extends Controller
         ];
 
         // Dependents
+        $dependentsArr = [];
         if (method_exists($enrollee, 'dependents')) {
             foreach ($enrollee->dependents as $dep) {
                 $rows[] = [
@@ -501,6 +502,8 @@ class SendNotificationController extends Controller
                     'certificate_number' => $dep->certificate_number ?? '',
                     'enrollment_status' => $dep->enrollment_status ?? '',
                 ];
+                // For premium computation, use array form
+                $dependentsArr[] = is_array($dep) ? $dep : (array)$dep;
             }
         }
 
@@ -515,6 +518,90 @@ class SendNotificationController extends Controller
             $html .= '</tr>';
         }
         $html .= '</tbody></table>';
+
+        // Premium Computation Section
+        $premium = 0;
+        $premiumComputation = null;
+        // Check for premium in enrollee->enrollment or enrollee->health_insurance
+        if (!empty($enrollee->enrollment) && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0) {
+            $premium = $enrollee->enrollment->premium;
+            $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
+        } elseif (!empty($enrollee->health_insurance) && isset($enrollee->health_insurance->premium) && $enrollee->health_insurance->premium > 0) {
+            $premium = $enrollee->health_insurance->premium;
+            $premiumComputation = $enrollee->health_insurance->premium_computation ?? null;
+        }
+
+        if ($premium > 0) {
+            $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation);
+            $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; border:1px solid #90cdf4; background:#ebf8ff; border-radius:8px;">';
+            $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
+            $html .= '<table style="width:100%; font-size:13px; margin-bottom:8px;"><tbody>';
+            $html .= '<tr><td>Annual:</td><td style="font-weight:bold;">₱ ' . number_format($result['annual'], 2) . '</td></tr>';
+            $html .= '<tr><td>Monthly:</td><td style="font-weight:bold;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
+            $html .= '</tbody></table>';
+            $html .= '<div style="font-weight:bold; margin-bottom:4px;">Breakdown</div>';
+            $html .= '<table style="width:100%; font-size:13px;"><tbody>';
+            foreach ($result['breakdown'] as $row) {
+                $html .= '<tr style="border-bottom:1px solid #e2e8f0;">';
+                $html .= '<td>' . htmlspecialchars($row['dependentCount']) . ' Dependent:<br />' . htmlspecialchars($row['percentage']) . ' of ₱ ' . number_format($premium, 2) . '</td>';
+                $html .= '<td style="font-weight:bold;">₱ ' . number_format($row['computed'], 2) . '</td>';
+                $html .= '</tr>';
+            }
+            $html .= '</tbody></table>';
+            $html .= '</div>';
+        }
+
         return $html;
+    }
+
+    /**
+     * Compute premium breakdown for dependents, similar to the React hook usePremiumComputation.
+     *
+     * @param array $dependents Array of dependents (each should have 'is_skipping' property if skipping)
+     * @param float|int $bill The base premium amount
+     * @param string|null $premiumComputation The premium computation string (e.g. "1:50,2:30,ALL:10")
+     * @return array [ 'breakdown' => [...], 'annual' => float, 'monthly' => float ]
+     */
+    public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null)
+    {
+        $breakdown = [];
+        $percentMap = [];
+        if (is_string($premiumComputation) && trim($premiumComputation) !== '') {
+            $parts = array_map('trim', explode(',', $premiumComputation));
+            foreach ($parts as $part) {
+                $split = explode(':', $part);
+                if (count($split) === 2 && is_numeric($split[1])) {
+                    $percentMap[trim($split[0])] = floatval($split[1]);
+                }
+            }
+        }
+        $depNum = 0;
+        foreach ($dependents as $item) {
+            if (!empty($item['is_skipping']) && ($item['is_skipping'] === true || $item['is_skipping'] == 1)) {
+                continue;
+            }
+            $depNum++;
+            $percent = 0;
+            if (array_key_exists((string)$depNum, $percentMap)) {
+                $percent = $percentMap[(string)$depNum];
+            } elseif (array_key_exists('ALL', $percentMap)) {
+                $percent = $percentMap['ALL'];
+            }
+            $computed = $bill * ($percent / 100);
+            $breakdown[] = [
+                'dependentCount' => (string)$depNum,
+                'percentage' => $percent . '%',
+                'computed' => $computed,
+            ];
+        }
+        $annual = array_reduce($breakdown, function ($sum, $row) {
+            return $sum + $row['computed'];
+        }, 0);
+        $monthly = $annual / 12;
+        return [
+            'breakdown' => $breakdown,
+            'annual' => $annual,
+            'monthly' => $monthly,
+        ];
     }
 }
