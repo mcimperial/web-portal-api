@@ -501,9 +501,15 @@ class SendNotificationController extends Controller
                     'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
                     'certificate_number' => $dep->certificate_number ?? '',
                     'enrollment_status' => $dep->enrollment_status ?? '',
+                    //'skipping' => $dep->enrollment_status === 'SKIPPED' ? ' (skipped)' : '',
                 ];
-                // For premium computation, use array form
-                $dependentsArr[] = is_array($dep) ? $dep : (array)$dep;
+                // For premium computation, use array form and add healthInsurance->is_skipping if present
+                $depArr = is_array($dep) ? $dep : (array)$dep;
+                /* if (isset($dep->healthInsurance) && isset($dep->healthInsurance->is_skipping)) {
+                    $depArr['is_skipping'] = $dep->healthInsurance->is_skipping;
+                } */
+                $depArr['is_skipping'] = $dep->enrollment_status === 'SKIPPED' ? 1 : 0;
+                $dependentsArr[] = $depArr;
             }
         }
 
@@ -521,14 +527,14 @@ class SendNotificationController extends Controller
 
         // Premium Computation Section
         $premium = 0;
-        $premiumComputation = null;
-        // Check for premium in enrollee->enrollment or enrollee->health_insurance
+        $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
+        // Prefer enrollment premium if present, else healthInsurance
         if (!empty($enrollee->enrollment) && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0) {
             $premium = $enrollee->enrollment->premium;
-            $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
-        } elseif (!empty($enrollee->health_insurance) && isset($enrollee->health_insurance->premium) && $enrollee->health_insurance->premium > 0) {
-            $premium = $enrollee->health_insurance->premium;
-            $premiumComputation = $enrollee->health_insurance->premium_computation ?? null;
+        }
+
+        if (!empty($enrollee->healthInsurance) && isset($enrollee->healthInsurance->premium) && $enrollee->healthInsurance->premium > 0) {
+            $premium = $enrollee->healthInsurance->premium;
         }
 
         if ($premium > 0) {
@@ -537,7 +543,7 @@ class SendNotificationController extends Controller
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
             $html .= '<table style="width:100%; font-size:13px; margin-bottom:8px;"><tbody>';
             $html .= '<tr><td>Annual:</td><td style="font-weight:bold;">₱ ' . number_format($result['annual'], 2) . '</td></tr>';
-            $html .= '<tr><td>Monthly:</td><td style="font-weight:bold;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
+            //$html .= '<tr><td>Monthly:</td><td style="font-weight:bold;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
             $html .= '</tbody></table>';
             $html .= '<div style="font-weight:bold; margin-bottom:4px;">Breakdown</div>';
             $html .= '<table style="width:100%; font-size:13px;"><tbody>';
@@ -571,27 +577,40 @@ class SendNotificationController extends Controller
             foreach ($parts as $part) {
                 $split = explode(':', $part);
                 if (count($split) === 2 && is_numeric($split[1])) {
-                    $percentMap[trim($split[0])] = floatval($split[1]);
+                    $label = trim($split[0]);
+                    $percentMap[$label] = floatval($split[1]);
                 }
             }
         }
-        $depNum = 0;
+
+        // Only count non-skipped dependents for numbering, as in the React hook
+        $depIndex = 0;
         foreach ($dependents as $item) {
-            if (!empty($item['is_skipping']) && ($item['is_skipping'] === true || $item['is_skipping'] == 1)) {
+            $isSkipping = false;
+            if (isset($item['is_skipping'])) {
+                $val = $item['is_skipping'];
+                $isSkipping = ($val === true || $val === 1 || $val === '1');
+            }
+            if ($isSkipping) {
                 continue;
             }
-            $depNum++;
+            $depIndex++;
             $percent = 0;
-            if (array_key_exists((string)$depNum, $percentMap)) {
-                $percent = $percentMap[(string)$depNum];
-            } elseif (array_key_exists('ALL', $percentMap)) {
-                $percent = $percentMap['ALL'];
+            if (isset($percentMap[(string)$depIndex])) {
+                $percent = $percentMap[(string)$depIndex];
+            } else {
+                // Case-insensitive ALL key
+                foreach ($percentMap as $k => $v) {
+                    if (strtoupper($k) === 'ALL') {
+                        $percent = $v;
+                        break;
+                    }
+                }
             }
-            $computed = $bill * ($percent / 100);
             $breakdown[] = [
-                'dependentCount' => (string)$depNum,
+                'dependentCount' => (string)$depIndex,
                 'percentage' => $percent . '%',
-                'computed' => $computed,
+                'computed' => $bill * ($percent / 100),
             ];
         }
         $annual = array_reduce($breakdown, function ($sum, $row) {
