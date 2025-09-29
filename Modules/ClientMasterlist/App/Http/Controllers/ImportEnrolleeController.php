@@ -56,9 +56,10 @@ class ImportEnrolleeController extends Controller
                 if (isset($healthInsuranceData['is_renewal'])) {
                     $value = strtoupper(trim($healthInsuranceData['is_renewal']));
                     $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
-                }
-                if ($healthInsuranceData['is_renewal']) {
-                    $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
+
+                    if ($healthInsuranceData['is_renewal']) {
+                        $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
+                    }
                 }
                 if ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE') {
                     // Check for existing principal by employee_id and birth_date
@@ -145,7 +146,10 @@ class ImportEnrolleeController extends Controller
                 if (isset($healthInsuranceData['is_renewal'])) {
                     $value = strtoupper(trim($healthInsuranceData['is_renewal']));
                     $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
-                    $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
+
+                    if ($healthInsuranceData['is_renewal']) {
+                        $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
+                    }
                 }
                 if ($relation !== 'PRINCIPAL' && $relation !== 'EMPLOYEE') {
                     $principal = $principalMap[$employeeId] ?? null;

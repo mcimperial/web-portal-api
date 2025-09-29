@@ -505,9 +505,6 @@ class SendNotificationController extends Controller
                 ];
                 // For premium computation, use array form and add healthInsurance->is_skipping if present
                 $depArr = is_array($dep) ? $dep : (array)$dep;
-                /* if (isset($dep->healthInsurance) && isset($dep->healthInsurance->is_skipping)) {
-                    $depArr['is_skipping'] = $dep->healthInsurance->is_skipping;
-                } */
                 $depArr['is_skipping'] = $dep->enrollment_status === 'SKIPPED' ? 1 : 0;
                 $dependentsArr[] = $depArr;
             }
@@ -539,14 +536,14 @@ class SendNotificationController extends Controller
 
         if ($premium > 0) {
             $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation);
-            $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; border:1px solid #90cdf4; background:#ebf8ff; border-radius:8px;">';
+            $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
-            $html .= '<table style="width:100%; font-size:13px; margin-bottom:8px;"><tbody>';
+            $html .= '<table style="width:100%; font-size:18px; margin-bottom:8px;"><tbody>';
             $html .= '<tr><td>Annual:</td><td style="font-weight:bold;">₱ ' . number_format($result['annual'], 2) . '</td></tr>';
-            //$html .= '<tr><td>Monthly:</td><td style="font-weight:bold;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
+            //$html .= '<tr><td>Monthly:</td><td style="font-weight:bold;font-size:18px;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
             $html .= '</tbody></table>';
-            $html .= '<div style="font-weight:bold; margin-bottom:4px;">Breakdown</div>';
-            $html .= '<table style="width:100%; font-size:13px;"><tbody>';
+            $html .= '<div style="font-weight:bold; margin-bottom:4px; font-size:16px;">Breakdown</div>';
+            $html .= '<table style="border-collapse:collapse; width:100%; font-size:15px;"><tbody>';
             foreach ($result['breakdown'] as $row) {
                 $html .= '<tr style="border-bottom:1px solid #e2e8f0;">';
                 $html .= '<td>' . htmlspecialchars($row['dependentCount']) . ' Dependent:<br />' . htmlspecialchars($row['percentage']) . ' of ₱ ' . number_format($premium, 2) . '</td>';

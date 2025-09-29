@@ -1,7 +1,6 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\ClientMasterlist\App\Http\Controllers\ClientMasterlistController;
 
 /*
 |--------------------------------------------------------------------------
@@ -15,5 +14,5 @@ use Modules\ClientMasterlist\App\Http\Controllers\ClientMasterlistController;
 */
 
 Route::group([], function () {
-    Route::resource('clientmasterlist', ClientMasterlistController::class)->names('clientmasterlist');
+    //Route::resource('clientmasterlist', ClientMasterlistController::class)->names('clientmasterlist');
 });

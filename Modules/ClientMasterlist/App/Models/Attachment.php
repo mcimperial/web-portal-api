@@ -22,6 +22,7 @@ class Attachment extends Model
     {
         return $this->belongsTo(Enrollee::class, 'principal_id');
     }
+
     public function dependent()
     {
         return $this->belongsTo(Dependent::class, 'dependent_id');

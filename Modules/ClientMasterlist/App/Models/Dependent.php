@@ -35,6 +35,11 @@ class Dependent extends Model
         return $this->hasOne(HealthInsurance::class, 'dependent_id');
     }
 
+    public function attachment()
+    {
+        return $this->hasOne(Attachment::class, 'dependent_id');
+    }
+
     // Alias for Laravel relationship naming convention
     public function health_insurance()
     {

@@ -33,6 +33,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Enrollment CRUD
     Route::apiResource('enrollments', EnrollmentController::class);
 
+    // Export enrollees as CSV (must be above apiResource to avoid shadowing)
+    Route::get('enrollees/export', [EnrolleeController::class, 'exportEnrollees']);
+
     // Enrollee CRUD
     Route::apiResource('enrollees', EnrolleeController::class);
 
