@@ -9,11 +9,20 @@ use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
 use Illuminate\Support\Facades\Schema;
 
+use Modules\ClientMasterlist\App\Models\UserCM;
+use Modules\ClientMasterlist\App\Models\EnrollmentRole;
+
 class EnrollmentController extends Controller
 {
     use UppercaseInput, PasswordDeleteValidation;
+
     public function index()
     {
+        $ids = request()->query('ids');
+        if ($ids) {
+            $idArray = array_filter(array_map('intval', explode(',', $ids)));
+            return Enrollment::whereIn('id', $idArray)->get();
+        }
         return Enrollment::all();
     }
 
@@ -95,5 +104,47 @@ class EnrollmentController extends Controller
         }
         $enrollment->delete();
         return response()->json(['message' => 'Deleted successfully']);
+    }
+
+    public function getUsers()
+    {
+        return UserCM::all();
+    }
+
+    public function getEnrollmentRoles()
+    {
+        return EnrollmentRole::with(['user', 'enrollment'])->get();
+    }
+
+    public function assignUserToEnrollment(Request $request)
+    {
+        $validated = $request->validate([
+            'user_id' => 'required|integer|exists:users,id',
+            'enrollment_id' => 'required|integer|exists:cm_enrollment,id',
+        ]);
+
+        // Check if the assignment already exists
+        $existing = EnrollmentRole::where('user_id', $validated['user_id'])
+            ->where('enrollment_id', $validated['enrollment_id'])
+            ->first();
+
+        if ($existing) {
+            return response()->json(['message' => 'User is already assigned to this enrollment'], 409);
+        }
+
+        $assignment = EnrollmentRole::create($validated);
+        return response()->json($assignment, 201);
+    }
+
+    public function removeUserFromEnrollment(Request $request, $id)
+    {
+        $user = $this->validateDeletePassword($request);
+        if ($user instanceof \Illuminate\Http\JsonResponse) {
+            return $user;
+        }
+
+        $assignment = EnrollmentRole::findOrFail($id);
+        $assignment->delete();
+        return response()->json(['message' => 'User removed from enrollment successfully']);
     }
 }

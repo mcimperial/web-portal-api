@@ -40,6 +40,21 @@ class Dependent extends Model
         return $this->hasOne(Attachment::class, 'dependent_id');
     }
 
+    // Get the latest skip_hierarchy attachment only
+    public function attachmentForSkipHierarchy()
+    {
+        return $this->hasOne(Attachment::class, 'dependent_id')
+            ->where('attachment_for', 'skip_hierarchy')
+            ->latest('created_at');
+    }
+
+    public function attachmentForRequirement()
+    {
+        return $this->hasOne(Attachment::class, 'dependent_id')
+            ->where('attachment_for', 'required_document')
+            ->latest('created_at');
+    }
+
     // Alias for Laravel relationship naming convention
     public function health_insurance()
     {

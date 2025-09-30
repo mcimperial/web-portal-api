@@ -30,6 +30,13 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Insurance Providers CRUD
     Route::apiResource('insurance-providers', InsuranceProviderController::class);
 
+    Route::controller(EnrollmentController::class)->group(function () {
+        Route::get('enrollments/get-users', 'getUsers');
+        Route::get('enrollments/get-enrollment-roles', 'getEnrollmentRoles');
+        Route::post('enrollments/assign-user', 'assignUserToEnrollment');
+        Route::delete('enrollments/remove-user/{id}', 'removeUserFromEnrollment');
+    });
+
     // Enrollment CRUD
     Route::apiResource('enrollments', EnrollmentController::class);
 

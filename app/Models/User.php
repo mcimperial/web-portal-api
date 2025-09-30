@@ -10,10 +10,11 @@ use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Spatie\Permission\Traits\HasRoles;
 
+use Modules\ClientMasterlist\App\Models\EnrollmentRole;
+
 class User extends Authenticatable
 {
     use HasApiTokens, HasFactory, Notifiable, HasRoles;
-
     /**
      * The attributes that are mass assignable.
      *
@@ -73,5 +74,18 @@ class User extends Authenticatable
                 fn($query) =>
                 $query->where('slug', $permission)
             )->exists();
+    }
+
+    public function hasEnrollmentRole()
+    {
+        return $this->hasMany(EnrollmentRole::class, 'user_id');
+    }
+
+    /**
+     * Get only the enrollment_id values for this user.
+     */
+    public function enrollmentIds(): array
+    {
+        return $this->hasEnrollmentRole()->pluck('enrollment_id')->filter()->unique()->values()->toArray();
     }
 }

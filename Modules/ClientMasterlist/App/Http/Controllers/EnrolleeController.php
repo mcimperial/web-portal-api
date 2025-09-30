@@ -167,6 +167,7 @@ class EnrolleeController extends Controller
                 }
             }
         }
+
         // ...existing code for dependents (if needed)...
         $enrollee->load(['dependents', 'healthInsurance']);
         return response()->json($enrollee);
@@ -179,24 +180,29 @@ class EnrolleeController extends Controller
         $enrollmentStatus = $request->query('enrollment_status');
         $columns = $request->query('columns', []);
         $withDependents = $request->query('with_dependents', false);
+
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
         }
+
         // Remove empty and duplicate columns, ensure indexed array
         $columns = array_values(array_unique(array_filter($columns, function ($v) {
             return trim($v) !== '';
         })));
+
         // Add relation column if withDependents is true and not present
         if ($withDependents && !in_array('relation', $columns)) {
             $columns[] = 'relation';
         }
+
         // Always add enrollment_status
         if (!in_array('enrollment_status', $columns)) {
             $columns[] = 'enrollment_status';
         }
 
-        // Check if any dependent has SKIPPED or OVERAGE status
+        // Check if any dependent has SKIPPED or OVERAGE status, and if any has a required document
         $hasSkippedOrOverage = false;
+        $hasRequiredDocument = false;
         $queryCheck = Enrollee::with('dependents');
         if ($enrollmentId) {
             $queryCheck->where('enrollment_id', $enrollmentId);
@@ -212,25 +218,38 @@ class EnrolleeController extends Controller
                 foreach ($enrollee->dependents as $dependent) {
                     if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                         $hasSkippedOrOverage = true;
+                    }
+                    if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
+                        $hasRequiredDocument = true;
+                    }
+                    if ($hasSkippedOrOverage && $hasRequiredDocument) {
                         break 2;
                     }
                 }
             }
         }
 
+        // Add Required Document column if needed
+        if ($hasRequiredDocument) {
+            $columns = array_filter($columns, function ($col) {
+                return $col !== 'required_document';
+            });
+            $columns = array_merge($columns, ['required_document']);
+        }
+
         // Add remarks, reason_for_skipping, attachment columns only if needed
         if ($hasSkippedOrOverage) {
-            // Remove if already present to avoid duplicates
             $columns = array_filter($columns, function ($col) {
-                return !in_array($col, ['remarks', 'reason_for_skipping', 'attachment']);
+                return !in_array($col, ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy']);
             });
-            $columns = array_merge(['remarks', 'reason_for_skipping', 'attachment'], $columns);
+            $columns = array_merge(['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'], $columns);
         }
 
         $query = Enrollee::with(['healthInsurance', 'dependents']);
         if ($enrollmentId) {
             $query->where('enrollment_id', $enrollmentId);
         }
+
         if ($enrollmentStatus) {
             $query->where('enrollment_status', $enrollmentStatus);
             if ($enrollmentStatus === 'FOR-RENEWAL') {
@@ -239,6 +258,7 @@ class EnrolleeController extends Controller
                 });
             }
         }
+
         $query->whereNull('deleted_at');
         $enrollees = $query->get();
 
@@ -246,13 +266,15 @@ class EnrolleeController extends Controller
         $columnLabels = [
             'remarks' => 'Remarks',
             'reason_for_skipping' => 'Reason for Skipping',
-            'attachment' => 'Attachment',
+            'attachment' => 'Attachment for Skip Hierarchy',
+            'required_document' => 'Required Document',
+            'relation' => 'Relation',
+            'enrollment_status' => 'Enrollment Status',
             'employee_id' => 'Employee ID',
             'first_name' => 'First Name',
             'last_name' => 'Last Name',
             'middle_name' => 'Middle Name',
             'birth_date' => 'Birth Dates',
-            'relation' => 'Relation',
             'gender' => 'Gender',
             'marital_status' => 'Marital Status',
             'email1' => 'Email 1',
@@ -278,9 +300,8 @@ class EnrolleeController extends Controller
             'coverage_end_date' => 'Coverage End Date',
             'certificate_number' => 'Certificate Number',
             'certificate_date_issued' => 'Certificate Date Issued',
-            'enrollment_status' => 'Enrollment Status',
-            'full_name' => 'Full Name',
         ];
+
         $header = array_map(function ($col) use ($columnLabels) {
             return $columnLabels[$col] ?? $col;
         }, $columns);
@@ -299,18 +320,22 @@ class EnrolleeController extends Controller
             'certificate_number',
             'certificate_date_issued'
         ];
+
         $rows = [];
         $colCount = count($columns);
         foreach ($enrollees as $enrollee) {
             // Principal row
             $row = array_map(function ($col) use ($enrollee, $insuranceFields, $withDependents) {
+                if ($col === 'required_document') {
+                    return '';
+                }
                 if ($col === 'relation' && $withDependents) {
                     return 'PRINCIPAL';
                 }
                 if ($col === 'enrollment_status') {
                     return $enrollee->enrollment_status ?? '';
                 }
-                if ($col === 'remarks' || $col === 'reason_for_skipping' || $col === 'attachment') {
+                if ($col === 'remarks' || $col === 'reason_for_skipping' || $col === 'attachment_for_skip_hierarchy') {
                     return '';
                 }
                 if ($col === 'full_name') {
@@ -333,7 +358,12 @@ class EnrolleeController extends Controller
             if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
                 foreach ($enrollee->dependents as $dependent) {
                     $depRow = array_map(function ($col) use ($dependent, $withDependents, $insuranceFields) {
-                        // If dependent enrollment_status is SKIPPED or OVERAGE, add remarks and reason columns
+                        if ($col === 'required_document') {
+                            if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
+                                return $dependent->attachmentForRequirement->file_path;
+                            }
+                            return '';
+                        }
                         if ($col === 'remarks') {
                             if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                                 if ($dependent->enrollment_status === 'SKIPPED') {
@@ -350,9 +380,9 @@ class EnrolleeController extends Controller
                             }
                             return '';
                         }
-                        if ($col === 'attachment') {
+                        if ($col === 'attachment_for_skip_hierarchy') {
                             if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                return $dependent->attachment->file_path ?? '';
+                                return $dependent->attachmentForSkipHierarchy->file_path ?? '';
                             }
                             return '';
                         }
