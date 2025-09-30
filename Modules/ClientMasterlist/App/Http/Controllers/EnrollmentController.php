@@ -19,7 +19,7 @@ class EnrollmentController extends Controller
     public function index()
     {
         $ids = request()->query('ids');
-        if ($ids) {
+        if (isset($ids)) {
             $idArray = array_filter(array_map('intval', explode(',', $ids)));
             return Enrollment::whereIn('id', $idArray)->get();
         }
