@@ -411,7 +411,7 @@ class SendNotificationController extends Controller
 
         $replacements = [
             'enrollment_link' => $data['enrollment_link'] ?? $link ?? '',
-            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime('+1 month', strtotime($enrollee->coverage_start_date))),
+            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime('+1 month', strtotime($enrollee->healthInsurance->coverage_start_date))),
             'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
@@ -488,7 +488,7 @@ class SendNotificationController extends Controller
         $rows[] = [
             'relation' => 'PRINCIPAL',
             'name' => trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
-            'certificate_number' => $enrollee->certificate_number ?? '',
+            'certificate_number' => $enrollee->healthInsurance->certificate_number ?? '',
             'enrollment_status' => $enrollee->enrollment_status ?? '',
         ];
 
@@ -598,7 +598,7 @@ class SendNotificationController extends Controller
             } else {
                 // Case-insensitive ALL key
                 foreach ($percentMap as $k => $v) {
-                    if (strtoupper($k) === 'ALL') {
+                    if (strtoupper($k) === 'REST') {
                         $percent = $v;
                         break;
                     }

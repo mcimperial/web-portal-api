@@ -48,8 +48,9 @@ class DependentController extends Controller
             'is_skipping' => 'nullable|boolean',
             'reason_for_skipping' => 'nullable|string|max:255',
             'certificate_number' => 'nullable|string|max:255',
+            'coverage_start_date' => 'nullable|date',
+            'coverage_end_date' => 'nullable|date',
             'certificate_date_issued' => 'nullable|date',
-            'is_company_paid' => 'nullable',
         ]);
         // Convert is_company_paid from 'YES'/'NO' to 1/0 if present
         if (isset($insuranceData['is_company_paid'])) {
@@ -112,8 +113,9 @@ class DependentController extends Controller
             'is_skipping' => 'nullable|boolean',
             'reason_for_skipping' => 'nullable|string|max:255',
             'certificate_number' => 'nullable|string|max:255',
+            'coverage_start_date' => 'nullable|date',
+            'coverage_end_date' => 'nullable|date',
             'certificate_date_issued' => 'nullable|date',
-            'is_company_paid' => 'nullable',
         ]);
         // Convert is_company_paid from 'YES'/'NO' to 1/0 if present
         if (isset($insuranceData['is_company_paid'])) {
