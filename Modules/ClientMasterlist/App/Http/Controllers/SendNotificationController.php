@@ -411,7 +411,7 @@ class SendNotificationController extends Controller
 
         $replacements = [
             'enrollment_link' => $data['enrollment_link'] ?? $link ?? '',
-            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime('+1 month', strtotime($enrollee->healthInsurance->coverage_start_date))),
+            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
             'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
@@ -428,8 +428,8 @@ class SendNotificationController extends Controller
         // Helper to get certificate_number from joined health_insurance if available
         $getCertificateNumber = function ($person) {
             // If relation loaded, use it; otherwise fallback
-            if (isset($person->health_insurance) && !empty($person->health_insurance->certificate_number)) {
-                return $person->health_insurance->certificate_number;
+            if (isset($person->healthInsurance) && !empty($person->healthInsurance->certificate_number)) {
+                return $person->healthInsurance->certificate_number;
             }
             return $person->certificate_number ?? '';
         };
