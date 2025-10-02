@@ -513,6 +513,7 @@ class SendNotificationController extends Controller
         // Build HTML table
         $html = '<b>Below is the summary of your enrollment:</b><br /><table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
         $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Status</th></tr></thead><tbody>';
+
         foreach ($rows as $row) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
@@ -534,7 +535,7 @@ class SendNotificationController extends Controller
             $premium = $enrollee->healthInsurance->premium;
         }
 
-        if (!empty($enrollee->healthInsurance) && $enrollee->healthInsurance->premium) {
+        if (!empty($enrollee->healthInsurance) && $enrollee->healthInsurance->is_company_paid) {
             $premium = 0; // Default if not set
         }
 
