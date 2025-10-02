@@ -544,8 +544,8 @@ class SendNotificationController extends Controller
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
             $html .= '<table style="width:100%; font-size:18px; margin-bottom:8px;"><tbody>';
-            $html .= '<tr><td>Monthly:</td><td style="font-weight:bold;">₱ ' . number_format($result['annual'], 2) . '</td></tr>';
-            //$html .= '<tr><td>Monthly:</td><td style="font-weight:bold;font-size:18px;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
+            $html .= '<tr><td>' . ($enrollee->enrollment->premium_variable ?? "TOTAL") . ':</td><td style="font-weight:bold;">₱ ' . number_format($result['annual'], 2) . '</td></tr>';
+            $html .= '<tr style="' . ($enrollee->enrollment->with_monthly ? "" : "display:none;") . '"><td>MONTHLY:</td><td style="font-weight:bold;font-size:18px;">₱ ' . number_format($result['monthly'], 2) . '</td></tr>';
             $html .= '</tbody></table>';
             $html .= '<div style="font-weight:bold; margin-bottom:4px; font-size:16px;">Breakdown</div>';
             $html .= '<table style="border-collapse:collapse; width:100%; font-size:15px;"><tbody>';

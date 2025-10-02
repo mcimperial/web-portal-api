@@ -143,6 +143,8 @@ class EnrolleeManageDependentController extends Controller
             'enrollment_status' => 'required|string'
         ]);
 
+        $validated = $this->uppercaseStrings($validated);
+
         $enrollee->fill($validated);
         $enrollee->save();
 
