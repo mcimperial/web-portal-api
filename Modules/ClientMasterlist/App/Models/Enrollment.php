@@ -20,6 +20,8 @@ class Enrollment extends Model
         'with_skip_hierarchy',
         'premium',
         'premium_computation',
+        'premium_variable',
+        'with_monthly',
         'principal_mbl',
         'principal_room_and_board',
         'dependent_mbl',
