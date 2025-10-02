@@ -534,6 +534,10 @@ class SendNotificationController extends Controller
             $premium = $enrollee->healthInsurance->premium;
         }
 
+        if (!empty($enrollee->healthInsurance) && $enrollee->healthInsurance->premium) {
+            $premium = 0; // Default if not set
+        }
+
         if ($premium > 0) {
             $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation);
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';

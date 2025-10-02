@@ -51,7 +51,10 @@ class ImportEnrolleeController extends Controller
                 if (isset($healthInsuranceData['is_company_paid'])) {
                     $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
                     $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                } else {
+                    $healthInsuranceData['is_company_paid'] = 0; // Default to 0 if not specified
                 }
+
                 // Convert is_renewal from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_renewal'])) {
                     $value = strtoupper(trim($healthInsuranceData['is_renewal']));
@@ -60,7 +63,10 @@ class ImportEnrolleeController extends Controller
                     if ($healthInsuranceData['is_renewal']) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
                     }
+                } else {
+                    $healthInsuranceData['is_renewal'] = 0; // Default to 0 if not specified
                 }
+
                 if ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE') {
                     // Check for existing principal by employee_id and birth_date
                     $enrolleeData['enrollment_id'] = $enrollmentId;
@@ -108,9 +114,11 @@ class ImportEnrolleeController extends Controller
                         $filtered = $this->uppercaseStrings($filtered);
                         // Compare all provided insurance fields for a match
                         $insuranceQuery = HealthInsurance::query();
-                        foreach ($filtered as $key => $value) {
-                            $insuranceQuery->where($key, $value);
-                        }
+
+                        //foreach ($filtered as $key => $value) {
+                        $insuranceQuery->where('principal_id', $principal->id);
+                        //}
+
                         $existingInsurance = $insuranceQuery->first();
                         if ($existingInsurance) {
                             $existingInsurance->update($filtered);
@@ -120,6 +128,7 @@ class ImportEnrolleeController extends Controller
                     }
                 }
             }
+
             // Pass 2: Create dependents and link to principal by employee_id
             foreach ($enrollees as $enrolleeData) {
                 $relationRaw = $enrolleeData['relation'] ?? '';
@@ -133,14 +142,18 @@ class ImportEnrolleeController extends Controller
                         unset($enrolleeData[$field]);
                     }
                 }
+
                 // If certificate_number is present, set status to approved
                 if (!empty($healthInsuranceData['certificate_number'])) {
                     $enrolleeData['enrollment_status'] = 'APPROVED';
                 }
+
                 // Convert is_company_paid from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_company_paid'])) {
                     $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
                     $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                } else {
+                    $healthInsuranceData['is_company_paid'] = 1; // Default to 0 if not specified
                 }
                 // Convert is_renewal from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_renewal'])) {
@@ -150,7 +163,10 @@ class ImportEnrolleeController extends Controller
                     if ($healthInsuranceData['is_renewal']) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
                     }
+                } else {
+                    $healthInsuranceData['is_renewal'] = 0; // Default to 0 if not specified
                 }
+
                 if ($relation !== 'PRINCIPAL' && $relation !== 'EMPLOYEE') {
                     $principal = $principalMap[$employeeId] ?? null;
                     if ($principal) {
@@ -164,7 +180,7 @@ class ImportEnrolleeController extends Controller
 
                         // Check for existing dependent by employee_id and birth_date
                         $birthDate = $enrolleeData['birth_date'] ?? null;
-                        $dependentQuery = Dependent::withTrashed()->where('employee_id', $enrolleeData['employee_id']);
+                        $dependentQuery = Dependent::withTrashed()->where('principal_id',  $principal->id);
                         if ($birthDate !== null) {
                             $dependentQuery = $dependentQuery->where('birth_date', $birthDate);
                         }
@@ -198,9 +214,8 @@ class ImportEnrolleeController extends Controller
                             $filtered = $this->uppercaseStrings($filtered);
                             // Compare all provided insurance fields for a match
                             $insuranceQuery = HealthInsurance::query();
-                            foreach ($filtered as $key => $value) {
-                                $insuranceQuery->where($key, $value);
-                            }
+                            $insuranceQuery->where('dependent_id', $dependent->id);
+
                             $existingInsurance = $insuranceQuery->first();
                             if ($existingInsurance) {
                                 $existingInsurance->update($filtered);
