@@ -410,10 +410,14 @@ class EnrolleeController extends Controller
 
         // Build CSV string
         $sanitize = function ($value) {
+            // Ensure the value is properly encoded as UTF-8
+            $value = mb_convert_encoding($value, 'UTF-8', 'UTF-8');
             $value = str_replace(["\r", "\n", "\t"], ' ', $value);
             return '"' . str_replace('"', '""', $value) . '"';
         };
-        $csv = '';
+
+        // Start with UTF-8 BOM to ensure proper encoding in Excel
+        $csv = "\xEF\xBB\xBF";
         $csv .= implode(',', array_map($sanitize, $header)) . "\r\n";
         foreach ($rows as $row) {
             $csv .= implode(',', array_map($sanitize, $row)) . "\r\n";
@@ -421,7 +425,7 @@ class EnrolleeController extends Controller
 
         $filename = 'EXPORT_ENROLLEES_' . ($enrollmentStatus || 'ALL') . '_' . date('Ymd_His') . '.csv';
         return response($csv)
-            ->header('Content-Type', 'text/csv')
+            ->header('Content-Type', 'text/csv; charset=UTF-8')
             ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 
