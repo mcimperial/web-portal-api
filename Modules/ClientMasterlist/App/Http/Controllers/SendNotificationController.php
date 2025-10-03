@@ -408,9 +408,15 @@ class SendNotificationController extends Controller
         $baseUrl = env('FRONTEND_URL');
         // Ensure the URL is properly formatted with protocol and no double slashes
         $baseUrl = rtrim($baseUrl, '/');
+
+        // Fix any malformed URLs that might have incorrect protocol format
+        $baseUrl = preg_replace('/^https?:\/+/', 'https://', $baseUrl);
+
+        // Add protocol if missing
         if (!preg_match('/^https?:\/\//', $baseUrl)) {
             $baseUrl = 'https://' . $baseUrl;
         }
+
         $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
         $link = '<a href="' . $link . '">Self-Enrollment Portal</a>';
 
