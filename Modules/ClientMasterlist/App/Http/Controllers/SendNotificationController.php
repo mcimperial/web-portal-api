@@ -406,11 +406,16 @@ class SendNotificationController extends Controller
         }
 
         $baseUrl = env('FRONTEND_URL');
+        // Ensure the URL is properly formatted with protocol and no double slashes
+        $baseUrl = rtrim($baseUrl, '/');
+        if (!preg_match('/^https?:\/\//', $baseUrl)) {
+            $baseUrl = 'https://' . $baseUrl;
+        }
         $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
         $link = '<a href="' . $link . '">Self-Enrollment Portal</a>';
 
         $replacements = [
-            'enrollment_link' => $data['enrollment_link'] ?? $link ?? '',
+            'enrollment_link' => $data['enrollment_link'] ?? $link,
             'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
             'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
             'certification_table' => $this->certificationTable($enrollee),
