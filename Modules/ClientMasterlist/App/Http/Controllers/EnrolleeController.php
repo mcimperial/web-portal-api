@@ -203,7 +203,7 @@ class EnrolleeController extends Controller
         // Check if any dependent has SKIPPED or OVERAGE status, and if any has a required document
         $hasSkippedOrOverage = false;
         $hasRequiredDocument = false;
-        $queryCheck = Enrollee::with('dependents');
+        $queryCheck = Enrollee::with('dependents')->where('status', 'ACTIVE')->whereIsNull('deleted_at');
         if ($enrollmentId) {
             $queryCheck->where('enrollment_id', $enrollmentId);
         }
@@ -245,7 +245,7 @@ class EnrolleeController extends Controller
             $columns = array_merge(['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'], $columns);
         }
 
-        $query = Enrollee::with(['healthInsurance', 'dependents']);
+        $query = Enrollee::with(['healthInsurance', 'dependents'])->where('status', 'ACTIVE')->whereIsNull('deleted_at');
         if ($enrollmentId) {
             $query->where('enrollment_id', $enrollmentId);
         }
