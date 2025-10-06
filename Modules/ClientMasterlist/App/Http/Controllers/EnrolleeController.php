@@ -67,7 +67,7 @@ class EnrolleeController extends Controller
     public function getAllForSelect(Request $request)
     {
 
-        $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'enrollment_status', 'enrollment_id');
+        $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'enrollment_status', 'enrollment_id', 'email1');
 
         $enrollees = $query->whereNull('deleted_at')
             ->orderBy('first_name', 'asc')
@@ -76,14 +76,13 @@ class EnrolleeController extends Controller
             ->map(function ($enrollee) {
                 return [
                     'id' => $enrollee->id,
-                    'value' => $enrollee->id,
-                    'label' => trim($enrollee->first_name . ' ' . ($enrollee->middle_name ? $enrollee->middle_name . ' ' : '') . $enrollee->last_name) . ' (' . $enrollee->employee_id . ')',
                     'employee_id' => $enrollee->employee_id,
                     'first_name' => $enrollee->first_name,
                     'last_name' => $enrollee->last_name,
                     'middle_name' => $enrollee->middle_name,
                     'enrollment_status' => $enrollee->enrollment_status,
                     'enrollment_id' => $enrollee->enrollment_id,
+                    'email1' => $enrollee->email1,
                 ];
             });
 
