@@ -53,7 +53,7 @@ class EnrolleeController extends Controller
 
         // Apply soft delete filter and ordering
         $query->whereNull('deleted_at');
-        $query->orderBy('id', 'desc');
+        $query->orderBy('updated_at', 'desc');
 
         $enrollees = $query->paginate($perPage);
 
