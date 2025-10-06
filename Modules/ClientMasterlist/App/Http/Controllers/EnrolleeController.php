@@ -385,7 +385,7 @@ class EnrolleeController extends Controller
             'first_name' => 'First Name',
             'last_name' => 'Last Name',
             'middle_name' => 'Middle Name',
-            'birth_date' => 'Birth Dates',
+            'birth_date' => 'Birth Date',
             'gender' => 'Gender',
             'marital_status' => 'Marital Status',
             'email1' => 'Email 1',
@@ -531,6 +531,7 @@ class EnrolleeController extends Controller
         // Start with UTF-8 BOM to ensure proper encoding in Excel
         $csv = "\xEF\xBB\xBF";
         $csv .= implode(',', array_map($sanitize, $header)) . "\r\n";
+
         foreach ($rows as $row) {
             $csv .= implode(',', array_map($sanitize, $row)) . "\r\n";
         }
