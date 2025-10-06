@@ -8,6 +8,7 @@ use Modules\ClientMasterlist\App\Http\Controllers\EnrolleeManageDependentControl
 
 use Modules\ClientMasterlist\App\Http\Controllers\DependentController;
 use Modules\ClientMasterlist\App\Http\Controllers\AttachmentController;
+use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
 use Modules\ClientMasterlist\App\Http\Controllers\ImportEnrolleeController;
 use Modules\ClientMasterlist\App\Http\Controllers\SendNotificationController;
 use Modules\ClientMasterlist\App\Http\Controllers\NotificationController;
@@ -41,9 +42,10 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     Route::apiResource('enrollments', EnrollmentController::class);
 
     // Export enrollees as CSV (must be above apiResource to avoid shadowing)
-    Route::get('enrollees/export', [EnrolleeController::class, 'exportEnrollees']);
+    Route::get('enrollees/export', [ExportEnrolleesController::class, 'exportEnrollees']);
 
     Route::get('/enrollees/select', [EnrolleeController::class, 'getAllForSelect']);
+
     // Enrollee CRUD
     Route::apiResource('enrollees', EnrolleeController::class);
 

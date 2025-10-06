@@ -23,13 +23,25 @@ class SendNotificationController extends Controller
         if ($enrolleeStatus && $request->has('notification_id')) {
             $notificationId = $request->input('notification_id');
             $notification = Notification::find($notificationId);
+
             if ($notification && isset($notification->enrollment_id)) {
                 $enrollmentId = $notification->enrollment_id;
                 // Find enrollees with the given status and enrollment_id
                 $enrolleeQuery = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $enrollmentId)
                     ->where('enrollment_status', $enrolleeStatus)
                     ->whereNull('deleted_at');
+
+                // Apply date filtering if provided
+                if ($request->has('dateFrom') && $request->filled('dateFrom')) {
+                    $enrolleeQuery->whereDate('updated_at', '>=', $request->input('dateFrom') . ' 00:00:00');
+                }
+
+                if ($request->has('dateTo') && $request->filled('dateTo')) {
+                    $enrolleeQuery->whereDate('updated_at', '<=', $request->input('dateTo') . ' 23:59:59');
+                }
+
                 $enrollees = $enrolleeQuery->get();
+
                 if ($enrollees->count() > 0) {
                     // Collect their IDs
                     $enrolleeIds = $enrollees->pluck('id')->toArray();
@@ -61,9 +73,12 @@ class SendNotificationController extends Controller
             'use_saved' => 'sometimes|boolean',
             'send_as_multiple' => 'sometimes|boolean',
             'enrollee_id' => 'sometimes|nullable|integer',
+            'dateFrom' => 'sometimes|nullable|date',
+            'dateTo' => 'sometimes|nullable|date|after_or_equal:dateFrom',
         ]);
 
         $notification = Notification::find($data['notification_id']);
+
         if (!$notification) {
             return response()->json([
                 'success' => false,
@@ -511,7 +526,7 @@ class SendNotificationController extends Controller
                     'relation' => 'DEPENDENT',
                     'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
                     'certificate_number' => $dep->certificate_number ?? 'N/A',
-                    //'enrollment_status' => $dep->enrollment_status ?? 'N/A',
+                    'enrollment_status' => $dep->enrollment_status == 'OVERAGE' || $dep->enrollment_status == 'SKIPPED' ? $dep->enrollment_status : 'FOR-CHECKING',
                     //'skipping' => $dep->enrollment_status === 'SKIPPED' ? ' (skipped)' : '',
                 ];
                 // For premium computation, use array form and add healthInsurance->is_skipping if present
@@ -523,13 +538,22 @@ class SendNotificationController extends Controller
 
         // Build HTML table
         $html = '<b>Below is the summary of your enrollment:</b><br /><table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
-        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th></tr></thead><tbody>';
+
+        $html .= '
+            <thead>
+                <tr style="background:#f3f3f3;">
+                    <th>Relation</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>';
 
         foreach ($rows as $row) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
-            //$html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
             $html .= '</tr>';
         }
         $html .= '</tbody></table>';
@@ -537,6 +561,7 @@ class SendNotificationController extends Controller
         // Premium Computation Section
         $premium = 0;
         $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
+
         // Prefer enrollment premium if present, else healthInsurance
         if (!empty($enrollee->enrollment) && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0) {
             $premium = $enrollee->enrollment->premium;
@@ -550,7 +575,7 @@ class SendNotificationController extends Controller
             $premium = 0; // Default if not set
         }
 
-        if ($premium > 0) {
+        if ($premium > 0 && count($dependentsArr) > 0) {
             $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation);
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
