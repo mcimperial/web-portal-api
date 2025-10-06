@@ -63,6 +63,33 @@ class EnrolleeController extends Controller
         return response()->json($enrollees);
     }
 
+    // Get all enrollees for select dropdown
+    public function getAllForSelect(Request $request)
+    {
+
+        $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'enrollment_status', 'enrollment_id');
+
+        $enrollees = $query->whereNull('deleted_at')
+            ->orderBy('first_name', 'asc')
+            ->orderBy('last_name', 'asc')
+            ->get()
+            ->map(function ($enrollee) {
+                return [
+                    'id' => $enrollee->id,
+                    'value' => $enrollee->id,
+                    'label' => trim($enrollee->first_name . ' ' . ($enrollee->middle_name ? $enrollee->middle_name . ' ' : '') . $enrollee->last_name) . ' (' . $enrollee->employee_id . ')',
+                    'employee_id' => $enrollee->employee_id,
+                    'first_name' => $enrollee->first_name,
+                    'last_name' => $enrollee->last_name,
+                    'middle_name' => $enrollee->middle_name,
+                    'enrollment_status' => $enrollee->enrollment_status,
+                    'enrollment_id' => $enrollee->enrollment_id,
+                ];
+            });
+
+        return response()->json($enrollees);
+    }
+
     // Store a new enrollee with dependents
     public function store(Request $request)
     {
