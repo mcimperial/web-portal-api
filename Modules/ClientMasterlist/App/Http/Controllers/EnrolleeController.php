@@ -20,18 +20,29 @@ class EnrolleeController extends Controller
         $perPage = $request->query('per_page', 20);
         $enrollmentStatus = $request->query('enrollment_status');
         $search = $request->query('search');
+
         $query = Enrollee::with(['dependents', 'healthInsurance']);
+
+        // Apply enrollment_id filter first
         if ($enrollmentId) {
             $query->where('enrollment_id', $enrollmentId);
         }
+
+        // Handle enrollment status with proper grouping for OR conditions
         if ($enrollmentStatus) {
-            $query->where('enrollment_status', $enrollmentStatus);
             if ($enrollmentStatus === 'FOR-RENEWAL') {
-                $query->orWhereHas('healthInsurance', function ($q) {
-                    $q->where('is_renewal', true);
+                $query->where(function ($q) use ($enrollmentStatus) {
+                    $q->where('enrollment_status', $enrollmentStatus)
+                        ->orWhereHas('healthInsurance', function ($subQ) {
+                            $subQ->where('is_renewal', true);
+                        });
                 });
+            } else {
+                $query->where('enrollment_status', $enrollmentStatus);
             }
         }
+
+        // Apply search filter
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('first_name', 'like', "%$search%")
@@ -39,10 +50,16 @@ class EnrolleeController extends Controller
                     ->orWhere('employee_id', 'like', "%$search%");
             });
         }
+
+        // Apply soft delete filter and ordering
         $query->whereNull('deleted_at');
         $query->orderBy('id', 'desc');
 
         $enrollees = $query->paginate($perPage);
+
+        // Append query parameters to pagination links
+        $enrollees->appends($request->query());
+
         return response()->json($enrollees);
     }
 
@@ -323,6 +340,7 @@ class EnrolleeController extends Controller
 
         $rows = [];
         $colCount = count($columns);
+
         foreach ($enrollees as $enrollee) {
             // Principal row
             $row = array_map(function ($col) use ($enrollee, $insuranceFields, $withDependents) {
