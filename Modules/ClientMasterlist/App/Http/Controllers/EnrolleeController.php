@@ -66,10 +66,53 @@ class EnrolleeController extends Controller
     // Get all enrollees for select dropdown
     public function getAllForSelect(Request $request)
     {
+        $enrollmentId = $request->query('enrollment_id');
+        $enrollmentStatus = $request->query('enrollment_status');
+        $search = $request->query('search');
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
 
         $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'enrollment_status', 'enrollment_id', 'email1');
 
+        // Apply enrollment_id filter
+        if ($enrollmentId) {
+            $query->where('enrollment_id', $enrollmentId);
+        }
+
+        // Apply enrollment status filter
+        if ($enrollmentStatus) {
+            if ($enrollmentStatus === 'FOR-RENEWAL') {
+                $query->where(function ($q) use ($enrollmentStatus) {
+                    $q->where('enrollment_status', $enrollmentStatus)
+                        ->orWhereHas('healthInsurance', function ($subQ) {
+                            $subQ->where('is_renewal', true);
+                        });
+                });
+            } else {
+                $query->where('enrollment_status', $enrollmentStatus);
+            }
+        }
+
+        // Apply search filter
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('first_name', 'like', "%$search%")
+                    ->orWhere('last_name', 'like', "%$search%")
+                    ->orWhere('employee_id', 'like', "%$search%");
+            });
+        }
+
+        // Apply date range filter on updated_at
+        if ($dateFrom) {
+            $query->whereDate('updated_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo) {
+            $query->whereDate('updated_at', '<=', $dateTo);
+        }
+
         $enrollees = $query->whereNull('deleted_at')
+            ->where('status', 'ACTIVE')
             ->orderBy('first_name', 'asc')
             ->orderBy('last_name', 'asc')
             ->get()
@@ -223,6 +266,8 @@ class EnrolleeController extends Controller
         $enrollmentStatus = $request->query('enrollment_status');
         $columns = $request->query('columns', []);
         $withDependents = $request->query('with_dependents', false);
+        $dateFrom = $request->query('date_from');
+        $dateTo = $request->query('date_to');
 
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
@@ -253,6 +298,16 @@ class EnrolleeController extends Controller
         if ($enrollmentStatus) {
             $queryCheck->where('enrollment_status', $enrollmentStatus);
         }
+
+        // Apply date range filter on updated_at
+        if ($dateFrom) {
+            $queryCheck->whereDate('updated_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo) {
+            $queryCheck->whereDate('updated_at', '<=', $dateTo);
+        }
+
         $queryCheck->whereNull('deleted_at');
         $enrolleesCheck = $queryCheck->get();
 
@@ -294,12 +349,25 @@ class EnrolleeController extends Controller
         }
 
         if ($enrollmentStatus) {
-            $query->where('enrollment_status', $enrollmentStatus);
             if ($enrollmentStatus === 'FOR-RENEWAL') {
-                $query->orWhereHas('healthInsurance', function ($q) {
-                    $q->where('is_renewal', true);
+                $query->where(function ($q) use ($enrollmentStatus) {
+                    $q->where('enrollment_status', $enrollmentStatus)
+                        ->orWhereHas('healthInsurance', function ($subQ) {
+                            $subQ->where('is_renewal', true);
+                        });
                 });
+            } else {
+                $query->where('enrollment_status', $enrollmentStatus);
             }
+        }
+
+        // Apply date range filter on updated_at
+        if ($dateFrom) {
+            $query->whereDate('updated_at', '>=', $dateFrom . ' 00:00:00');
+        }
+
+        if ($dateTo) {
+            $query->whereDate('updated_at', '<=', $dateTo . ' 23:59:59');
         }
 
         $query->whereNull('deleted_at');
