@@ -49,16 +49,26 @@ class ImportEnrolleeController extends Controller
                 }
                 // Convert is_company_paid from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_company_paid'])) {
-                    $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
-                    $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                    // Check if already 1 or 0 (numeric), otherwise convert from 'YES'/'NO'
+                    if (is_numeric($healthInsuranceData['is_company_paid'])) {
+                        $healthInsuranceData['is_company_paid'] = (int)$healthInsuranceData['is_company_paid'];
+                    } else {
+                        $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
+                        $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                    }
                 } else {
                     $healthInsuranceData['is_company_paid'] = 0; // Default to 0 if not specified
                 }
 
                 // Convert is_renewal from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_renewal'])) {
-                    $value = strtoupper(trim($healthInsuranceData['is_renewal']));
-                    $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
+                    // Check if already 1 or 0 (numeric), otherwise convert from 'YES'/'NO'
+                    if (is_numeric($healthInsuranceData['is_renewal'])) {
+                        $healthInsuranceData['is_renewal'] = (int)$healthInsuranceData['is_renewal'];
+                    } else {
+                        $value = strtoupper(trim($healthInsuranceData['is_renewal']));
+                        $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
+                    }
 
                     if ($healthInsuranceData['is_renewal']) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
@@ -150,15 +160,25 @@ class ImportEnrolleeController extends Controller
 
                 // Convert is_company_paid from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_company_paid'])) {
-                    $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
-                    $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                    // Check if already 1 or 0 (numeric), otherwise convert from 'YES'/'NO'
+                    if (is_numeric($healthInsuranceData['is_company_paid'])) {
+                        $healthInsuranceData['is_company_paid'] = (int)$healthInsuranceData['is_company_paid'];
+                    } else {
+                        $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
+                        $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                    }
                 } else {
-                    $healthInsuranceData['is_company_paid'] = 1; // Default to 0 if not specified
+                    $healthInsuranceData['is_company_paid'] = 1; // Default to 1 if not specified
                 }
                 // Convert is_renewal from 'Yes'/'No' to 1/0 if present
                 if (isset($healthInsuranceData['is_renewal'])) {
-                    $value = strtoupper(trim($healthInsuranceData['is_renewal']));
-                    $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
+                    // Check if already 1 or 0 (numeric), otherwise convert from 'YES'/'NO'
+                    if (is_numeric($healthInsuranceData['is_renewal'])) {
+                        $healthInsuranceData['is_renewal'] = (int)$healthInsuranceData['is_renewal'];
+                    } else {
+                        $value = strtoupper(trim($healthInsuranceData['is_renewal']));
+                        $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
+                    }
 
                     if ($healthInsuranceData['is_renewal']) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
@@ -168,8 +188,13 @@ class ImportEnrolleeController extends Controller
                 }
 
                 if (isset($healthInsuranceData['is_skipping'])) {
-                    $value = strtoupper(trim($healthInsuranceData['is_skipping']));
-                    $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
+                    // Check if already 1 or 0 (numeric), otherwise convert from 'YES'/'NO'
+                    if (is_numeric($healthInsuranceData['is_skipping'])) {
+                        $healthInsuranceData['is_skipping'] = (int)$healthInsuranceData['is_skipping'];
+                    } else {
+                        $value = strtoupper(trim($healthInsuranceData['is_skipping']));
+                        $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
+                    }
 
                     if ($healthInsuranceData['is_skipping']) {
                         $enrolleeData['enrollment_status'] = 'SKIPPED';
