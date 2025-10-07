@@ -588,7 +588,7 @@ class SendNotificationController extends Controller
                     'relation' => 'DEPENDENT',
                     'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
                     'certificate_number' => $dep->certificate_number ?? 'N/A',
-                    'enrollment_status' => $dep->enrollment_status == 'OVERAGE' || $dep->enrollment_status == 'SKIPPED' ? $dep->enrollment_status : 'FOR-CHECKING',
+                    'enrollment_status' => $dep->enrollment_status == 'OVERAGE' || $dep->enrollment_status == 'SKIPPED' ? $dep->enrollment_status : '--',
                     //'skipping' => $dep->enrollment_status === 'SKIPPED' ? ' (skipped)' : '',
                 ];
                 // For premium computation, use array form and add healthInsurance->is_skipping if present
