@@ -451,12 +451,18 @@ class SendNotificationController extends Controller
 
     /**
      * Replace variable placeholders in the message/subject with actual data.
+     * Supports case-insensitive variable replacement.
      */
     private function replaceVariables($text, $replacements = [])
     {
         if (!$text) return $text;
+
         foreach ($replacements as $key => $value) {
-            $text = str_replace('{{' . $key . '}}', strtolower($value), $text);
+            // Case-sensitive replacement (original behavior)
+            $text = str_replace('{{' . $key . '}}', $value, $text);
+
+            // Case-insensitive replacement for uppercase variables
+            $text = str_ireplace('{{' . $key . '}}', $value, $text);
         }
         return $text;
     }
@@ -503,6 +509,14 @@ class SendNotificationController extends Controller
             'date_today' => date('F j, Y'),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
+
+            // Add uppercase versions for backward compatibility
+            'ENROLLMENT_LINK' => $data['enrollment_link'] ?? $link,
+            'COVERAGE_START_DATE' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
+            'FIRST_DAY_OF_NEXT_MONTH' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
+            'DATE_TODAY' => date('F j, Y'),
+            'CERTIFICATION_TABLE' => $this->certificationTable($enrollee),
+            'SUBMISSION_TABLE' => $this->submissionTable($enrollee),
         ];
         return $replacements;
     }
