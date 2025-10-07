@@ -7,9 +7,35 @@ use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\Notification;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Services\EmailSender;
 use Modules\ClientMasterlist\App\Models\Attachment;
+use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
 
+use Modules\ClientMasterlist\App\Models\Enrollee;
+
+/**
+ * SendNotificationController
+ * 
+ * Handles sending notification emails to enrollees, including:
+ * - Manual notification sending
+ * - Scheduled notification processing (for cronjobs)
+ * - Automatic targeting of specific enrollee groups based on notification type
+ * - CSV report generation and attachment for specific notification types
+ * - Schedule-based date range filtering for reports
+ * 
+ * Special Features:
+ * - APPROVED BY HMO (WELCOME EMAIL): Automatically sends to enrollees with 'APPROVED' 
+ *   status that were updated on the current day
+ * - REPORT: ATTACHMENT (SUBMITTED/APPROVED): Generates CSV reports using ExportEnrolleesController
+ *   and attaches them to notification emails with date filtering based on cron schedule
+ * - Schedule-based date ranges: Uses notification cron schedule to calculate date ranges
+ *   from previous scheduled run to current run for report filtering
+ * - Support for multiple email providers (Laravel Mail, Infobip)
+ * - Variable replacement in email content (enrollment links, tables, etc.)
+ * - Attachment handling with blocked extension protection for Infobip
+ * - Automatic CSV file cleanup after email sending
+ */
 class SendNotificationController extends Controller
 {
     /**
@@ -17,6 +43,11 @@ class SendNotificationController extends Controller
      */
     public function send(Request $request)
     {
+        Log::info("Send method called", [
+            'request_data' => $request->all(),
+            'has_csv_attachment' => $request->has('csv_attachment')
+        ]);
+
         $enrolleeStatus = $request->input('enrollee_status');
 
         // If enrollee_status is provided, find all enrollees with that status for this enrollment
@@ -26,6 +57,7 @@ class SendNotificationController extends Controller
 
             if ($notification && isset($notification->enrollment_id)) {
                 $enrollmentId = $notification->enrollment_id;
+
                 // Find enrollees with the given status and enrollment_id
                 $enrolleeQuery = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $enrollmentId)
                     ->where('enrollment_status', $enrolleeStatus)
@@ -86,6 +118,12 @@ class SendNotificationController extends Controller
             ], 404);
         }
 
+        Log::info("Notification found, proceeding with send logic", [
+            'notification_id' => $notification->id,
+            'notification_type' => $notification->notification_type,
+            'to_value' => $data['to']
+        ]);
+
         try {
             // If 'to' is a list of enrollee IDs, handle in a separate function
             if ($this->isIdList($data['to'])) {
@@ -93,16 +131,27 @@ class SendNotificationController extends Controller
             }
 
             // If use_saved is true, ignore 'to' and 'cc' from request and use saved values
-            $data['enrollee_id'] = $data['attach_enrollee_id'] ?? $data['enrollee_id'];
+            $data['enrollee_id'] = $data['attach_enrollee_id'] ?? ($data['enrollee_id'] ?? null);
 
             // If send_as_multiple is set and there are multiple emails, handle in a separate function
             if (!empty($data['send_as_multiple'])) {
                 return $this->sendToMultipleEmails($data, $notification);
             }
 
+            // Add CSV attachment to data if present in request
+            if ($request->has('csv_attachment')) {
+                $data['csv_attachment'] = $request->get('csv_attachment');
+            }
+
             // Otherwise, send as a single email (default)
             return $this->sendSingleEmail($data, $notification);
         } catch (\Exception $e) {
+            Log::error("Exception in send method", [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send email: ' . $e->getMessage(),
@@ -188,6 +237,9 @@ class SendNotificationController extends Controller
             }
         }
 
+        // Add CSV attachment if provided
+        $csvAttachment = $data['csv_attachment'] ?? null;
+
         $replacements = $this->getVariableReplacements($notification, $data);
         $messageBody  = $this->replaceVariables($notification->message, $replacements);
         $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
@@ -197,6 +249,23 @@ class SendNotificationController extends Controller
 
             $tempFiles = [];
             $infobipAttachments = [];
+
+            // Log CSV attachment status
+            Log::info("Email sending - CSV attachment status", [
+                'has_csv_attachment' => !empty($csvAttachment),
+                'csv_path' => $csvAttachment['path'] ?? null,
+                'csv_name' => $csvAttachment['name'] ?? null,
+                'csv_file_exists' => $csvAttachment ? file_exists($csvAttachment['path']) : false
+            ]);
+
+            // Handle CSV attachment first
+            if ($csvAttachment) {
+                $tempFiles[] = $csvAttachment['path'];
+                $infobipAttachments[] = [
+                    'path' => $csvAttachment['path'],
+                    'name' => $csvAttachment['name']
+                ];
+            }
 
             foreach ($attachmentModels as $att) {
                 if (!empty($att->file_path)) {
@@ -228,6 +297,19 @@ class SendNotificationController extends Controller
                 }
             }
 
+            // Log email sending attempt
+            Log::info("Sending email via Infobip", [
+                'to' => $to,
+                'subject' => $subjectBody,
+                'attachments_count' => count($infobipAttachments),
+                'attachments' => array_map(function ($att) {
+                    return [
+                        'name' => $att['name'],
+                        'file_exists' => file_exists($att['path'])
+                    ];
+                }, $infobipAttachments)
+            ]);
+
             $emailService = new EmailSender(
                 $to, // pass as array
                 $notification->is_html ? $messageBody : nl2br($messageBody),
@@ -240,8 +322,20 @@ class SendNotificationController extends Controller
             );
 
             $result = $emailService->send();
+
+            // Log email sending result
+            Log::info("Email sending result", [
+                'success' => $result,
+                'provider' => 'infobip'
+            ]);
+
             foreach ($tempFiles as $tmp) {
                 @unlink($tmp);
+            }
+
+            // Clean up CSV attachment temp files
+            if ($csvAttachment && isset($csvAttachment['temp_path'])) {
+                @unlink($csvAttachment['temp_path']);
             }
 
             if (!$result) {
@@ -251,7 +345,7 @@ class SendNotificationController extends Controller
                 ], 500);
             }
         } else {
-            Mail::send([], [], function ($message) use ($notification, $to, $cc, $attachments, $messageBody, $subjectBody) {
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -273,7 +367,22 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
+                // Add CSV attachment if provided
+                if ($csvAttachment) {
+                    $message->attach($csvAttachment['path'], [
+                        'as' => $csvAttachment['name'],
+                        'mime' => 'text/csv'
+                    ]);
+                }
             });
+
+            // Clean up CSV attachment temp files for Laravel Mail
+            if ($csvAttachment) {
+                @unlink($csvAttachment['path']);
+                if (isset($csvAttachment['temp_path'])) {
+                    @unlink($csvAttachment['temp_path']);
+                }
+            }
         }
 
         return response()->json([
@@ -341,61 +450,13 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Handle sending scheduled notifications (for cronjob)
-     */
-    public function sendScheduled()
-    {
-        $now = now();
-        $dueNotifications = Notification::whereNotNull('schedule')
-            ->where(function ($q) use ($now) {
-                $q->whereNull('last_sent_at')
-                    ->orWhere('last_sent_at', '<', $now->subMinute());
-            })
-            ->get();
-
-        foreach ($dueNotifications as $notification) {
-            if (!$this->isCronDue($notification->schedule, $now)) continue;
-
-            $request = new Request([
-                'notification_id' => $notification->id,
-                'to' => $notification->to,
-                'cc' => $notification->cc,
-                'bcc' => $notification->bcc,
-                'use_saved' => true,
-            ]);
-
-            $this->send($request);
-
-            $notification->last_sent_at = $now;
-            $notification->save();
-        }
-
-        return response()->json(['success' => true, 'message' => 'Scheduled notifications processed.']);
-    }
-
-    /**
-     * Check if a cron expression is due now
-     */
-    private function isCronDue($cron, $now)
-    {
-        try {
-            $cronExp = \Cron\CronExpression::factory($cron);
-            return $cronExp->isDue($now);
-        } catch (\Exception $e) {
-            return false;
-        }
-    }
-
-    /**
      * Replace variable placeholders in the message/subject with actual data.
-     * Example: {{employee_name}}, {{enrollment_date}}, etc.
-     * Extend this as needed to support more variables.
      */
     private function replaceVariables($text, $replacements = [])
     {
         if (!$text) return $text;
         foreach ($replacements as $key => $value) {
-            $text = str_replace('{{' . $key . '}}', $value, $text);
+            $text = str_replace('{{' . $key . '}}', strtolower($value), $text);
         }
         return $text;
     }
@@ -439,6 +500,7 @@ class SendNotificationController extends Controller
             'enrollment_link' => $data['enrollment_link'] ?? $link,
             'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
             'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
+            'date_today' => date('F j, Y'),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
         ];
@@ -598,13 +660,8 @@ class SendNotificationController extends Controller
         return $html;
     }
 
-    /**
+    /*
      * Compute premium breakdown for dependents, similar to the React hook usePremiumComputation.
-     *
-     * @param array $dependents Array of dependents (each should have 'is_skipping' property if skipping)
-     * @param float|int $bill The base premium amount
-     * @param string|null $premiumComputation The premium computation string (e.g. "1:50,2:30,ALL:10")
-     * @return array [ 'breakdown' => [...], 'annual' => float, 'monthly' => float ]
      */
     public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null)
     {
@@ -660,5 +717,402 @@ class SendNotificationController extends Controller
             'annual' => $annual,
             'monthly' => $monthly,
         ];
+    }
+
+    /**
+     * Handle sending scheduled notifications (for cronjob)
+     */
+    public function sendScheduled()
+    {
+        $now = now();
+        $dueNotifications = Notification::whereNotNull('schedule')
+            ->where(function ($q) use ($now) {
+                $q->whereNull('last_sent_at')
+                    ->orWhere('last_sent_at', '<', $now->subMinute());
+            })->whereNull('deleted_at')
+            ->get();
+
+        foreach ($dueNotifications as $notification) {
+            if (!$this->isCronDue($notification->schedule, $now)) continue;
+
+            Log::info("Processing scheduled notification", [
+                'notification_id' => $notification->id,
+                'notification_type' => $notification->notification_type,
+                'to' => $notification->to
+            ]);
+
+            // Check status and get enrollee IDs or CSV generation data if applicable
+            // Pass the notification object for schedule-based date calculation
+            $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+
+            Log::info("Status result for notification", [
+                'notification_id' => $notification->id,
+                'status_result_type' => is_array($statusResult) ? ($statusResult['type'] ?? 'unknown') : gettype($statusResult),
+                'has_status_result' => !empty($statusResult)
+            ]);
+
+            $request = new Request([
+                'notification_id' => $notification->id,
+                'to' => $notification->to,
+                'cc' => $notification->cc,
+                'bcc' => $notification->bcc,
+                'use_saved' => true,
+            ]);
+
+            $forCount = 0; // Initialize count variable
+
+            // Handle CSV generation for report notifications
+            if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                $csvAttachment = $this->generateCsvAttachment(
+                    $statusResult['enrollment_id'],
+                    $statusResult['status'] ?? null,
+                    $statusResult['with_dependents'] ?? false,
+                    $statusResult['date_from'] ?? null,
+                    $statusResult['date_to'] ?? null,
+                    $statusResult['columns'] ?? []
+                );
+
+                // Check if CSV has actual data rows before proceeding
+                if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                    // Store the CSV attachment info for use in email sending
+                    $request->merge([
+                        'csv_attachment' => $csvAttachment
+                    ]);
+
+                    Log::info("CSV attachment added to request - has data", [
+                        'notification_id' => $notification->id,
+                        'csv_filename' => $csvAttachment['name'],
+                        'data_rows' => $csvAttachment['data_rows']
+                    ]);
+
+                    $forCount = 1; // CSV notification counts as 1 valid recipient
+                } elseif ($csvAttachment) {
+                    // Clean up empty CSV file
+                    if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                        @unlink($csvAttachment['path']);
+                    }
+                    if (isset($csvAttachment['temp_path'])) {
+                        @unlink($csvAttachment['temp_path']);
+                    }
+
+                    Log::info("CSV attachment skipped - no data rows", [
+                        'notification_id' => $notification->id,
+                        'data_rows' => $csvAttachment['data_rows'] ?? 0,
+                        'enrollment_id' => $statusResult['enrollment_id'],
+                        'status' => $statusResult['status']
+                    ]);
+
+                    // Skip sending this notification since there's no data
+                    continue;
+                } else {
+                    Log::warning("Failed to generate CSV attachment", [
+                        'notification_id' => $notification->id,
+                        'enrollment_id' => $statusResult['enrollment_id']
+                    ]);
+
+                    // Skip this notification
+                    continue;
+                }
+            }
+            // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
+            elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
+                $request->merge([
+                    'to' => implode(',', $statusResult)
+                ]);
+
+                $forCount = count($statusResult);
+            }
+
+            Log::info("About to send notification", [
+                'notification_id' => $notification->id,
+                'request_data' => $request->all()
+            ]);
+
+            if ($forCount === 0) {
+                Log::info("No recipients found for notification, skipping send", [
+                    'notification_id' => $notification->id
+                ]);
+                continue; // Skip sending if no recipients
+            }
+            $this->send($request);
+
+            Log::info("Notification sent, updating last_sent_at", [
+                'notification_id' => $notification->id
+            ]);
+
+            $notification->last_sent_at = $now;
+            $notification->save();
+        }
+
+        return response()->json(['success' => true, 'message' => 'Scheduled notifications processed.']);
+    }
+
+    private function checkNotificationStatus($notificationType, $enrollmentId = null, $notification = null)
+    {
+        switch ($notificationType) {
+            case 'APPROVED BY HMO (WELCOME EMAIL)':
+                return $this->getEnrolleesByStatus($enrollmentId, 'APPROVED', $notification);
+            case 'ENROLLMENT START (PENDING)':
+                return $this->getEnrolleesByStatus($enrollmentId, 'PENDING', $notification);
+            case 'REPORT: ATTACHMENT (SUBMITTED)':
+
+                // Use passed notification or find it if not provided
+                if (!$notification) {
+                    $notification = Notification::where('enrollment_id', $enrollmentId)
+                        ->where('notification_type', $notificationType)
+                        ->first();
+                }
+
+                $dateRange = $this->calculateDateRangeFromSchedule($notification);
+
+                // Return data for CSV generation instead of enrollee IDs
+                return [
+                    'type' => 'csv_generation',
+                    'enrollment_id' => $enrollmentId,
+                    'status' => 'SUBMITTED',
+                    'with_dependents' => true,
+                    'date_from' => $dateRange['from'],
+                    'date_to' => $dateRange['to'],
+                    'columns' => [
+                        'employee_id',
+                        'first_name',
+                        'last_name',
+                        'middle_name',
+                        'birth_date',
+                        'gender',
+                        'email1',
+                        'phone1',
+                        'department',
+                        'position',
+                        'enrollment_status',
+                        'relation'
+                    ]
+                ];
+            case 'REPORT: ATTACHMENT (APPROVED)':
+                // Use passed notification or find it if not provided
+                if (!$notification) {
+                    $notification = Notification::where('enrollment_id', $enrollmentId)
+                        ->where('notification_type', $notificationType)
+                        ->first();
+                }
+
+                $dateRange = $this->calculateDateRangeFromSchedule($notification);
+
+                // Return data for CSV generation for approved enrollees
+                return [
+                    'type' => 'csv_generation',
+                    'enrollment_id' => $enrollmentId,
+                    'status' => 'APPROVED',
+                    'with_dependents' => true,
+                    'date_from' => $dateRange['from'],
+                    'date_to' => $dateRange['to'],
+                    'columns' => [
+                        'employee_id',
+                        'first_name',
+                        'last_name',
+                        'middle_name',
+                        'birth_date',
+                        'gender',
+                        'email1',
+                        'phone1',
+                        'department',
+                        'position',
+                        'enrollment_status',
+                        'certificate_number',
+                        'relation'
+                    ]
+                ];
+            default:
+                // No action needed for other types
+                return null;
+        }
+    }
+
+    /**
+     * Get all enrollees with APPROVED status updated today for the given enrollment
+     */
+    private function getEnrolleesByStatus($enrollmentId = null, $status = null, $notification = null)
+    {
+        if (!$enrollmentId) {
+            return [];
+        }
+
+        $today = now()->format('Y-m-d');
+
+        $dateRange = $this->calculateDateRangeFromSchedule($notification);
+
+        $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
+            ->where('enrollment_status', $status)
+            //->where('updated_at', '>=', '2025-10-06 00:00:00') // Use calculated date range
+            //->where('updated_at', '<=', '2025-10-07 23:59:59')   // Use calculated date range
+            ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
+            ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
+            ->whereNull('deleted_at')
+            ->get();
+
+        if ($enrollees->count() > 0) {
+            $enrolleeIds = $enrollees->pluck('id')->toArray();
+
+            // Log for debugging purposes
+            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} approved enrollees for enrollment {$enrollmentId} on {$today}", [
+                'enrollment_id' => $enrollmentId,
+                'date' => $today,
+                'enrollee_ids' => $enrolleeIds
+            ]);
+
+            return $enrolleeIds;
+        }
+
+        Log::info("STATUS BY HMO notification: No approved enrollees found for enrollment {$enrollmentId} on {$today}");
+        return [];
+    }
+
+    /**
+     * Calculate date range from yesterday's schedule time to today's schedule time
+     * Based on the notification's cron schedule
+     */
+    private function calculateDateRangeFromSchedule($notification = null)
+    {
+        $now = now();
+
+        if (!$notification || !$notification->schedule) {
+            // Default to yesterday 00:00:00 to today 23:59:59 if no schedule
+            return [
+                'from' => $now->copy()->subDay()->format('Y-m-d'),
+                'to' => $now->format('Y-m-d')
+            ];
+        }
+
+        try {
+            // Parse the cron expression to get the scheduled time
+            $cronExp = \Cron\CronExpression::factory($notification->schedule);
+
+            // Get the previous run time (yesterday's scheduled time)
+            $previousRun = $cronExp->getPreviousRunDate($now);
+
+            // Get current scheduled time (today's scheduled time)
+            $currentRun = $cronExp->getNextRunDate($previousRun);
+
+            // If current run is in the future, use now as the end time
+            if ($currentRun > $now) {
+                $currentRun = $now;
+            }
+
+            Log::info("Date range calculated for notification schedule", [
+                'schedule' => $notification->schedule,
+                'from' => $previousRun->format('Y-m-d H:i:s'),
+                'to' => $currentRun->format('Y-m-d H:i:s'),
+                'notification_type' => $notification->notification_type ?? 'unknown'
+            ]);
+
+            return [
+                'from' => $previousRun->format('Y-m-d H:i:s'),
+                'to' => $currentRun->format('Y-m-d H:i:s')
+            ];
+        } catch (\Exception $e) {
+            Log::warning("Failed to parse cron schedule, using default date range", [
+                'schedule' => $notification->schedule,
+                'error' => $e->getMessage()
+            ]);
+
+            // Fallback to default range
+            return [
+                'from' => $now->copy()->subDay()->format('Y-m-d'),
+                'to' => $now->format('Y-m-d')
+            ];
+        }
+    }
+
+    /**
+     * Generate CSV attachment using ExportEnrolleesController
+     */
+    private function generateCsvAttachment($enrollmentId, $enrollmentStatus = null, $withDependents = false, $dateFrom = null, $dateTo = null, $columns = [])
+    {
+        try {
+            // Log the parameters for debugging
+            Log::info("CSV generation started", [
+                'enrollment_id' => $enrollmentId,
+                'enrollment_status' => $enrollmentStatus,
+                'with_dependents' => $withDependents,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+                'columns' => $columns
+            ]);
+
+            // Create a request object with the parameters
+            $request = new Request([
+                'enrollment_id' => $enrollmentId,
+                'enrollment_status' => $enrollmentStatus,
+                'with_dependents' => $withDependents,
+                'date_from' => $dateFrom,
+                'date_to' => $dateTo,
+                'columns' => $columns
+            ]);
+
+            // Create ExportEnrolleesController instance and call the export method
+            $exportController = new ExportEnrolleesController();
+            $response = $exportController->exportEnrolleesForAttachment($request);
+
+            // Get the CSV content from the response
+            $csvContent = $response->getContent();
+
+            // Count the number of rows in the CSV (excluding header)
+            $csvLines = explode("\n", trim($csvContent));
+            $totalRows = count($csvLines);
+            $dataRows = $totalRows - 1; // Subtract 1 for header row
+
+            // Remove empty lines from count
+            $dataRows = count(array_filter($csvLines, function ($line) {
+                return trim($line) !== '';
+            })) - 1; // Subtract 1 for header
+
+            // Log CSV content length for debugging
+            Log::info("CSV generated successfully", [
+                'content_length' => strlen($csvContent),
+                'has_content' => !empty($csvContent),
+                'total_rows' => $totalRows,
+                'data_rows' => $dataRows
+            ]);
+
+            // Generate a temporary file
+            $filename = 'ENROLLEES_' . ($enrollmentStatus ?: 'ALL') . '_' . date('Ymd_His') . '.csv';
+            $tempPath = tempnam(sys_get_temp_dir(), 'csv_attachment_');
+            $tempCsvPath = $tempPath . '.csv';
+
+            // Write CSV content to temporary file
+            file_put_contents($tempCsvPath, $csvContent);
+
+            Log::info("CSV attachment file created", [
+                'filename' => $filename,
+                'temp_path' => $tempCsvPath,
+                'file_exists' => file_exists($tempCsvPath)
+            ]);
+
+            return [
+                'path' => $tempCsvPath,
+                'name' => $filename,
+                'temp_path' => $tempPath, // Store original temp path for cleanup
+                'has_data' => $dataRows > 0,
+                'data_rows' => $dataRows
+            ];
+        } catch (\Exception $e) {
+            Log::error("Failed to generate CSV attachment: " . $e->getMessage(), [
+                'exception' => $e->getTraceAsString()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Check if a cron expression is due now
+     */
+    private function isCronDue($cron, $now)
+    {
+        try {
+            $cronExp = \Cron\CronExpression::factory($cron);
+            return $cronExp->isDue($now);
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }

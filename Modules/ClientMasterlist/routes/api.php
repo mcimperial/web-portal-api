@@ -67,6 +67,18 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     // Send Notification API
     Route::post('send-notification', [SendNotificationController::class, 'send']);
+
+    // Test endpoint for approved enrollees (for debugging APPROVED BY HMO functionality)
+    Route::post('test-approved-enrollees', [SendNotificationController::class, 'testApprovedEnrollees']);
+
+    // Test endpoint for CSV generation (for debugging CSV attachment functionality)
+    Route::post('test-csv-generation', [SendNotificationController::class, 'testCsvGeneration']);
+
+    // Test endpoint for date range calculation (for debugging schedule-based date filtering)
+    Route::post('test-date-range-calculation', [SendNotificationController::class, 'testDateRangeCalculation']);
+
+    // Test endpoint for status update (for debugging SUBMITTED to FOR-APPROVAL status change)
+    Route::post('test-status-update', [ExportEnrolleesController::class, 'testStatusUpdate']);
 });
 
 // Public Attachments CRUD (no auth)
