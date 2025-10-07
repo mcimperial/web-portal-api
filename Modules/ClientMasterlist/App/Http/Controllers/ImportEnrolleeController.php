@@ -167,6 +167,17 @@ class ImportEnrolleeController extends Controller
                     $healthInsuranceData['is_renewal'] = 0; // Default to 0 if not specified
                 }
 
+                if (isset($healthInsuranceData['is_skipping'])) {
+                    $value = strtoupper(trim($healthInsuranceData['is_skipping']));
+                    $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
+
+                    if ($healthInsuranceData['is_skipping']) {
+                        $enrolleeData['enrollment_status'] = 'SKIPPED';
+                    }
+                } else {
+                    $healthInsuranceData['is_skipping'] = 0; // Default to 0 if not specified
+                }
+
                 if ($relation !== 'PRINCIPAL' && $relation !== 'EMPLOYEE') {
                     $principal = $principalMap[$employeeId] ?? null;
                     if ($principal) {
