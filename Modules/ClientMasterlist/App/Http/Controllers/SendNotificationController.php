@@ -740,13 +740,11 @@ class SendNotificationController extends Controller
     {
         $now = now();
         $dueNotifications = Notification::whereNotNull('schedule')
-            ->where(function ($q) use ($now) {
-                $q->whereNull('last_sent_at')
-                    ->orWhere('last_sent_at', '<', $now->subMinute());
-            })->whereNull('deleted_at')
+            ->whereNull('deleted_at')
             ->get();
 
         foreach ($dueNotifications as $notification) {
+            // Only check if the cron schedule is due, ignore last_sent_at
             if (!$this->isCronDue($notification->schedule, $now)) continue;
 
             Log::info("Processing scheduled notification", [
