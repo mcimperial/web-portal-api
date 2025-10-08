@@ -1001,52 +1001,51 @@ class SendNotificationController extends Controller
             // Parse the cron expression to get the scheduled time
             $cronExp = \Cron\CronExpression::factory($notification->schedule);
 
-            // Special handling for notifications that have never been sent
-            if (is_null($notification->last_sent_at)) {
-                Log::info("First time sending notification - using schedule-based interval", [
-                    'notification_id' => $notification->id,
-                    'notification_type' => $notification->notification_type ?? 'unknown',
-                    'schedule' => $notification->schedule
-                ]);
+            // Get the current/previous scheduled time
+            $currentScheduledTime = $cronExp->getPreviousRunDate($now);
 
-                // For first run, calculate from previous scheduled time to current scheduled time
-                // This ensures we get the proper interval based on the cron schedule
-                $currentScheduledTime = $cronExp->getPreviousRunDate($now);
-                $previousScheduledTime = $cronExp->getPreviousRunDate($currentScheduledTime);
+            // Convert to Carbon for easier manipulation
+            $currentScheduledTime = \Carbon\Carbon::instance($currentScheduledTime);
 
-                Log::info("First time notification date range calculation", [
-                    'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
-                    'previous_scheduled' => $previousScheduledTime->format('Y-m-d H:i:s'),
-                    'now' => $now->format('Y-m-d H:i:s')
-                ]);
+            // Determine interval based on cron schedule pattern
+            $scheduleArray = explode(' ', $notification->schedule);
+            $minutes = $scheduleArray[0] ?? '*';
+            $hours = $scheduleArray[1] ?? '*';
+            $days = $scheduleArray[2] ?? '*';
+            $months = $scheduleArray[3] ?? '*';
+            $weekdays = $scheduleArray[4] ?? '*';
 
-                return [
-                    'from' => $previousScheduledTime->format('Y-m-d H:i:s'),
-                    'to' => $currentScheduledTime->format('Y-m-d H:i:s')
-                ];
+            $dateFrom = $currentScheduledTime->copy();
+
+            // Determine the interval and subtract accordingly
+            if ($minutes !== '*' && $hours === '*') {
+                // Every minute - subtract 1 minute
+                $dateFrom->subMinutes(1);
+            } elseif ($hours === '*') {
+                // Hourly (every hour) - subtract 1 hour
+                $dateFrom->subHours(1);
+            } elseif ($days === '*') {
+                // Daily (every day) - subtract 1 day
+                $dateFrom->subDays(1);
+            } elseif ($months === '*') {
+                // Monthly (every month) - subtract 1 month
+                $dateFrom->subMonths(1);
+            } else {
+                // Default to 1 day for other patterns
+                $dateFrom->subDays(1);
             }
 
-            // Get the previous run time (yesterday's scheduled time)
-            $previousRun = $cronExp->getPreviousRunDate($now);
-
-            // Get current scheduled time (today's scheduled time)
-            $currentRun = $cronExp->getNextRunDate($previousRun);
-
-            // If current run is in the future, use now as the end time
-            if ($currentRun > $now) {
-                $currentRun = $now;
-            }
-
-            Log::info("Date range calculated for notification schedule", [
+            Log::info("Date range calculated based on schedule interval", [
                 'schedule' => $notification->schedule,
-                'from' => $previousRun->format('Y-m-d H:i:s'),
-                'to' => $currentRun->format('Y-m-d H:i:s'),
+                'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
+                'from' => $dateFrom->format('Y-m-d H:i:s'),
+                'to' => $currentScheduledTime->format('Y-m-d H:i:s'),
                 'notification_type' => $notification->notification_type ?? 'unknown'
             ]);
 
             return [
-                'from' => $previousRun->format('Y-m-d H:i:s'),
-                'to' => $currentRun->format('Y-m-d H:i:s')
+                'from' => $dateFrom->format('Y-m-d H:i:s'),
+                'to' => $currentScheduledTime->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
             Log::warning("Failed to parse cron schedule, using default date range", [
