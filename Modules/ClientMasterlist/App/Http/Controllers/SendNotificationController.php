@@ -968,16 +968,16 @@ class SendNotificationController extends Controller
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
             // Log for debugging purposes
-            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} approved enrollees for enrollment {$enrollmentId} on {$today}", [
+            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} approved enrollees for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}", [
                 'enrollment_id' => $enrollmentId,
-                'date' => $today,
+                'date' => $dateRange['from'] . ' to ' . $dateRange['to'],
                 'enrollee_ids' => $enrolleeIds
             ]);
 
             return $enrolleeIds;
         }
 
-        Log::info("STATUS BY HMO notification: No approved enrollees found for enrollment {$enrollmentId} on {$today}");
+        Log::info("STATUS BY HMO notification: No approved enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
         return [];
     }
 
