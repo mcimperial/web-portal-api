@@ -992,8 +992,8 @@ class SendNotificationController extends Controller
         if (!$notification || !$notification->schedule) {
             // Default to yesterday 00:00:00 to today 23:59:59 if no schedule
             return [
-                'from' => $now->copy()->subDay()->format('Y-m-d'),
-                'to' => $now->format('Y-m-d')
+                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
+                'to' => $now->copy()->endOfDay()->format('Y-m-d H:i:s')
             ];
         }
 
@@ -1031,8 +1031,8 @@ class SendNotificationController extends Controller
 
             // Fallback to default range
             return [
-                'from' => $now->copy()->subDay()->format('Y-m-d'),
-                'to' => $now->format('Y-m-d')
+                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
+                'to' => $now->copy()->endOfDay()->format('Y-m-d H:i:s')
             ];
         }
     }

@@ -233,9 +233,9 @@ class ExportEnrolleesController extends Controller
                         if ($col === 'remarks') {
                             if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                                 if ($dependent->enrollment_status === 'SKIPPED') {
-                                    return 'Do not enroll, skipped hierarchy';
+                                    return 'DO NOT ENROLL, SKIPPED HIERARCHY';
                                 } else {
-                                    return 'Do not enroll, overage';
+                                    return 'DO NOT ENROLL, OVERAGE';
                                 }
                             }
                             return '';
@@ -518,9 +518,9 @@ class ExportEnrolleesController extends Controller
                         if ($col === 'remarks') {
                             if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                                 if ($dependent->enrollment_status === 'SKIPPED') {
-                                    return 'Do not enroll, skipped hierarchy';
+                                    return 'DO NOT ENROLL, SKIPPED HIERARCHY';
                                 } else {
-                                    return 'Do not enroll, overage';
+                                    return 'DO NOT ENROLL, OVERAGE';
                                 }
                             }
                             return '';
