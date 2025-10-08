@@ -968,7 +968,7 @@ class SendNotificationController extends Controller
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
             // Log for debugging purposes
-            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} approved enrollees for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}", [
+            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} {$status} enrollees for sending {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}", [
                 'enrollment_id' => $enrollmentId,
                 'date' => $dateRange['from'] . ' to ' . $dateRange['to'],
                 'enrollee_ids' => $enrolleeIds
@@ -977,7 +977,7 @@ class SendNotificationController extends Controller
             return $enrolleeIds;
         }
 
-        Log::info("STATUS BY HMO notification: No approved enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
+        Log::info("STATUS BY HMO notification: No {$status} enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
         return [];
     }
 
@@ -997,24 +997,34 @@ class SendNotificationController extends Controller
             ];
         }
 
-        // Special handling for notifications that have never been sent
-        if (is_null($notification->last_sent_at)) {
-            Log::info("First time sending notification - using wider date range", [
-                'notification_id' => $notification->id,
-                'notification_type' => $notification->notification_type ?? 'unknown'
-            ]);
-
-            // For first run, use a wider range to catch any pending data
-            // From 1 day ago to today end
-            return [
-                'from' => $now->copy()->subDays(1)->startOfDay()->format('Y-m-d H:i:s'),
-                'to' => $now->copy()->endOfDay()->format('Y-m-d H:i:s')
-            ];
-        }
-
         try {
             // Parse the cron expression to get the scheduled time
             $cronExp = \Cron\CronExpression::factory($notification->schedule);
+
+            // Special handling for notifications that have never been sent
+            if (is_null($notification->last_sent_at)) {
+                Log::info("First time sending notification - using schedule-based interval", [
+                    'notification_id' => $notification->id,
+                    'notification_type' => $notification->notification_type ?? 'unknown',
+                    'schedule' => $notification->schedule
+                ]);
+
+                // For first run, calculate from previous scheduled time to current scheduled time
+                // This ensures we get the proper interval based on the cron schedule
+                $currentScheduledTime = $cronExp->getPreviousRunDate($now);
+                $previousScheduledTime = $cronExp->getPreviousRunDate($currentScheduledTime);
+
+                Log::info("First time notification date range calculation", [
+                    'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
+                    'previous_scheduled' => $previousScheduledTime->format('Y-m-d H:i:s'),
+                    'now' => $now->format('Y-m-d H:i:s')
+                ]);
+
+                return [
+                    'from' => $previousScheduledTime->format('Y-m-d H:i:s'),
+                    'to' => $currentScheduledTime->format('Y-m-d H:i:s')
+                ];
+            }
 
             // Get the previous run time (yesterday's scheduled time)
             $previousRun = $cronExp->getPreviousRunDate($now);
