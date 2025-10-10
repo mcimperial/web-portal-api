@@ -26,8 +26,8 @@ trait DateSanitizer
                 return null;
             }
         }
-        // Acceptable formats: Y-m-d, Y/m/d, d-m-Y, d/m/Y, m/d/Y, m-d-Y
-        $formats = ['Y-m-d', 'Y/m/d', 'd-m-Y', 'd/m/Y', 'm/d/Y', 'm-d-Y'];
+        // Acceptable formats: Y-m-d, Y/m/d, d-m-Y, d/m/Y, m/d/Y, m-d-Y  'm/d/Y', 'm-d-Y'
+        $formats = ['Y-m-d', 'Y/m/d', 'd-m-Y', 'd/m/Y'];
         foreach ($formats as $format) {
             $dt = \DateTime::createFromFormat($format, $value);
             if ($dt && $dt->format($format) === $value) {
