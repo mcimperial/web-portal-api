@@ -313,7 +313,7 @@ class SendNotificationController extends Controller
             $emailService = new EmailSender(
                 $to, // pass as array
                 $notification->is_html ? $messageBody : nl2br($messageBody),
-                $subjectBody ?? 'Notification',
+                strtoupper($subjectBody ?? 'Notification'),
                 'default',
                 $infobipAttachments, // pass array of ['path','name']
                 $cc, // pass as array
@@ -799,10 +799,12 @@ class SendNotificationController extends Controller
 
                     $forCount = 1; // CSV notification counts as 1 valid recipient
                 } elseif ($csvAttachment) {
+
                     // Clean up empty CSV file
                     if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
                         @unlink($csvAttachment['path']);
                     }
+
                     if (isset($csvAttachment['temp_path'])) {
                         @unlink($csvAttachment['temp_path']);
                     }
@@ -825,9 +827,8 @@ class SendNotificationController extends Controller
                     // Skip this notification
                     continue;
                 }
-            }
-            // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
-            elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
+                // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
+            } elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
                 $request->merge([
                     'to' => implode(',', $statusResult)
                 ]);
@@ -949,8 +950,6 @@ class SendNotificationController extends Controller
             return [];
         }
 
-        $today = now()->format('Y-m-d');
-
         $dateRange = $this->calculateDateRangeFromSchedule($notification);
 
         $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
@@ -988,10 +987,10 @@ class SendNotificationController extends Controller
         $now = now();
 
         if (!$notification || !$notification->schedule) {
-            // Default to yesterday 00:00:00 to today 23:59:59 if no schedule
+            // Default to yesterday 00:00:00 onwards if no schedule
             return [
                 'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
-                'to' => $now->copy()->endOfDay()->format('Y-m-d H:i:s')
+                'to' => $now->format('Y-m-d H:i:s')
             ];
         }
 
@@ -1015,7 +1014,7 @@ class SendNotificationController extends Controller
 
             $dateFrom = $currentScheduledTime->copy();
 
-            // Determine the interval and subtract accordingly
+            // Determine the interval and subtract accordingly to get the "from" date
             if ($minutes !== '*' && $hours === '*') {
                 // Every minute - subtract 1 minute
                 $dateFrom->subMinutes(1);
@@ -1037,13 +1036,13 @@ class SendNotificationController extends Controller
                 'schedule' => $notification->schedule,
                 'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
-                'to' => $currentScheduledTime->format('Y-m-d H:i:s'),
+                'to' => $now->format('Y-m-d H:i:s'),
                 'notification_type' => $notification->notification_type ?? 'unknown'
             ]);
 
             return [
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
-                'to' => $currentScheduledTime->format('Y-m-d H:i:s')
+                'to' => $now->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
             Log::warning("Failed to parse cron schedule, using default date range", [
@@ -1054,7 +1053,7 @@ class SendNotificationController extends Controller
             // Fallback to default range
             return [
                 'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
-                'to' => $now->copy()->endOfDay()->format('Y-m-d H:i:s')
+                'to' => $now->format('Y-m-d H:i:s')
             ];
         }
     }

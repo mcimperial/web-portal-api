@@ -55,6 +55,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Import enrollees (with dependents and health insurance)
     Route::post('enrollees/import', [ImportEnrolleeController::class, 'import']);
 
+    // Import enrollees (with dependents and health insurance)
+    Route::post('enrollees/import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
+
     // Notification CRUD API
     Route::controller(NotificationController::class)->group(function () {
         Route::get('notifications/enrollees', 'enrollees');
