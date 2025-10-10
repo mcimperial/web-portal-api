@@ -44,9 +44,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     Route::controller(ImportEnrolleeController::class)->group(function () {
         // Import enrollees (with dependents and health insurance)
-        Route::post('enrollees/import-with-company-and-provider', 'importWithCompanyAndProvider');
+        Route::post('import-with-company-and-provider', 'importWithCompanyAndProvider');
         // Import enrollees (with dependents and health insurance)
-        Route::post('enrollees/import', 'import');
+        Route::post('import', 'import');
     });
 
     // Export enrollees as CSV (must be above apiResource to avoid shadowing)
