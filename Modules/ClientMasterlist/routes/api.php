@@ -28,6 +28,12 @@ use Modules\ClientMasterlist\App\Http\Controllers\NotificationController;
 Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function () {
     //Route::get('clientmasterlist', fn(Request $request) => $request->user())->name('clientmasterlist');
 
+    // Import enrollees (with dependents and health insurance)
+    Route::post('import', [ImportEnrolleeController::class, 'import']);
+
+    // Import enrollees (with dependents and health insurance)
+    Route::post('import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
+
     // Insurance Providers CRUD
     Route::apiResource('insurance-providers', InsuranceProviderController::class);
 
@@ -51,12 +57,6 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     // Dependents CRUD
     Route::apiResource('dependents', DependentController::class);
-
-    // Import enrollees (with dependents and health insurance)
-    Route::post('import', [ImportEnrolleeController::class, 'import']);
-
-    // Import enrollees (with dependents and health insurance)
-    Route::post('import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
 
     // Notification CRUD API
     Route::controller(NotificationController::class)->group(function () {
