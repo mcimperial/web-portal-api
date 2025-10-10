@@ -41,6 +41,14 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Enrollment CRUD
     Route::apiResource('enrollments', EnrollmentController::class);
 
+
+    Route::controller(ImportEnrolleeController::class)->group(function () {
+        // Import enrollees (with dependents and health insurance)
+        Route::post('enrollees/import', 'import');
+        // Import enrollees (with dependents and health insurance)
+        Route::post('enrollees/import-with-company-and-provider', 'importWithCompanyAndProvider');
+    });
+
     // Export enrollees as CSV (must be above apiResource to avoid shadowing)
     Route::get('enrollees/export', [ExportEnrolleesController::class, 'exportEnrollees']);
 
@@ -51,12 +59,6 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     // Dependents CRUD
     Route::apiResource('dependents', DependentController::class);
-
-    // Import enrollees (with dependents and health insurance)
-    Route::post('enrollees/import', [ImportEnrolleeController::class, 'import']);
-
-    // Import enrollees (with dependents and health insurance)
-    Route::post('enrollees/import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
 
     // Notification CRUD API
     Route::controller(NotificationController::class)->group(function () {
