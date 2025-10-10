@@ -283,7 +283,9 @@ class ImportEnrolleeController extends Controller
                 }
 
                 if ($relation !== 'PRINCIPAL' && $relation !== 'EMPLOYEE') {
+
                     $principal = $principalMap[$employeeId] ?? null;
+
                     if ($principal) {
 
                         $enrolleeData['principal_id'] = $principal->id;
@@ -293,9 +295,7 @@ class ImportEnrolleeController extends Controller
 
                         // Sanitize all date fields in enrollee data
                         $enrolleeDateFields = [
-                            'birth_date',
-                            'employment_start_date',
-                            'employment_end_date',
+                            'birth_date'
                         ];
 
                         foreach ($enrolleeDateFields as $dateField) {
@@ -357,7 +357,9 @@ class ImportEnrolleeController extends Controller
                                     ]);
                                 }
                             }
+
                             $filtered = $this->uppercaseStrings($filtered);
+
                             // Compare all provided insurance fields for a match
                             $insuranceQuery = HealthInsurance::query();
                             $insuranceQuery->where('dependent_id', $dependent->id);
