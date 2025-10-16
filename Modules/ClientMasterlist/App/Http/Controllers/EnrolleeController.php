@@ -17,9 +17,9 @@ class EnrolleeController extends Controller
     public function index(Request $request)
     {
         $enrollmentId = $request->query('enrollment_id');
+        $enrollmentFilter = $request->query('enrollment_filter');
         $enrollmentStatus = $request->query('enrollment_status');
         $search = $request->query('search');
-
         $perPage = $request->query('per_page', 20);
 
         $query = Enrollee::with(['dependents', 'healthInsurance']);
@@ -52,8 +52,26 @@ class EnrolleeController extends Controller
             });
         }
 
+        // Apply renewal filter
+        if ($enrollmentFilter) {
+            $query->where(function ($q) use ($enrollmentFilter) {
+                $q->orWhereHas('healthInsurance', function ($subQ) use ($enrollmentFilter) {
+                    if ($enrollmentFilter === 'REGULAR') {
+                        $subQ->where(function ($sq) {
+                            $sq->where('is_renewal', false)
+                                ->orWhereNull('is_renewal');
+                        });
+                    } else if ($enrollmentFilter === 'RENEWAL') {
+                        $subQ->where('is_renewal', true);
+                    }
+                    //$subQ->where('is_renewal', true);
+                });
+            });
+        }
+
         // Apply soft delete filter and ordering
         $query->whereNull('deleted_at');
+
         $query->orderBy('updated_at', 'desc');
 
         $enrollees = $query->paginate($perPage);

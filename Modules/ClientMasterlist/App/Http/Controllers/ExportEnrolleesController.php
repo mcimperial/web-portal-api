@@ -11,310 +11,172 @@ class ExportEnrolleesController extends Controller
 {
     use UppercaseInput;
 
-    public function exportEnrollees(Request $request)
+    /**
+     * Column mappings for CSV headers
+     */
+    private const COLUMN_LABELS = [
+        'remarks' => 'Remarks',
+        'reason_for_skipping' => 'Reason for Skipping',
+        'attachment' => 'Attachment for Skip Hierarchy',
+        'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+        'required_document' => 'Required Document',
+        'enrollment_status' => 'Enrollment Status',
+        'relation' => 'Relation',
+        'employee_id' => 'Employee ID',
+        'first_name' => 'First Name',
+        'last_name' => 'Last Name',
+        'middle_name' => 'Middle Name',
+        'birth_date' => 'Birth Date',
+        'gender' => 'Gender',
+        'marital_status' => 'Marital Status',
+        'email1' => 'Email 1',
+        'email2' => 'Email 2',
+        'phone1' => 'Phone 1',
+        'phone2' => 'Phone 2',
+        'address' => 'Address',
+        'department' => 'Department',
+        'position' => 'Position',
+        'employment_start_date' => 'Employment Start Date',
+        'employment_end_date' => 'Employment End Date',
+        'notes' => 'Notes',
+        'status' => 'Status',
+        'plan' => 'Plan',
+        'premium' => 'Premium',
+        'principal_mbl' => 'Principal MBL',
+        'principal_room_and_board' => 'Principal Room and Board',
+        'dependent_mbl' => 'Dependent MBL',
+        'dependent_room_and_board' => 'Dependent Room and Board',
+        'is_renewal' => 'Is Renewal',
+        'is_company_paid' => 'Is Company Paid',
+        'coverage_start_date' => 'Coverage Start Date',
+        'coverage_end_date' => 'Coverage End Date',
+        'certificate_number' => 'Certificate Number',
+        'certificate_date_issued' => 'Certificate Date Issued',
+    ];
+
+    /**
+     * Fields that come from the health insurance relationship
+     */
+    private const INSURANCE_FIELDS = [
+        'plan',
+        'premium',
+        'principal_mbl',
+        'principal_room_and_board',
+        'dependent_mbl',
+        'dependent_room_and_board',
+        'is_renewal',
+        'is_company_paid',
+        'coverage_start_date',
+        'coverage_end_date',
+        'certificate_number',
+        'certificate_date_issued'
+    ];
+
+    /**
+     * Build base query with common filters
+     */
+    /**
+     * Build base query with common filters
+     */
+    private function buildBaseQuery($filters = [])
     {
-        $enrollmentId = $request->query('enrollment_id');
-        $enrollmentStatus = $request->query('enrollment_status');
-        $withDependents = $request->query('with_dependents', false);
-        $dateFrom = $request->query('date_from');
-        $dateTo = $request->query('date_to');
-        $columns = $request->query('columns', []);
+        $query = Enrollee::with(['healthInsurance', 'dependents'])
+            ->where('status', 'ACTIVE')
+            ->whereNull('deleted_at');
 
-        if (is_string($columns)) {
-            $columns = array_map('trim', explode(',', $columns));
+        // Apply enrollment ID filter
+        if (!empty($filters['enrollment_id'])) {
+            $query->where('enrollment_id', $filters['enrollment_id']);
         }
 
-        // Remove empty and duplicate columns, ensure indexed array
-        $columns = array_values(array_unique(array_filter($columns, function ($v) {
-            return trim($v) !== '';
-        })));
-
-        // Add relation column if withDependents is true and not present
-        if ($withDependents && !in_array('relation', $columns)) {
-            $columns[] = 'relation';
+        // Apply enrollment status filter
+        if (!empty($filters['enrollment_status'])) {
+            $this->applyEnrollmentStatusFilter($query, $filters);
         }
 
-        // Always add enrollment_status
-        if (!in_array('enrollment_status', $columns)) {
-            $columns[] = 'enrollment_status';
+        // Apply export enrollment type filter
+        if (!empty($filters['export_enrollment_type'])) {
+            $this->applyExportTypeFilter($query, $filters['export_enrollment_type']);
         }
 
-        // Check if any dependent has SKIPPED or OVERAGE status, and if any has a required document
-        $hasSkippedOrOverage = false;
-        $hasRequiredDocument = false;
-        $queryCheck = Enrollee::with('dependents')->where('status', 'ACTIVE')->whereNull('deleted_at');
-
-        if ($enrollmentId) {
-            $queryCheck->where('enrollment_id', $enrollmentId);
+        // Apply date range filters
+        if (!empty($filters['date_from'])) {
+            $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
         }
 
-        if ($enrollmentStatus) {
-            $queryCheck->where('enrollment_status', $enrollmentStatus);
+        if (!empty($filters['date_to'])) {
+            $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
         }
 
-        // Apply date range filter on updated_at
-        if ($dateFrom) {
-            $queryCheck->where('updated_at', '>=', $dateFrom . ' 00:00:00');
-        }
-
-        if ($dateTo) {
-            $queryCheck->where('updated_at', '<=', $dateTo . ' 23:59:59');
-        }
-
-        $queryCheck->whereNull('deleted_at');
-        $enrolleesCheck = $queryCheck->get();
-
-        foreach ($enrolleesCheck as $enrollee) {
-            if ($enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
-                    if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                        $hasSkippedOrOverage = true;
-                    }
-                    if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
-                        $hasRequiredDocument = true;
-                    }
-                    if ($hasSkippedOrOverage && $hasRequiredDocument) {
-                        break 2;
-                    }
-                }
-            }
-        }
-
-        // Add Required Document column if needed
-        if ($hasRequiredDocument) {
-            $columns = array_filter($columns, function ($col) {
-                return $col !== 'required_document';
-            });
-            $columns = array_merge($columns, ['required_document']);
-        }
-
-        // Add remarks, reason_for_skipping, attachment columns only if needed
-        if ($hasSkippedOrOverage) {
-            $columns = array_filter($columns, function ($col) {
-                return !in_array($col, ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy']);
-            });
-            $columns = array_merge(['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'], $columns);
-        }
-
-        $query = Enrollee::with(['healthInsurance', 'dependents'])->where('status', 'ACTIVE')->whereNull('deleted_at');
-
-        if ($enrollmentId) {
-            $query->where('enrollment_id', $enrollmentId);
-        }
-
-        if ($enrollmentStatus) {
-            if ($enrollmentStatus === 'FOR-RENEWAL') {
-                $query->where(function ($q) use ($enrollmentStatus) {
-                    $q->where('enrollment_status', $enrollmentStatus)
-                        ->orWhereHas('healthInsurance', function ($subQ) {
-                            $subQ->where('is_renewal', true);
-                        });
-                });
-            } else {
-                $query->where('enrollment_status', $enrollmentStatus);
-            }
-        }
-
-        // Apply date range filter on updated_at
-        if ($dateFrom) {
-            $query->where('updated_at', '>=', $dateFrom . ' 00:00:00');
-        }
-
-        if ($dateTo) {
-            $query->where('updated_at', '<=', $dateTo . ' 23:59:59');
-        }
-
-        $query->whereNull('deleted_at');
-        $enrollees = $query->get();
-
-        // Map column keys to user-friendly labels (no commas)
-        $columnLabels = [
-            'remarks' => 'Remarks',
-            'reason_for_skipping' => 'Reason for Skipping',
-            'attachment' => 'Attachment for Skip Hierarchy',
-            'required_document' => 'Required Document',
-            'enrollment_status' => 'Enrollment Status',
-            'relation' => 'Relation',
-            'employee_id' => 'Employee ID',
-            'first_name' => 'First Name',
-            'last_name' => 'Last Name',
-            'middle_name' => 'Middle Name',
-            'birth_date' => 'Birth Date',
-            'gender' => 'Gender',
-            'marital_status' => 'Marital Status',
-            'email1' => 'Email 1',
-            'email2' => 'Email 2',
-            'phone1' => 'Phone 1',
-            'phone2' => 'Phone 2',
-            'address' => 'Address',
-            'department' => 'Department',
-            'position' => 'Position',
-            'employment_start_date' => 'Employment Start Date',
-            'employment_end_date' => 'Employment End Date',
-            'notes' => 'Notes',
-            'status' => 'Status',
-            'plan' => 'Plan',
-            'premium' => 'Premium',
-            'principal_mbl' => 'Principal MBL',
-            'principal_room_and_board' => 'Principal Room and Board',
-            'dependent_mbl' => 'Dependent MBL',
-            'dependent_room_and_board' => 'Dependent Room and Board',
-            'is_renewal' => 'Is Renewal',
-            'is_company_paid' => 'Is Company Paid',
-            'coverage_start_date' => 'Coverage Start Date',
-            'coverage_end_date' => 'Coverage End Date',
-            'certificate_number' => 'Certificate Number',
-            'certificate_date_issued' => 'Certificate Date Issued',
-        ];
-
-        $header = array_map(function ($col) use ($columnLabels) {
-            return $columnLabels[$col] ?? $col;
-        }, $columns);
-
-        $insuranceFields = [
-            'plan',
-            'premium',
-            'principal_mbl',
-            'principal_room_and_board',
-            'dependent_mbl',
-            'dependent_room_and_board',
-            'is_renewal',
-            'is_company_paid',
-            'coverage_start_date',
-            'coverage_end_date',
-            'certificate_number',
-            'certificate_date_issued'
-        ];
-
-        $rows = [];
-        $colCount = count($columns);
-
-        foreach ($enrollees as $enrollee) {
-            // Principal row
-            $row = array_map(function ($col) use ($enrollee, $insuranceFields, $withDependents) {
-                if ($col === 'required_document') {
-                    return '';
-                }
-                if ($col === 'relation' && $withDependents) {
-                    return 'PRINCIPAL';
-                }
-                if ($col === 'enrollment_status') {
-                    return $enrollee->enrollment_status ?? '';
-                }
-                if ($col === 'remarks' || $col === 'reason_for_skipping' || $col === 'attachment_for_skip_hierarchy') {
-                    return '';
-                }
-                if ($col === 'full_name') {
-                    return trim($enrollee->first_name . ' ' . ($enrollee->middle_name ?? '') . ' ' . $enrollee->last_name);
-                }
-                if (in_array($col, $insuranceFields)) {
-                    return $enrollee->healthInsurance ? ($enrollee->healthInsurance->$col ?? '') : '';
-                } else {
-                    return $enrollee->$col ?? '';
-                }
-            }, $columns);
-            if (count($row) < $colCount) {
-                $row = array_pad($row, $colCount, '');
-            }
-            if (count($row) > $colCount) {
-                $row = array_slice($row, 0, $colCount);
-            }
-            $rows[] = $row;
-            // Dependents rows
-            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
-                    $depRow = array_map(function ($col) use ($dependent, $withDependents, $insuranceFields) {
-                        if ($col === 'required_document') {
-                            if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
-                                return $dependent->attachmentForRequirement->file_path;
-                            }
-                            return '';
-                        }
-                        if ($col === 'remarks') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                if ($dependent->enrollment_status === 'SKIPPED') {
-                                    return 'DO NOT ENROLL, SKIPPED HIERARCHY';
-                                } else {
-                                    return 'DO NOT ENROLL, OVERAGE';
-                                }
-                            }
-                            return '';
-                        }
-                        if ($col === 'reason_for_skipping') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                return $dependent->healthInsurance->reason_for_skipping ?? '';
-                            }
-                            return '';
-                        }
-                        if ($col === 'attachment_for_skip_hierarchy') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                return $dependent->attachmentForSkipHierarchy->file_path ?? '';
-                            }
-                            return '';
-                        }
-                        if ($col === 'relation' && $withDependents) {
-                            return $dependent->relation ?? '';
-                        }
-                        if ($col === 'enrollment_status') {
-                            return $dependent->enrollment_status ?? '';
-                        }
-                        if (in_array($col, $insuranceFields)) {
-                            return $dependent->healthInsurance ? ($dependent->healthInsurance->$col ?? '') : '';
-                        }
-                        return $dependent->$col ?? '';
-                    }, $columns);
-                    if (count($depRow) < $colCount) {
-                        $depRow = array_pad($depRow, $colCount, '');
-                    }
-                    if (count($depRow) > $colCount) {
-                        $depRow = array_slice($depRow, 0, $colCount);
-                    }
-                    $rows[] = $depRow;
-                }
-            }
-        }
-
-        // Build CSV string
-        $sanitize = function ($value) {
-            // Ensure the value is properly encoded as UTF-8
-            $value = mb_convert_encoding($value, 'UTF-8', 'UTF-8');
-            $value = str_replace(["\r", "\n", "\t"], ' ', $value);
-            return '"' . str_replace('"', '""', $value) . '"';
-        };
-
-        // Start with UTF-8 BOM to ensure proper encoding in Excel
-        $csv = "\xEF\xBB\xBF";
-        $csv .= implode(',', array_map($sanitize, $header)) . "\r\n";
-
-        foreach ($rows as $row) {
-            $csv .= implode(',', array_map($sanitize, $row)) . "\r\n";
-        }
-
-        $filename = 'EXPORT_ENROLLEES_' . ($enrollmentStatus || 'ALL') . '_' . date('Ymd_His') . '.csv';
-        return response($csv)
-            ->header('Content-Type', 'text/csv; charset=UTF-8')
-            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+        return $query;
     }
 
-    public function exportEnrolleesForAttachment(Request $request)
+    /**
+     * Apply enrollment status filters based on export type
+     */
+    private function applyEnrollmentStatusFilter($query, $filters)
     {
-        $enrollmentId = $request->query('enrollment_id');
-        $enrollmentStatus = $request->query('enrollment_status');
-        $withDependents = $request->query('with_dependents', false);
-        $dateFrom = $request->query('date_from');
-        $dateTo = $request->query('date_to');
-        $columns = $request->query('columns', []);
+        $enrollmentStatus = $filters['enrollment_status'];
+        $exportType = $filters['export_enrollment_type'] ?? null;
 
+        if ($exportType === 'RENEWAL') {
+            if ($enrollmentStatus === 'PENDING') {
+                $query->where('enrollment_status', 'FOR-RENEWAL');
+            } else {
+                $query->where('enrollment_status', $enrollmentStatus);
+            }
+        } elseif ($exportType === 'REGULAR') {
+            $query->where('enrollment_status', $enrollmentStatus);
+        } else {
+            if ($enrollmentStatus === 'PENDING') {
+                $query->where(function ($q) {
+                    $q->where('enrollment_status', 'FOR-RENEWAL')
+                        ->orWhere('enrollment_status', 'PENDING');
+                });
+            } else {
+                $query->where('enrollment_status', $enrollmentStatus);
+            }
+        }
+    }
+
+    /**
+     * Apply export type filters
+     */
+    private function applyExportTypeFilter($query, $exportType)
+    {
+        if ($exportType === 'RENEWAL') {
+            $query->where(function ($q) use ($exportType) {
+                $q->where('enrollment_status', $exportType)
+                    ->orWhereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', true);
+                    });
+            });
+        } elseif ($exportType === 'REGULAR') {
+            $query->where(function ($q) use ($exportType) {
+                $q->where('enrollment_status', $exportType)
+                    ->orWhereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', false);
+                    });
+            });
+        }
+    }
+
+    /**
+     * Process and validate columns, adding dynamic columns as needed
+     */
+    private function processColumns($columns, $withDependents, $enrollees)
+    {
+        // Normalize columns input
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
         }
 
-        // Remove empty and duplicate columns, ensure indexed array
+        // Remove empty and duplicate columns
         $columns = array_values(array_unique(array_filter($columns, function ($v) {
             return trim($v) !== '';
         })));
 
-        // Add relation column if withDependents is true and not present
+        // Add relation column if withDependents is true
         if ($withDependents && !in_array('relation', $columns)) {
             $columns[] = 'relation';
         }
@@ -324,37 +186,21 @@ class ExportEnrolleesController extends Controller
             $columns[] = 'enrollment_status';
         }
 
-        // Check if any dependent has SKIPPED or OVERAGE status, and if any has a required document
+        // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
         $hasRequiredDocument = false;
-        $queryCheck = Enrollee::with('dependents')->where('status', 'ACTIVE')->whereNull('deleted_at');
 
-        if ($enrollmentId) {
-            $queryCheck->where('enrollment_id', $enrollmentId);
-        }
-
-        if ($enrollmentStatus) {
-            $queryCheck->where('enrollment_status', $enrollmentStatus);
-        }
-
-        // Apply date range filter on updated_at
-        if ($dateFrom) {
-            $queryCheck->where('updated_at', '>=', $dateFrom);
-        }
-
-        if ($dateTo) {
-            $queryCheck->where('updated_at', '<=', $dateTo);
-        }
-
-        $enrolleesCheck = $queryCheck->get();
-
-        foreach ($enrolleesCheck as $enrollee) {
+        foreach ($enrollees as $enrollee) {
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
                 foreach ($enrollee->dependents as $dependent) {
                     if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                         $hasSkippedOrOverage = true;
                     }
-                    if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
+                    if (
+                        method_exists($dependent, 'attachmentForRequirement') &&
+                        $dependent->attachmentForRequirement &&
+                        $dependent->attachmentForRequirement->file_path
+                    ) {
                         $hasRequiredDocument = true;
                     }
                     if ($hasSkippedOrOverage && $hasRequiredDocument) {
@@ -364,288 +210,239 @@ class ExportEnrolleesController extends Controller
             }
         }
 
-        // Add Required Document column if needed
-        if ($hasRequiredDocument) {
-            $columns = array_filter($columns, function ($col) {
-                return $col !== 'required_document';
-            });
-            $columns = array_merge($columns, ['required_document']);
+        // Add required document column if needed
+        if ($hasRequiredDocument && !in_array('required_document', $columns)) {
+            $columns[] = 'required_document';
         }
 
-        // Add remarks, reason_for_skipping, attachment columns only if needed
+        // Add skip-related columns if needed
         if ($hasSkippedOrOverage) {
-            $columns = array_filter($columns, function ($col) {
-                return !in_array($col, ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy']);
-            });
-            $columns = array_merge(['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'], $columns);
-        }
-
-        $query = Enrollee::with(['healthInsurance', 'dependents'])->where('status', 'ACTIVE')->whereNull('deleted_at');
-
-        if ($enrollmentId) {
-            $query->where('enrollment_id', $enrollmentId);
-        }
-
-        if ($enrollmentStatus) {
-            if ($enrollmentStatus === 'FOR-RENEWAL') {
-                $query->where(function ($q) use ($enrollmentStatus) {
-                    $q->where('enrollment_status', $enrollmentStatus)
-                        ->orWhereHas('healthInsurance', function ($subQ) {
-                            $subQ->where('is_renewal', true);
-                        });
-                });
-            } else {
-                $query->where('enrollment_status', $enrollmentStatus);
+            $skipColumns = ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'];
+            foreach ($skipColumns as $skipCol) {
+                if (!in_array($skipCol, $columns)) {
+                    array_unshift($columns, $skipCol);
+                }
             }
         }
 
-        // Apply date range filter on updated_at
-        if ($dateFrom) {
-            $query->where('updated_at', '>=', $dateFrom);
-        }
+        return $columns;
+    }
 
-        if ($dateTo) {
-            $query->where('updated_at', '<=', $dateTo);
-        }
-
-        $query->whereNull('deleted_at');
-        $enrollees = $query->get();
-
-        // Map column keys to user-friendly labels (no commas)
-        $columnLabels = [
-            'remarks' => 'Remarks',
-            'reason_for_skipping' => 'Reason for Skipping',
-            'attachment' => 'Attachment for Skip Hierarchy',
-            'required_document' => 'Required Document',
-            'enrollment_status' => 'Enrollment Status',
-            'relation' => 'Relation',
-            'employee_id' => 'Employee ID',
-            'first_name' => 'First Name',
-            'last_name' => 'Last Name',
-            'middle_name' => 'Middle Name',
-            'birth_date' => 'Birth Date',
-            'gender' => 'Gender',
-            'marital_status' => 'Marital Status',
-            'email1' => 'Email 1',
-            'email2' => 'Email 2',
-            'phone1' => 'Phone 1',
-            'phone2' => 'Phone 2',
-            'address' => 'Address',
-            'department' => 'Department',
-            'position' => 'Position',
-            'employment_start_date' => 'Employment Start Date',
-            'employment_end_date' => 'Employment End Date',
-            'notes' => 'Notes',
-            'status' => 'Status',
-            'plan' => 'Plan',
-            'premium' => 'Premium',
-            'principal_mbl' => 'Principal MBL',
-            'principal_room_and_board' => 'Principal Room and Board',
-            'dependent_mbl' => 'Dependent MBL',
-            'dependent_room_and_board' => 'Dependent Room and Board',
-            'is_renewal' => 'Is Renewal',
-            'is_company_paid' => 'Is Company Paid',
-            'coverage_start_date' => 'Coverage Start Date',
-            'coverage_end_date' => 'Coverage End Date',
-            'certificate_number' => 'Certificate Number',
-            'certificate_date_issued' => 'Certificate Date Issued',
-        ];
-
-        $header = array_map(function ($col) use ($columnLabels) {
-            return $columnLabels[$col] ?? $col;
+    /**
+     * Generate CSV headers from column names
+     */
+    private function generateHeaders($columns)
+    {
+        return array_map(function ($col) {
+            return self::COLUMN_LABELS[$col] ?? $col;
         }, $columns);
+    }
 
-        $insuranceFields = [
-            'plan',
-            'premium',
-            'principal_mbl',
-            'principal_room_and_board',
-            'dependent_mbl',
-            'dependent_room_and_board',
-            'is_renewal',
-            'is_company_paid',
-            'coverage_start_date',
-            'coverage_end_date',
-            'certificate_number',
-            'certificate_date_issued'
-        ];
+    /**
+     * Generate row data for principal enrollee
+     */
+    private function generatePrincipalRow($enrollee, $columns, $withDependents)
+    {
+        return array_map(function ($col) use ($enrollee, $withDependents) {
+            return $this->getColumnValue($col, $enrollee, $withDependents, true);
+        }, $columns);
+    }
 
-        $rows = [];
-        $colCount = count($columns);
+    /**
+     * Generate row data for dependent
+     */
+    private function generateDependentRow($dependent, $columns, $withDependents)
+    {
+        return array_map(function ($col) use ($dependent, $withDependents) {
+            return $this->getColumnValue($col, $dependent, $withDependents, false);
+        }, $columns);
+    }
 
-        foreach ($enrollees as $enrollee) {
-            // Principal row
-            $row = array_map(function ($col) use ($enrollee, $insuranceFields, $withDependents) {
-                if ($col === 'required_document') {
-                    return '';
+    /**
+     * Get value for a specific column and entity (enrollee or dependent)
+     */
+    private function getColumnValue($column, $entity, $withDependents, $isPrincipal)
+    {
+        switch ($column) {
+            case 'required_document':
+                if (
+                    !$isPrincipal && method_exists($entity, 'attachmentForRequirement') &&
+                    $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
+                ) {
+                    return $entity->attachmentForRequirement->file_path;
                 }
-                if ($col === 'relation' && $withDependents) {
-                    return 'PRINCIPAL';
-                }
-                if ($col === 'enrollment_status') {
-                    return $enrollee->enrollment_status ?? '';
-                }
-                if ($col === 'remarks' || $col === 'reason_for_skipping' || $col === 'attachment_for_skip_hierarchy') {
-                    return '';
-                }
-                if ($col === 'full_name') {
-                    return trim($enrollee->first_name . ' ' . ($enrollee->middle_name ?? '') . ' ' . $enrollee->last_name);
-                }
-                if (in_array($col, $insuranceFields)) {
-                    return $enrollee->healthInsurance ? ($enrollee->healthInsurance->$col ?? '') : '';
-                } else {
-                    return $enrollee->$col ?? '';
-                }
-            }, $columns);
-            if (count($row) < $colCount) {
-                $row = array_pad($row, $colCount, '');
-            }
-            if (count($row) > $colCount) {
-                $row = array_slice($row, 0, $colCount);
-            }
-            $rows[] = $row;
+                return '';
 
-            // Dependents rows
-            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
-                    $depRow = array_map(function ($col) use ($dependent, $withDependents, $insuranceFields) {
-                        if ($col === 'required_document') {
-                            if (method_exists($dependent, 'attachmentForRequirement') && $dependent->attachmentForRequirement && $dependent->attachmentForRequirement->file_path) {
-                                return $dependent->attachmentForRequirement->file_path;
-                            }
-                            return '';
-                        }
-                        if ($col === 'remarks') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                if ($dependent->enrollment_status === 'SKIPPED') {
-                                    return 'DO NOT ENROLL, SKIPPED HIERARCHY';
-                                } else {
-                                    return 'DO NOT ENROLL, OVERAGE';
-                                }
-                            }
-                            return '';
-                        }
-                        if ($col === 'reason_for_skipping') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                return $dependent->healthInsurance->reason_for_skipping ?? '';
-                            }
-                            return '';
-                        }
-                        if ($col === 'attachment_for_skip_hierarchy') {
-                            if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                                return $dependent->attachmentForSkipHierarchy->file_path ?? '';
-                            }
-                            return '';
-                        }
-                        if ($col === 'relation' && $withDependents) {
-                            return $dependent->relation ?? '';
-                        }
-                        if ($col === 'enrollment_status') {
-                            return $dependent->enrollment_status ?? '';
-                        }
-                        if (in_array($col, $insuranceFields)) {
-                            return $dependent->healthInsurance ? ($dependent->healthInsurance->$col ?? '') : '';
-                        }
-                        return $dependent->$col ?? '';
-                    }, $columns);
-                    if (count($depRow) < $colCount) {
-                        $depRow = array_pad($depRow, $colCount, '');
-                    }
-                    if (count($depRow) > $colCount) {
-                        $depRow = array_slice($depRow, 0, $colCount);
-                    }
-                    $rows[] = $depRow;
+            case 'relation':
+                return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? '')) : '';
+
+            case 'enrollment_status':
+                return $entity->enrollment_status ?? '';
+
+            case 'remarks':
+                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                    return $entity->enrollment_status === 'SKIPPED'
+                        ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
+                        : 'DO NOT ENROLL, OVERAGE';
                 }
-            }
+                return '';
+
+            case 'reason_for_skipping':
+                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                    return $entity->healthInsurance->reason_for_skipping ?? '';
+                }
+                return '';
+
+            case 'attachment_for_skip_hierarchy':
+                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                    return $entity->attachmentForSkipHierarchy->file_path ?? '';
+                }
+                return '';
+
+            case 'full_name':
+                return trim($entity->first_name . ' ' . ($entity->middle_name ?? '') . ' ' . $entity->last_name);
+
+            default:
+                if (in_array($column, self::INSURANCE_FIELDS)) {
+                    return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
+                }
+                return $entity->$column ?? '';
         }
+    }
 
-        // Build CSV string
+    /**
+     * Generate CSV content from data
+     */
+    private function generateCsv($headers, $rows)
+    {
         $sanitize = function ($value) {
-            // Ensure the value is properly encoded as UTF-8
             $value = mb_convert_encoding($value, 'UTF-8', 'UTF-8');
             $value = str_replace(["\r", "\n", "\t"], ' ', $value);
             return '"' . str_replace('"', '""', $value) . '"';
         };
 
-        // Start with UTF-8 BOM to ensure proper encoding in Excel
+        // Start with UTF-8 BOM
         $csv = "\xEF\xBB\xBF";
-        $csv .= implode(',', array_map($sanitize, $header)) . "\r\n";
+        $csv .= implode(',', array_map($sanitize, $headers)) . "\r\n";
 
         foreach ($rows as $row) {
             $csv .= implode(',', array_map($sanitize, $row)) . "\r\n";
         }
 
-        // Update status of SUBMITTED enrollees to FOR-APPROVAL
-        if ($enrollmentStatus === 'SUBMITTED') {
-            foreach ($enrollees as $enrollee) {
-                if ($enrollee->enrollment_status === 'SUBMITTED') {
-                    $enrollee->enrollment_status = 'FOR-APPROVAL';
-                    $enrollee->save();
-                }
-            }
-        }
+        return $csv;
+    }
 
-        $filename = 'EXPORT_ENROLLEES_' . ($enrollmentStatus || 'ALL') . '_' . date('Ymd_His') . '.csv';
+    /**
+     * Create CSV response with proper headers
+     */
+    private function createCsvResponse($csv, $enrollmentStatus)
+    {
+        $filename = 'EXPORT_ENROLLEES_' . ($enrollmentStatus ?: 'ALL') . '_' . date('Ymd_His') . '.csv';
+
         return response($csv)
             ->header('Content-Type', 'text/csv; charset=UTF-8')
             ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 
     /**
-     * Test method to verify status update functionality
+     * Main export method - handles both regular and attachment exports
      */
-    public function testStatusUpdate(Request $request)
+    public function exportEnrollees(Request $request)
     {
-        try {
-            // Find SUBMITTED enrollees
-            $submittedEnrollees = Enrollee::where('enrollment_status', 'SUBMITTED')
-                ->get();
+        // Extract request parameters
+        $filters = [
+            'enrollment_id' => $request->query('enrollment_id'),
+            'export_enrollment_type' => $request->query('export_enrollment_type'),
+            'enrollment_status' => $request->query('enrollment_status'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+        ];
 
-            $result = [
-                'message' => 'Status update test completed',
-                'submitted_enrollees_found' => $submittedEnrollees->count(),
-                'enrollees_before_update' => $submittedEnrollees->map(function ($enrollee) {
-                    return [
-                        'id' => $enrollee->id,
-                        'employee_id' => $enrollee->employee_id,
-                        'name' => $enrollee->first_name . ' ' . $enrollee->last_name,
-                        'status' => $enrollee->enrollment_status
-                    ];
-                })
-            ];
+        $withDependents = $request->query('with_dependents', false);
+        $columns = $request->query('columns', []);
+        $isForAttachment = $request->query('for_attachment', false);
 
-            // Test the export function with SUBMITTED status to trigger update
-            if ($submittedEnrollees->count() > 0) {
-                $testRequest = new Request([
-                    'enrollment_status' => 'SUBMITTED',
-                    'columns' => ['employee_id', 'first_name', 'last_name', 'enrollment_status']
-                ]);
+        // Build query and get enrollees
+        $query = $this->buildBaseQuery($filters);
+        $enrollees = $query->get();
 
-                // Call the export function to trigger status update
-                $this->exportEnrolleesForAttachment($testRequest);
+        // Process columns based on enrollee data
+        $columns = $this->processColumns($columns, $withDependents, $enrollees);
 
-                // Check updated enrollees
-                $updatedEnrollees = Enrollee::whereIn('id', $submittedEnrollees->pluck('id'))
-                    ->get();
+        // Generate CSV data
+        $headers = $this->generateHeaders($columns);
+        $rows = $this->generateAllRows($enrollees, $columns, $withDependents);
 
-                $result['enrollees_after_update'] = $updatedEnrollees->map(function ($enrollee) {
-                    return [
-                        'id' => $enrollee->id,
-                        'employee_id' => $enrollee->employee_id,
-                        'name' => $enrollee->first_name . ' ' . $enrollee->last_name,
-                        'status' => $enrollee->enrollment_status
-                    ];
-                });
-            }
+        // Generate CSV content
+        $csv = $this->generateCsv($headers, $rows);
 
-            return response()->json($result);
-        } catch (\Exception $e) {
-            return response()->json([
-                'error' => 'Test failed',
-                'message' => $e->getMessage(),
-                'line' => $e->getLine(),
-                'file' => $e->getFile()
-            ], 500);
+        // Handle status updates for attachment exports
+        if ($isForAttachment && $filters['enrollment_status'] === 'SUBMITTED') {
+            $this->updateSubmittedEnrollees($enrollees);
         }
+
+        return $this->createCsvResponse($csv, $filters['enrollment_status']);
+    }
+
+    /**
+     * Generate all rows (principals and dependents)
+     */
+    private function generateAllRows($enrollees, $columns, $withDependents)
+    {
+        $rows = [];
+        $colCount = count($columns);
+
+        foreach ($enrollees as $enrollee) {
+            // Add principal row
+            $row = $this->generatePrincipalRow($enrollee, $columns, $withDependents);
+            $rows[] = $this->normalizeRowLength($row, $colCount);
+
+            // Add dependent rows if needed
+            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
+                foreach ($enrollee->dependents as $dependent) {
+                    $depRow = $this->generateDependentRow($dependent, $columns, $withDependents);
+                    $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Ensure row has correct length
+     */
+    private function normalizeRowLength($row, $expectedLength)
+    {
+        if (count($row) < $expectedLength) {
+            return array_pad($row, $expectedLength, '');
+        } elseif (count($row) > $expectedLength) {
+            return array_slice($row, 0, $expectedLength);
+        }
+        return $row;
+    }
+
+    /**
+     * Update SUBMITTED enrollees to FOR-APPROVAL status
+     */
+    private function updateSubmittedEnrollees($enrollees)
+    {
+        foreach ($enrollees as $enrollee) {
+            if ($enrollee->enrollment_status === 'SUBMITTED') {
+                $enrollee->enrollment_status = 'FOR-APPROVAL';
+                $enrollee->save();
+            }
+        }
+    }
+
+    /**
+     * Legacy method for attachment exports - now redirects to main method
+     */
+    public function exportEnrolleesForAttachment(Request $request)
+    {
+        // Add for_attachment flag to indicate this is an attachment export
+        $request->merge(['for_attachment' => true]);
+
+        return $this->exportEnrollees($request);
     }
 }

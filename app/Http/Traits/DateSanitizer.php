@@ -7,6 +7,14 @@ trait DateSanitizer
     public function sanitizeDate($value)
     {
         if (empty($value) || $value === null) return null;
+
+        // If already in Y-m-d format and valid, return as-is
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            if ($this->isValidDate($value)) {
+                return $value;
+            }
+        }
+
         // Handle Excel serial date numbers (only if reasonable range)
         if (is_numeric($value)) {
             $num = (float)$value;
@@ -56,6 +64,7 @@ trait DateSanitizer
                     }
                 }
             }
+
             // If second number > 12, it must be m/d/Y format (month/day/year)
             elseif ($second > 12) {
                 $month = $first;
@@ -71,6 +80,7 @@ trait DateSanitizer
                     }
                 }
             }
+
             // If both are <= 12, assume d/m/Y format (European style)
             else {
                 $day = $first;

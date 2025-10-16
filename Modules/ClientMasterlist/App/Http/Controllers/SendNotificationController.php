@@ -779,6 +779,7 @@ class SendNotificationController extends Controller
                     $statusResult['enrollment_id'],
                     $statusResult['status'] ?? null,
                     $statusResult['with_dependents'] ?? false,
+                    $statusResult['is_renewal'] ?? false,
                     $statusResult['date_from'] ?? null,
                     $statusResult['date_to'] ?? null,
                     $statusResult['columns'] ?? []
@@ -836,10 +837,6 @@ class SendNotificationController extends Controller
                 $forCount = count($statusResult);
             }
 
-            Log::info("About to send notification", [
-                'notification_id' => $notification->id,
-                'request_data' => $request->all()
-            ]);
 
             if ($forCount === 0) {
                 Log::info("No recipients found for notification, skipping send", [
@@ -883,6 +880,7 @@ class SendNotificationController extends Controller
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
                     'status' => 'SUBMITTED',
+                    'is_renewal' => false,
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
@@ -964,17 +962,11 @@ class SendNotificationController extends Controller
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
-            // Log for debugging purposes
-            Log::info("STATUS BY HMO notification: Found {$enrollees->count()} {$status} enrollees for sending {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}", [
-                'enrollment_id' => $enrollmentId,
-                'date' => $dateRange['from'] . ' to ' . $dateRange['to'],
-                'enrollee_ids' => $enrolleeIds
-            ]);
-
             return $enrolleeIds;
         }
 
         Log::info("STATUS BY HMO notification: No {$status} enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
+
         return [];
     }
 
@@ -1064,15 +1056,6 @@ class SendNotificationController extends Controller
     private function generateCsvAttachment($enrollmentId, $enrollmentStatus = null, $withDependents = false, $dateFrom = null, $dateTo = null, $columns = [])
     {
         try {
-            // Log the parameters for debugging
-            Log::info("CSV generation started", [
-                'enrollment_id' => $enrollmentId,
-                'enrollment_status' => $enrollmentStatus,
-                'with_dependents' => $withDependents,
-                'date_from' => $dateFrom,
-                'date_to' => $dateTo,
-                'columns' => $columns
-            ]);
 
             // Create a request object with the parameters
             $request = new Request([
@@ -1086,6 +1069,7 @@ class SendNotificationController extends Controller
 
             // Create ExportEnrolleesController instance and call the export method
             $exportController = new ExportEnrolleesController();
+
             $response = $exportController->exportEnrolleesForAttachment($request);
 
             // Get the CSV content from the response
@@ -1101,14 +1085,6 @@ class SendNotificationController extends Controller
                 return trim($line) !== '';
             })) - 1; // Subtract 1 for header
 
-            // Log CSV content length for debugging
-            Log::info("CSV generated successfully", [
-                'content_length' => strlen($csvContent),
-                'has_content' => !empty($csvContent),
-                'total_rows' => $totalRows,
-                'data_rows' => $dataRows
-            ]);
-
             // Generate a temporary file
             $filename = 'ENROLLEES_' . ($enrollmentStatus ?: 'ALL') . '_' . date('Ymd_His') . '.csv';
             $tempPath = tempnam(sys_get_temp_dir(), 'csv_attachment_');
@@ -1116,12 +1092,6 @@ class SendNotificationController extends Controller
 
             // Write CSV content to temporary file
             file_put_contents($tempCsvPath, $csvContent);
-
-            Log::info("CSV attachment file created", [
-                'filename' => $filename,
-                'temp_path' => $tempCsvPath,
-                'file_exists' => file_exists($tempCsvPath)
-            ]);
 
             return [
                 'path' => $tempCsvPath,
