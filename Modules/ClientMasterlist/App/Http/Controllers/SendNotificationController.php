@@ -38,6 +38,13 @@ use Modules\ClientMasterlist\App\Models\Enrollee;
  */
 class SendNotificationController extends Controller
 {
+    private $attachmentHandler;
+
+    public function __construct()
+    {
+        $this->attachmentHandler = new \Modules\ClientMasterlist\App\Services\AttachmentHandlerService();
+    }
+
     /**
      * Handle sending a notification email.
      */
