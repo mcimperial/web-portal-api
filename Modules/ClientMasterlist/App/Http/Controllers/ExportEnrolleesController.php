@@ -91,11 +91,6 @@ class ExportEnrolleesController extends Controller
             $this->applyEnrollmentStatusFilter($query, $filters);
         }
 
-        // Apply export enrollment type filter (only if no enrollment_status filter was applied)
-        if (!empty($filters['export_enrollment_type'])) {
-            $this->applyExportTypeFilter($query, $filters['export_enrollment_type']);
-        }
-
         // Apply date range filters
         if (!empty($filters['date_from'])) {
             $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
@@ -114,7 +109,7 @@ class ExportEnrolleesController extends Controller
     private function applyEnrollmentStatusFilter($query, $filters)
     {
         $enrollmentStatus = $filters['enrollment_status'];
-        $exportType = $filters['export_enrollment_type'] ?? null;
+        $exportType = $filters['export_enrollment_type'];
 
         if ($exportType === 'RENEWAL') {
             if ($enrollmentStatus === 'PENDING') {
@@ -122,20 +117,20 @@ class ExportEnrolleesController extends Controller
                 // enrollment_status is FOR-RENEWAL AND health_insurance.is_renewal is true
                 $query->where('enrollment_status', 'FOR-RENEWAL')
                     ->whereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', true);
+                        $subQ->where('is_renewal', 1);
                     });
             } else {
                 // For other statuses in RENEWAL export, ensure is_renewal is true
                 $query->where('enrollment_status', $enrollmentStatus)
                     ->whereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', true);
+                        $subQ->where('is_renewal', 1);
                     });
             }
         } elseif ($exportType === 'REGULAR') {
             // For REGULAR exports, ensure is_renewal is false
             $query->where('enrollment_status', $enrollmentStatus)
                 ->whereHas('healthInsurance', function ($subQ) {
-                    $subQ->where('is_renewal', false);
+                    $subQ->where('is_renewal', 0);
                 });
         } else {
             if ($enrollmentStatus === 'PENDING') {
@@ -364,8 +359,9 @@ class ExportEnrolleesController extends Controller
         ];
 
         $withDependents = $request->query('with_dependents', false);
-        $columns = $request->query('columns', []);
         $isForAttachment = $request->query('for_attachment', false);
+
+        $columns = $request->query('columns', []);
 
         // Build query and get enrollees
         $query = $this->buildBaseQuery($filters);
