@@ -800,7 +800,7 @@ class SendNotificationController extends Controller
                     ]);
 
                     $forCount = 1; // CSV notification counts as 1 valid recipient
-                } elseif ($csvAttachment) {
+                } else if ($csvAttachment) {
 
                     // Clean up empty CSV file
                     if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
@@ -815,7 +815,7 @@ class SendNotificationController extends Controller
                         'notification_id' => $notification->id,
                         'data_rows' => $csvAttachment['data_rows'] ?? 0,
                         'enrollment_id' => $statusResult['enrollment_id'],
-                        'status' => $statusResult['status']
+                        //'status' => $statusResult['status']
                     ]);
 
                     // Skip sending this notification since there's no data
@@ -830,7 +830,7 @@ class SendNotificationController extends Controller
                     continue;
                 }
                 // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
-            } elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
+            } else if (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
                 $request->merge([
                     'to' => implode(',', $statusResult)
                 ]);
