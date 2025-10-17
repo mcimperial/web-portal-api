@@ -258,24 +258,24 @@ class ExportEnrolleesController extends Controller
     private function generatePrincipalRow($enrollee, $columns, $withDependents)
     {
         return array_map(function ($col) use ($enrollee, $withDependents) {
-            return $this->getColumnValue($col, $enrollee, $withDependents, true);
+            return $this->getColumnValue($col, $enrollee, $withDependents, true, null);
         }, $columns);
     }
 
     /**
      * Generate row data for dependent
      */
-    private function generateDependentRow($dependent, $columns, $withDependents)
+    private function generateDependentRow($dependent, $columns, $withDependents, $principal = null)
     {
-        return array_map(function ($col) use ($dependent, $withDependents) {
-            return $this->getColumnValue($col, $dependent, $withDependents, false);
+        return array_map(function ($col) use ($dependent, $withDependents, $principal) {
+            return $this->getColumnValue($col, $dependent, $withDependents, false, $principal);
         }, $columns);
     }
 
     /**
      * Get value for a specific column and entity (enrollee or dependent)
      */
-    private function getColumnValue($column, $entity, $withDependents, $isPrincipal)
+    private function getColumnValue($column, $entity, $withDependents, $isPrincipal, $principal = null)
     {
         switch ($column) {
             case 'required_document':
@@ -291,10 +291,10 @@ class ExportEnrolleesController extends Controller
                 return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? '')) : 'PRINCIPAL';
 
             case 'department':
-                return $entity->department ?? '';
+                return !$isPrincipal && $principal ? ($principal->department ?? '') : ($entity->department ?? '');
 
             case 'position':
-                return $entity->position ?? '';
+                return !$isPrincipal && $principal ? ($principal->position ?? '') : ($entity->position ?? '');
 
             case 'enrollment_status':
                 return $entity->enrollment_status ?? '';
@@ -429,7 +429,7 @@ class ExportEnrolleesController extends Controller
             // Add dependent rows if needed
             if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
                 foreach ($enrollee->dependents as $dependent) {
-                    $depRow = $this->generateDependentRow($dependent, $columns, $withDependents);
+                    $depRow = $this->generateDependentRow($dependent, $columns, $withDependents, $enrollee);
                     $rows[] = $this->normalizeRowLength($depRow, $colCount);
                 }
             }
