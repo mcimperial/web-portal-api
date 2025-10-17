@@ -95,7 +95,7 @@ class ExportEnrolleesController extends Controller
         }
 
         // Apply export enrollment type filter (only if no enrollment_status filter was applied)
-        if (!empty($filters['export_enrollment_type']) && empty($filters['enrollment_status'])) {
+        if (!empty($filters['export_enrollment_type'])) {
             $this->applyExportTypeFilter($query, $filters['export_enrollment_type']);
         }
 
