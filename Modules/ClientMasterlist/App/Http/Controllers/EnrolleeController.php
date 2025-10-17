@@ -22,9 +22,10 @@ class EnrolleeController extends Controller
         $search = $request->query('search');
         $perPage = $request->query('per_page', 20);
 
-        $query = Enrollee::with(['dependents', 'healthInsurance']);
+        $query = Enrollee::with(['dependents', 'healthInsurance'])
+            ->whereNull('deleted_at'); // Apply soft delete filter first
 
-        // Apply enrollment_id filter first
+        // Apply enrollment_id filter
         if ($enrollmentId) {
             $query->where('enrollment_id', $enrollmentId);
         }
@@ -69,9 +70,7 @@ class EnrolleeController extends Controller
             });
         }
 
-        // Apply soft delete filter and ordering
-        $query->whereNull('deleted_at');
-
+        // Apply ordering
         $query->orderBy('updated_at', 'desc');
 
         $enrollees = $query->paginate($perPage);
