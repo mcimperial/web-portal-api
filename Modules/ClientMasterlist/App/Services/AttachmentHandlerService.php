@@ -37,12 +37,6 @@ class AttachmentHandlerService
         $exportEnrollmentType = null
     ) {
         try {
-            Log::info('generateCsvAttachment called with', [
-                'columns' => $columns,
-                'dateFrom' => $dateFrom,
-                'dateTo' => $dateTo
-            ]);
-
             // Create request object with parameters
             $request = new Request([
                 'enrollment_id' => $enrollmentId,

@@ -1057,7 +1057,7 @@ class SendNotificationController extends Controller
     /**
      * Generate CSV attachment using ExportEnrolleesController
      */
-    private function generateCsvAttachment($enrollmentId, $enrollmentStatus = null, $withDependents = false, $dateFrom = null, $dateTo = null, $columns = [])
+    private function generateCsvAttachment($enrollmentId, $enrollmentStatus = null, $exportEnrollmentType = 'REGULAR', $withDependents = false, $isRenewal = false, $dateFrom = null, $dateTo = null, $columns = [])
     {
         try {
 
@@ -1065,8 +1065,8 @@ class SendNotificationController extends Controller
             $request = new Request([
                 'enrollment_id' => $enrollmentId,
                 'enrollment_status' => $enrollmentStatus,
-                'export_enrollment_type' => 'REGULAR',
-                'is_renewal' => false,
+                'export_enrollment_type' => $exportEnrollmentType,
+                'is_renewal' => $isRenewal,
                 'with_dependents' => $withDependents,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
