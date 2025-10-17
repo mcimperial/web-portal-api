@@ -288,7 +288,13 @@ class ExportEnrolleesController extends Controller
                 return '';
 
             case 'relation':
-                return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? '')) : '';
+                return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? '')) : 'PRINCIPAL';
+
+            case 'department':
+                return $entity->department ?? '';
+
+            case 'position':
+                return $entity->position ?? '';
 
             case 'enrollment_status':
                 return $entity->enrollment_status ?? '';
