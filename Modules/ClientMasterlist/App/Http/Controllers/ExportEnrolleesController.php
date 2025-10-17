@@ -94,8 +94,8 @@ class ExportEnrolleesController extends Controller
             $this->applyEnrollmentStatusFilter($query, $filters);
         }
 
-        // Apply export enrollment type filter
-        if (!empty($filters['export_enrollment_type'])) {
+        // Apply export enrollment type filter (only if no enrollment_status filter was applied)
+        if (!empty($filters['export_enrollment_type']) && empty($filters['enrollment_status'])) {
             $this->applyExportTypeFilter($query, $filters['export_enrollment_type']);
         }
 
@@ -121,12 +121,25 @@ class ExportEnrolleesController extends Controller
 
         if ($exportType === 'RENEWAL') {
             if ($enrollmentStatus === 'PENDING') {
-                $query->where('enrollment_status', 'FOR-RENEWAL');
+                // For RENEWAL exports with PENDING status, only get records where both
+                // enrollment_status is FOR-RENEWAL AND health_insurance.is_renewal is true
+                $query->where('enrollment_status', 'FOR-RENEWAL')
+                    ->whereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', true);
+                    });
             } else {
-                $query->where('enrollment_status', $enrollmentStatus);
+                // For other statuses in RENEWAL export, ensure is_renewal is true
+                $query->where('enrollment_status', $enrollmentStatus)
+                    ->whereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', true);
+                    });
             }
         } elseif ($exportType === 'REGULAR') {
-            $query->where('enrollment_status', $enrollmentStatus);
+            // For REGULAR exports, ensure is_renewal is false
+            $query->where('enrollment_status', $enrollmentStatus)
+                ->whereHas('healthInsurance', function ($subQ) {
+                    $subQ->where('is_renewal', false);
+                });
         } else {
             if ($enrollmentStatus === 'PENDING') {
                 $query->where(function ($q) {
@@ -141,6 +154,7 @@ class ExportEnrolleesController extends Controller
 
     /**
      * Apply export type filters
+     * This method is used when only export_enrollment_type is provided without enrollment_status
      */
     private function applyExportTypeFilter($query, $exportType)
     {
