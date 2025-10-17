@@ -879,7 +879,8 @@ class SendNotificationController extends Controller
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
-                    'status' => 'SUBMITTED',
+                    'enrollment_status' => 'SUBMITTED',
+                    'export_enrollment_type' => 'REGULAR',
                     'is_renewal' => false,
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
@@ -913,7 +914,9 @@ class SendNotificationController extends Controller
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
-                    'status' => 'APPROVED',
+                    'enrollment_status' => 'APPROVED',
+                    'export_enrollment_type' => 'REGULAR',
+                    'is_renewal' => false,
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
