@@ -168,93 +168,6 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Handle sending scheduled notifications (for cronjob)
-     */
-    public function sendScheduled()
-    {
-        $now = now();
-        $dueNotifications = $this->scheduler->getDueNotifications($now);
-
-        foreach ($dueNotifications as $notification) {
-            Log::info("Processing scheduled notification", [
-                'notification_id' => $notification->id,
-                'notification_type' => $notification->notification_type,
-                'to' => $notification->to
-            ]);
-
-            try {
-                // Check status and get enrollee IDs or CSV generation data if applicable
-                // Pass the notification object for schedule-based date calculation
-                $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
-
-                Log::info("Status result for notification", [
-                    'notification_id' => $notification->id,
-                    'notification_type' => $notification->notification_type,
-                    'has_status_result' => !empty($statusResult)
-                ]);
-
-                $request = new Request([
-                    'notification_id' => $notification->id,
-                    'to' => $notification->to,
-                    'cc' => $notification->cc,
-                    'bcc' => $notification->bcc,
-                    'use_saved' => true,
-                ]);
-
-                $forCount = 0; // Initialize count variable
-
-                // Handle CSV generation for report notifications
-                if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
-                    // Generate CSV attachment
-                    $csvAttachment = $this->attachmentHandler->processCsvForScheduledNotification($statusResult);
-
-                    if ($csvAttachment) {
-                        $request->merge(['csv_attachment' => $csvAttachment]);
-                        $forCount = 1; // CSV reports count as 1 recipient
-                    } else {
-                        Log::info("No CSV data available for notification", [
-                            'notification_id' => $notification->id
-                        ]);
-                        continue; // Skip this notification
-                    }
-                }
-
-                // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
-                elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
-                    // Override the 'to' field with enrollee IDs
-                    $request->merge(['to' => implode(',', $statusResult)]);
-                    $forCount = count($statusResult);
-                }
-
-                if ($forCount === 0) {
-                    Log::info("No recipients found for notification", [
-                        'notification_id' => $notification->id
-                    ]);
-                    continue;
-                }
-
-                $this->send($request);
-
-                Log::info("Notification sent, updating last_sent_at", [
-                    'notification_id' => $notification->id
-                ]);
-
-                $this->scheduler->updateLastSentTime($notification, $now);
-            } catch (\Exception $e) {
-                Log::error("Failed to process scheduled notification", [
-                    'notification_id' => $notification->id,
-                    'error' => $e->getMessage()
-                ]);
-            }
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Scheduled notifications processed.'
-        ]);
-    }
-
-    /**
      * Check if the 'to' string is a comma-separated list of IDs
      */
     private function isIdList($toRaw)
@@ -433,6 +346,93 @@ class SendNotificationController extends Controller
         }
     }
 
+    /**
+     * Handle sending scheduled notifications (for cronjob)
+     */
+    public function sendScheduled()
+    {
+        $now = now();
+        $dueNotifications = $this->scheduler->getDueNotifications($now);
+
+        foreach ($dueNotifications as $notification) {
+            Log::info("Processing scheduled notification", [
+                'notification_id' => $notification->id,
+                'notification_type' => $notification->notification_type,
+                'to' => $notification->to
+            ]);
+
+            try {
+                // Check status and get enrollee IDs or CSV generation data if applicable
+                // Pass the notification object for schedule-based date calculation
+                $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+
+                Log::info("Status result for notification", [
+                    'notification_id' => $notification->id,
+                    'notification_type' => $notification->notification_type,
+                    'has_status_result' => !empty($statusResult)
+                ]);
+
+                $request = new Request([
+                    'notification_id' => $notification->id,
+                    'to' => $notification->to,
+                    'cc' => $notification->cc,
+                    'bcc' => $notification->bcc,
+                    'use_saved' => true,
+                ]);
+
+                $forCount = 0; // Initialize count variable
+
+                // Handle CSV generation for report notifications
+                if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                    // Generate CSV attachment
+                    $csvAttachment = $this->attachmentHandler->processCsvForScheduledNotification($statusResult);
+
+                    if ($csvAttachment) {
+                        $request->merge(['csv_attachment' => $csvAttachment]);
+                        $forCount = 1; // CSV reports count as 1 recipient
+                    } else {
+                        Log::info("No CSV data available for notification", [
+                            'notification_id' => $notification->id
+                        ]);
+                        continue; // Skip this notification
+                    }
+                }
+
+                // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
+                elseif (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
+                    // Override the 'to' field with enrollee IDs
+                    $request->merge(['to' => implode(',', $statusResult)]);
+                    $forCount = count($statusResult);
+                }
+
+                if ($forCount === 0) {
+                    Log::info("No recipients found for notification", [
+                        'notification_id' => $notification->id
+                    ]);
+                    continue;
+                }
+
+                $this->send($request);
+
+                Log::info("Notification sent, updating last_sent_at", [
+                    'notification_id' => $notification->id
+                ]);
+
+                $this->scheduler->updateLastSentTime($notification, $now);
+            } catch (\Exception $e) {
+                Log::error("Failed to process scheduled notification", [
+                    'notification_id' => $notification->id,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Scheduled notifications processed.'
+        ]);
+    }
+
     private function checkNotificationStatus($notificationType, $enrollmentId = null, $notification = null)
     {
         switch ($notificationType) {
@@ -441,23 +441,13 @@ class SendNotificationController extends Controller
             case 'ENROLLMENT START (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, 'PENDING', $notification);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
-                return [
-                    'type' => 'csv_generation',
-                    'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => 'SUBMITTED',
-                    'with_dependents' => true,
-                    'columns' => [],
-                    'notification' => $notification
-                ];
+                $getCsvConfigForNotificationType = $this->getCsvConfigForNotificationType('REPORT: ATTACHMENT (SUBMITTED)', $enrollmentId, $notification);
+
+                return $getCsvConfigForNotificationType;
             case 'REPORT: ATTACHMENT (APPROVED)':
-                return [
-                    'type' => 'csv_generation',
-                    'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => 'APPROVED',
-                    'with_dependents' => true,
-                    'columns' => [],
-                    'notification' => $notification
-                ];
+                $getCsvConfigForNotificationType = $this->getCsvConfigForNotificationType('REPORT: ATTACHMENT (APPROVED)', $enrollmentId, $notification);
+
+                return $getCsvConfigForNotificationType;
             default:
                 return null;
         }

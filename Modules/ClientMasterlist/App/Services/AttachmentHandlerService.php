@@ -193,11 +193,11 @@ class AttachmentHandlerService
             case 'REPORT: ATTACHMENT (SUBMITTED)':
                 $schedulerService = new \Modules\ClientMasterlist\App\Services\SchedulerService();
                 $dateRange = $schedulerService->calculateDateRangeFromSchedule($notification);
-
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
                     'status' => 'SUBMITTED',
+                    'export_enrollment_type' => 'REGULAR',  // Add this to ensure is_renewal = false
                     'is_renewal' => false,
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
@@ -221,11 +221,12 @@ class AttachmentHandlerService
             case 'REPORT: ATTACHMENT (APPROVED)':
                 $schedulerService = new \Modules\ClientMasterlist\App\Services\SchedulerService();
                 $dateRange = $schedulerService->calculateDateRangeFromSchedule($notification);
-
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
                     'status' => 'APPROVED',
+                    'export_enrollment_type' => 'REGULAR',  // Add this to ensure is_renewal = false
+                    'is_renewal' => false,
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
