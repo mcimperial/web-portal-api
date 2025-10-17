@@ -67,6 +67,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
         Route::put('notifications/{id}', 'update');
         Route::delete('notifications/{id}', 'destroy');
     });
+
+    // Send Notification API
+    Route::post('send-notification', [SendNotificationController::class, 'send']);
 });
 
 // Public Attachments CRUD (no auth)
