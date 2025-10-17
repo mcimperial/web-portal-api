@@ -777,8 +777,9 @@ class SendNotificationController extends Controller
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
                 $csvAttachment = $this->generateCsvAttachment(
                     $statusResult['enrollment_id'],
-                    $statusResult['status'] ?? null,
-                    $statusResult['with_dependents'] ?? false,
+                    $statusResult['enrollment_status'] ?? null,
+                    $statusResult['export_enrollment_type'] ?? 'REGULAR',
+                    $statusResult['with_dependents'] ?? true,
                     $statusResult['is_renewal'] ?? false,
                     $statusResult['date_from'] ?? null,
                     $statusResult['date_to'] ?? null,
@@ -1064,6 +1065,8 @@ class SendNotificationController extends Controller
             $request = new Request([
                 'enrollment_id' => $enrollmentId,
                 'enrollment_status' => $enrollmentStatus,
+                'export_enrollment_type' => 'REGULAR',
+                'is_renewal' => false,
                 'with_dependents' => $withDependents,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
