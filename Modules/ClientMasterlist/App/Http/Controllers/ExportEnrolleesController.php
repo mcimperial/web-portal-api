@@ -145,18 +145,12 @@ class ExportEnrolleesController extends Controller
     private function applyExportTypeFilter($query, $exportType)
     {
         if ($exportType === 'RENEWAL') {
-            $query->where(function ($q) use ($exportType) {
-                $q->where('enrollment_status', $exportType)
-                    ->orWhereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', true);
-                    });
+            $query->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where('is_renewal', true);
             });
         } elseif ($exportType === 'REGULAR') {
-            $query->where(function ($q) use ($exportType) {
-                $q->where('enrollment_status', $exportType)
-                    ->orWhereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', false);
-                    });
+            $query->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where('is_renewal', false);
             });
         }
     }
