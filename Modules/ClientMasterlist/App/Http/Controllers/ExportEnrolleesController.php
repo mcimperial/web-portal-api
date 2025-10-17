@@ -478,7 +478,7 @@ class ExportEnrolleesController extends Controller
     {
         foreach ($enrollees as $enrollee) {
             if ($enrollee->enrollment_status === 'SUBMITTED') {
-                $enrollee->enrollment_status = 'SUBMITTED';
+                $enrollee->enrollment_status = 'FOR-APPROVAL';
                 $enrollee->save();
             }
         }
