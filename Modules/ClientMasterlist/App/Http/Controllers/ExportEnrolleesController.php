@@ -4,6 +4,7 @@ namespace Modules\ClientMasterlist\App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use App\Http\Traits\UppercaseInput;
 
@@ -95,7 +96,6 @@ class ExportEnrolleesController extends Controller
         if (!empty($filters['date_from'])) {
             $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
         }
-
         if (!empty($filters['date_to'])) {
             $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
         }
@@ -109,7 +109,14 @@ class ExportEnrolleesController extends Controller
     private function applyEnrollmentStatusFilter($query, $filters)
     {
         $enrollmentStatus = $filters['enrollment_status'];
-        $exportType = $filters['export_enrollment_type'];
+        $exportType = trim(strtoupper($filters['export_enrollment_type'] ?? ''));
+
+        // Debug: Log the export type to help diagnose issues
+        Log::info('Export Type Debug', [
+            'original_export_type' => $filters['export_enrollment_type'],
+            'normalized_export_type' => $exportType,
+            'enrollment_status' => $enrollmentStatus
+        ]);
 
         if ($exportType === 'RENEWAL') {
             if ($enrollmentStatus === 'PENDING') {
@@ -133,6 +140,13 @@ class ExportEnrolleesController extends Controller
                     $subQ->where('is_renewal', 0);
                 });
         } else {
+            // Fallback: If export type is not clearly specified, apply basic filtering
+            // Log warning about unclear export type
+            Log::warning('Unclear export type, applying basic filtering', [
+                'export_type' => $exportType,
+                'enrollment_status' => $enrollmentStatus
+            ]);
+
             if ($enrollmentStatus === 'PENDING') {
                 $query->where(function ($q) {
                     $q->where('enrollment_status', 'FOR-RENEWAL')
@@ -142,23 +156,6 @@ class ExportEnrolleesController extends Controller
                 $query->where('enrollment_status', $enrollmentStatus);
             }
         }
-    }
-
-    /**
-     * Apply export type filters
-     * This method is used when only export_enrollment_type is provided without enrollment_status
-     */
-    private function applyExportTypeFilter($query, $exportType)
-    {
-        /* if ($exportType === 'RENEWAL') {
-            $query->whereHas('healthInsurance', function ($subQ) {
-                $subQ->where('is_renewal', true);
-            });
-        } elseif ($exportType === 'REGULAR') {
-            $query->whereHas('healthInsurance', function ($subQ) {
-                $subQ->where('is_renewal', false);
-            });
-        } */
     }
 
     /**
