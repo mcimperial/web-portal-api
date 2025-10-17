@@ -75,9 +75,6 @@ class ExportEnrolleesController extends Controller
     /**
      * Build base query with common filters
      */
-    /**
-     * Build base query with common filters
-     */
     private function buildBaseQuery($filters = [])
     {
         $query = Enrollee::with(['healthInsurance', 'dependents'])
@@ -158,7 +155,7 @@ class ExportEnrolleesController extends Controller
      */
     private function applyExportTypeFilter($query, $exportType)
     {
-        if ($exportType === 'RENEWAL') {
+        /* if ($exportType === 'RENEWAL') {
             $query->whereHas('healthInsurance', function ($subQ) {
                 $subQ->where('is_renewal', true);
             });
@@ -166,7 +163,7 @@ class ExportEnrolleesController extends Controller
             $query->whereHas('healthInsurance', function ($subQ) {
                 $subQ->where('is_renewal', false);
             });
-        }
+        } */
     }
 
     /**
