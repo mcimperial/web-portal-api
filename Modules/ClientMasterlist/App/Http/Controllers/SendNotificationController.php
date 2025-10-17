@@ -1037,7 +1037,7 @@ class SendNotificationController extends Controller
             ]);
 
             return [
-                'from' => $dateFrom->format('Y-m-d H:i:s'),
+                'from' => $currentScheduledTime->format('Y-m-d H:i:s'), //$dateFrom->format('Y-m-d H:i:s'),
                 'to' => $now->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
