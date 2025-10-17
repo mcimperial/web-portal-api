@@ -33,7 +33,8 @@ class AttachmentHandlerService
         $isRenewal = false,
         $dateFrom = null,
         $dateTo = null,
-        $columns = []
+        $columns = [],
+        $exportEnrollmentType = null
     ) {
         try {
             // Create request object with parameters
@@ -44,7 +45,8 @@ class AttachmentHandlerService
                 'is_renewal' => $isRenewal,
                 'date_from' => $dateFrom,
                 'date_to' => $dateTo,
-                'columns' => $columns
+                'columns' => $columns,
+                'export_enrollment_type' => $exportEnrollmentType
             ]);
 
             // Create ExportEnrolleesController instance and call export method
@@ -196,7 +198,7 @@ class AttachmentHandlerService
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
-                    'status' => 'SUBMITTED',
+                    'enrollment_status' => 'SUBMITTED',
                     'export_enrollment_type' => 'REGULAR',  // Add this to ensure is_renewal = false
                     'is_renewal' => false,
                     'with_dependents' => true,
@@ -224,7 +226,7 @@ class AttachmentHandlerService
                 return [
                     'type' => 'csv_generation',
                     'enrollment_id' => $enrollmentId,
-                    'status' => 'APPROVED',
+                    'enrollment_status' => 'APPROVED',
                     'export_enrollment_type' => 'REGULAR',  // Add this to ensure is_renewal = false
                     'is_renewal' => false,
                     'with_dependents' => true,
@@ -261,14 +263,17 @@ class AttachmentHandlerService
             return null;
         }
 
+        Log::info('Processing CSV for scheduled notification', ['config' => $config]);
+
         $csvAttachment = $this->generateCsvAttachment(
             $config['enrollment_id'],
-            $config['status'] ?? null,
+            $config['enrollment_status'] ?? null,
             $config['with_dependents'] ?? false,
             $config['is_renewal'] ?? false,
             $config['date_from'] ?? null,
             $config['date_to'] ?? null,
-            $config['columns'] ?? []
+            $config['columns'] ?? [],
+            $config['export_enrollment_type'] ?? null
         );
 
         if (!$csvAttachment) {

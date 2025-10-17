@@ -866,78 +866,9 @@ class SendNotificationController extends Controller
             case 'ENROLLMENT START (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, 'PENDING', $notification);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
-
-                // Use passed notification or find it if not provided
-                if (!$notification) {
-                    $notification = Notification::where('enrollment_id', $enrollmentId)
-                        ->where('notification_type', $notificationType)
-                        ->first();
-                }
-
-                $dateRange = $this->calculateDateRangeFromSchedule($notification);
-
-                // Return data for CSV generation instead of enrollee IDs
-                return [
-                    'type' => 'csv_generation',
-                    'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => 'SUBMITTED',
-                    'export_enrollment_type' => 'REGULAR',
-                    'is_renewal' => false,
-                    'with_dependents' => true,
-                    'date_from' => $dateRange['from'],
-                    'date_to' => $dateRange['to'],
-                    'columns' => [
-                        'enrollment_status',
-                        'relation',
-                        'employee_id',
-                        'first_name',
-                        'last_name',
-                        'middle_name',
-                        'birth_date',
-                        'gender',
-                        'email1',
-                        'phone1',
-                        'department',
-                        'position',
-
-                    ]
-                ];
+                return $this->attachmentHandler->getCsvConfigForNotificationType($notificationType, $enrollmentId, $notification);
             case 'REPORT: ATTACHMENT (APPROVED)':
-                // Use passed notification or find it if not provided
-                if (!$notification) {
-                    $notification = Notification::where('enrollment_id', $enrollmentId)
-                        ->where('notification_type', $notificationType)
-                        ->first();
-                }
-
-                $dateRange = $this->calculateDateRangeFromSchedule($notification);
-
-                // Return data for CSV generation for approved enrollees
-                return [
-                    'type' => 'csv_generation',
-                    'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => 'APPROVED',
-                    'export_enrollment_type' => 'REGULAR',
-                    'is_renewal' => false,
-                    'with_dependents' => true,
-                    'date_from' => $dateRange['from'],
-                    'date_to' => $dateRange['to'],
-                    'columns' => [
-                        'enrollment_status',
-                        'relation',
-                        'employee_id',
-                        'first_name',
-                        'last_name',
-                        'middle_name',
-                        'birth_date',
-                        'gender',
-                        'email1',
-                        'phone1',
-                        'department',
-                        'position',
-                        'certificate_number',
-                    ]
-                ];
+                return $this->attachmentHandler->getCsvConfigForNotificationType($notificationType, $enrollmentId, $notification);
             default:
                 // No action needed for other types
                 return null;
