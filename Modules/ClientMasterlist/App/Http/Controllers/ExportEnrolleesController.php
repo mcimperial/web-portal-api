@@ -16,6 +16,11 @@ class ExportEnrolleesController extends Controller
      * Column mappings for CSV headers
      */
     private const COLUMN_LABELS = [
+        'remarks' => 'Remarks',
+        'reason_for_skipping' => 'Reason for Skipping',
+        'attachment' => 'Attachment for Skip Hierarchy',
+        'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+        'required_document' => 'Required Document',
         'enrollment_status' => 'Enrollment Status',
         'relation' => 'Relation',
         'employee_id' => 'Employee ID',
@@ -282,6 +287,15 @@ class ExportEnrolleesController extends Controller
     private function getColumnValue($column, $entity, $withDependents, $isPrincipal, $principal = null)
     {
         switch ($column) {
+            case 'required_document':
+                if (
+                    !$isPrincipal && method_exists($entity, 'attachmentForRequirement') &&
+                    $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
+                ) {
+                    return $entity->attachmentForRequirement->file_path;
+                }
+                return '';
+
             case 'relation':
                 return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? '')) : 'PRINCIPAL';
 
@@ -314,14 +328,8 @@ class ExportEnrolleesController extends Controller
                 }
                 return '';
 
-            case 'required_document':
-                if (
-                    !$isPrincipal && method_exists($entity, 'attachmentForRequirement') &&
-                    $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
-                ) {
-                    return $entity->attachmentForRequirement->file_path;
-                }
-                return '';
+            case 'full_name':
+                return trim($entity->first_name . ' ' . ($entity->middle_name ?? '') . ' ' . $entity->last_name);
 
             default:
                 if (in_array($column, self::INSURANCE_FIELDS)) {
