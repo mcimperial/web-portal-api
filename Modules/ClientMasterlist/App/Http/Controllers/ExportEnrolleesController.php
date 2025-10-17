@@ -88,14 +88,23 @@ class ExportEnrolleesController extends Controller
         }
 
         // Apply enrollment status filter
-        if (!empty($filters['enrollment_status'])) {
+        if (isset($filters['enrollment_status']) || isset($filters['export_enrollment_type'])) {
+            Log::info('Applying enrollment status filter', [
+                'enrollment_status' => $filters['enrollment_status'],
+                'export_enrollment_type' => $filters['export_enrollment_type'] ?? null
+            ]);
             $this->applyEnrollmentStatusFilter($query, $filters);
+        } else {
+            Log::info('Skipping enrollment status filter - no enrollment_status provided', [
+                'filters' => $filters
+            ]);
         }
 
         // Apply date range filters
         if (!empty($filters['date_from'])) {
             $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
         }
+
         if (!empty($filters['date_to'])) {
             $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
         }
@@ -109,51 +118,58 @@ class ExportEnrolleesController extends Controller
     private function applyEnrollmentStatusFilter($query, $filters)
     {
         $enrollmentStatus = $filters['enrollment_status'];
-        $exportType = trim(strtoupper($filters['export_enrollment_type'] ?? ''));
+        $exportType = $filters['export_enrollment_type'];
 
-        // Debug: Log the export type to help diagnose issues
-        Log::info('Export Type Debug', [
-            'original_export_type' => $filters['export_enrollment_type'],
-            'normalized_export_type' => $exportType,
-            'enrollment_status' => $enrollmentStatus
+        Log::info('Inside applyEnrollmentStatusFilter', [
+            'enrollmentStatus' => $enrollmentStatus,
+            'exportType' => $exportType
         ]);
 
         if ($exportType === 'RENEWAL') {
-            if ($enrollmentStatus === 'PENDING') {
-                // For RENEWAL exports with PENDING status, only get records where both
-                // enrollment_status is FOR-RENEWAL AND health_insurance.is_renewal is true
-                $query->where('enrollment_status', 'FOR-RENEWAL')
-                    ->whereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', 1);
-                    });
-            } else {
-                // For other statuses in RENEWAL export, ensure is_renewal is true
-                $query->where('enrollment_status', $enrollmentStatus)
-                    ->whereHas('healthInsurance', function ($subQ) {
-                        $subQ->where('is_renewal', 1);
-                    });
-            }
-        } elseif ($exportType === 'REGULAR') {
-            // For REGULAR exports, ensure is_renewal is false
-            $query->where('enrollment_status', $enrollmentStatus)
-                ->whereHas('healthInsurance', function ($subQ) {
-                    $subQ->where('is_renewal', 0);
-                });
-        } else {
-            // Fallback: If export type is not clearly specified, apply basic filtering
-            // Log warning about unclear export type
-            Log::warning('Unclear export type, applying basic filtering', [
-                'export_type' => $exportType,
-                'enrollment_status' => $enrollmentStatus
-            ]);
+            Log::info('Applying RENEWAL export filters');
+            // For RENEWAL exports, ALWAYS ensure is_renewal is true first
+
+            $query->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where('is_renewal', true);
+            });
 
             if ($enrollmentStatus === 'PENDING') {
+                Log::info('RENEWAL with PENDING status - filtering for FOR-RENEWAL');
+                // enrollment_status is FOR-RENEWAL (since PENDING renewals show as FOR-RENEWAL)
+                $query->where('enrollment_status', 'FOR-RENEWAL');
+            } else {
+                if (isset($enrollmentStatus)) {
+                    Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
+                    // For other statuses in RENEWAL export
+                    $query->where('enrollment_status', $enrollmentStatus);
+                }
+            }
+        } elseif ($exportType === 'REGULAR') {
+            $query->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where('is_renewal', false);
+            });
+            Log::info('Applying REGULAR export filters');
+            // For REGULAR exports, ensure is_renewal is false
+            if (isset($enrollmentStatus)) {
+                Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
+                // For other statuses in RENEWAL export
+                $query->where('enrollment_status', $enrollmentStatus);
+            }
+        } else {
+            Log::info('Applying ALL export filters (no specific type)');
+            // For ALL exports (no specific type filter)
+            if ($enrollmentStatus === 'PENDING') {
+                Log::info('ALL export with PENDING status - filtering for FOR-RENEWAL OR PENDING');
                 $query->where(function ($q) {
                     $q->where('enrollment_status', 'FOR-RENEWAL')
                         ->orWhere('enrollment_status', 'PENDING');
                 });
             } else {
-                $query->where('enrollment_status', $enrollmentStatus);
+                if (isset($enrollmentStatus)) {
+                    Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
+                    // For other statuses in RENEWAL export
+                    $query->where('enrollment_status', $enrollmentStatus);
+                }
             }
         }
     }
@@ -360,35 +376,17 @@ class ExportEnrolleesController extends Controller
 
         $columns = $request->query('columns', []);
 
-        // TEMPORARY DEBUG - Remove this after debugging
-        $debugInfo = [
-            'original_export_type' => $request->query('export_enrollment_type'),
-            'normalized_export_type' => trim(strtoupper($request->query('export_enrollment_type') ?? '')),
-            'enrollment_status' => $request->query('enrollment_status'),
-            'all_request_params' => $request->all()
-        ];
-
-        // Uncomment this line to see debug info instead of CSV
-        return response()->json($debugInfo);
-
         // Build query and get enrollees
         $query = $this->buildBaseQuery($filters);
 
-        // TEMPORARY DEBUG - Add query debugging
-        $debugInfo['sql_query'] = $query->toSql();
-        $debugInfo['sql_bindings'] = $query->getBindings();
+        // Log the SQL query for debugging
+        Log::info('Export Enrollees SQL Query', [
+            'sql' => $query->toSql(),
+            'bindings' => $query->getBindings(),
+            'filters' => $filters
+        ]);
 
         $enrollees = $query->get();
-
-        // Add count info
-        $debugInfo['total_enrollees_found'] = $enrollees->count();
-        $debugInfo['sample_enrollee_data'] = $enrollees->take(2)->map(function ($enrollee) {
-            return [
-                'id' => $enrollee->id,
-                'enrollment_status' => $enrollee->enrollment_status,
-                'is_renewal' => $enrollee->healthInsurance ? $enrollee->healthInsurance->is_renewal : 'NO_HEALTH_INSURANCE'
-            ];
-        });
 
         // Process columns based on enrollee data
         $columns = $this->processColumns($columns, $withDependents, $enrollees);
