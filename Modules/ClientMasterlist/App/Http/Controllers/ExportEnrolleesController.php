@@ -190,6 +190,8 @@ class ExportEnrolleesController extends Controller
             return trim($v) !== '';
         })));
 
+        Log::info('Initial columns after normalization', ['columns' => $columns]);
+
         // Add relation column if withDependents is true
         if ($withDependents && !in_array('relation', $columns)) {
             $columns[] = 'relation';
@@ -199,6 +201,8 @@ class ExportEnrolleesController extends Controller
         if (!in_array('enrollment_status', $columns)) {
             $columns[] = 'enrollment_status';
         }
+
+        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
 
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
@@ -231,6 +235,7 @@ class ExportEnrolleesController extends Controller
 
         // Add skip-related columns if needed
         if ($hasSkippedOrOverage) {
+            Log::info('Adding skip-related columns because hasSkippedOrOverage is true');
             $skipColumns = ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'];
             foreach ($skipColumns as $skipCol) {
                 if (!in_array($skipCol, $columns)) {
@@ -239,6 +244,7 @@ class ExportEnrolleesController extends Controller
             }
         }
 
+        Log::info('Final columns array', ['columns' => $columns]);
         return $columns;
     }
 
@@ -247,9 +253,12 @@ class ExportEnrolleesController extends Controller
      */
     private function generateHeaders($columns)
     {
-        return array_map(function ($col) {
+        $headers = array_map(function ($col) {
             return self::COLUMN_LABELS[$col] ?? $col;
         }, $columns);
+
+        Log::info('Generated headers', ['columns' => $columns, 'headers' => $headers]);
+        return $headers;
     }
 
     /**
@@ -458,7 +467,7 @@ class ExportEnrolleesController extends Controller
     {
         foreach ($enrollees as $enrollee) {
             if ($enrollee->enrollment_status === 'SUBMITTED') {
-                $enrollee->enrollment_status = 'FOR-APPROVAL';
+                $enrollee->enrollment_status = 'SUBMITTED';
                 $enrollee->save();
             }
         }

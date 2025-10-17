@@ -887,6 +887,8 @@ class SendNotificationController extends Controller
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
                     'columns' => [
+                        'enrollment_status',
+                        'relation',
                         'employee_id',
                         'first_name',
                         'last_name',
@@ -897,8 +899,7 @@ class SendNotificationController extends Controller
                         'phone1',
                         'department',
                         'position',
-                        'enrollment_status',
-                        'relation'
+
                     ]
                 ];
             case 'REPORT: ATTACHMENT (APPROVED)':
@@ -922,6 +923,8 @@ class SendNotificationController extends Controller
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
                     'columns' => [
+                        'enrollment_status',
+                        'relation',
                         'employee_id',
                         'first_name',
                         'last_name',
@@ -932,9 +935,7 @@ class SendNotificationController extends Controller
                         'phone1',
                         'department',
                         'position',
-                        'enrollment_status',
                         'certificate_number',
-                        'relation'
                     ]
                 ];
             default:
