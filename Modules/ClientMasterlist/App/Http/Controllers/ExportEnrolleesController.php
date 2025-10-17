@@ -360,9 +360,35 @@ class ExportEnrolleesController extends Controller
 
         $columns = $request->query('columns', []);
 
+        // TEMPORARY DEBUG - Remove this after debugging
+        $debugInfo = [
+            'original_export_type' => $request->query('export_enrollment_type'),
+            'normalized_export_type' => trim(strtoupper($request->query('export_enrollment_type') ?? '')),
+            'enrollment_status' => $request->query('enrollment_status'),
+            'all_request_params' => $request->all()
+        ];
+
+        // Uncomment this line to see debug info instead of CSV
+        return response()->json($debugInfo);
+
         // Build query and get enrollees
         $query = $this->buildBaseQuery($filters);
+
+        // TEMPORARY DEBUG - Add query debugging
+        $debugInfo['sql_query'] = $query->toSql();
+        $debugInfo['sql_bindings'] = $query->getBindings();
+
         $enrollees = $query->get();
+
+        // Add count info
+        $debugInfo['total_enrollees_found'] = $enrollees->count();
+        $debugInfo['sample_enrollee_data'] = $enrollees->take(2)->map(function ($enrollee) {
+            return [
+                'id' => $enrollee->id,
+                'enrollment_status' => $enrollee->enrollment_status,
+                'is_renewal' => $enrollee->healthInsurance ? $enrollee->healthInsurance->is_renewal : 'NO_HEALTH_INSURANCE'
+            ];
+        });
 
         // Process columns based on enrollee data
         $columns = $this->processColumns($columns, $withDependents, $enrollees);
