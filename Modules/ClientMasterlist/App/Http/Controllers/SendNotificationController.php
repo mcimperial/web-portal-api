@@ -649,7 +649,7 @@ class SendNotificationController extends Controller
                     'type' => 'csv_generation',
                     'maxicare_customized_column' => $insuranceProvider === 'MAXICARE' ? true : false,
                     'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => 'FOR-APPROVAL',
+                    'enrollment_status' => 'SUBMITTED',
                     'insurance_provider' => $insuranceProvider,
                     'export_enrollment_type' => 'REGULAR',
                     'is_renewal' => false,
