@@ -29,4 +29,12 @@ class Enrollment extends Model
         'status',
         'deleted_by',
     ];
+
+    /**
+     * Get the insurance provider for this enrollment
+     */
+    public function insuranceProvider()
+    {
+        return $this->belongsTo(InsuranceProvider::class, 'insurance_provider_id');
+    }
 }

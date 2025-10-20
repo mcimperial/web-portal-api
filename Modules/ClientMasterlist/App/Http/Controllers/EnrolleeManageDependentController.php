@@ -228,6 +228,7 @@ class EnrolleeManageDependentController extends Controller
 
                 // Handle skip hierarchy fields in HealthInsurance
                 $health = HealthInsurance::where('dependent_id', $dependentModel->id)->first();
+
                 if (isset($dep['is_skipping']) && $dep['is_skipping']) {
                     $skipFields = [
                         'is_skipping' => $dep['is_skipping'],
