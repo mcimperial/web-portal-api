@@ -169,8 +169,9 @@ class EnrolleeManageDependentController extends Controller
 
         $dependents = $request->input('dependents', []);
         // Get the employee_id of the principal enrollee
-        $principal = Enrollee::find($enrolleeId);
-        $employeeId = $principal ? $principal->employee_id : null;
+        $principal = Enrollee::with('healthInsurance')->find($enrolleeId);
+        $employeeId = $principal ? $principal->employee_id : false;
+        $isRenewal = $principal && $principal->healthInsurance ? $principal->healthInsurance->is_renewal : null;
 
         // Get all current dependents for this enrollee
         $currentDependents = Dependent::where('principal_id', $enrolleeId)->get();
@@ -210,10 +211,20 @@ class EnrolleeManageDependentController extends Controller
                 // Save/update dependent
                 $dependentModel = null;
                 if (!empty($dep['id'])) {
-                    $dependentModel = Dependent::where('id', $dep['id'])
+
+                    $dependentModel = Dependent::with('healthInsurance')
+                        ->where('id', $dep['id'])
                         ->where('principal_id', $enrolleeId)
                         ->first();
+
                     if ($dependentModel) {
+
+                        if ($isRenewal && !empty($dependentModel->healthInsurance->certificate_number)) {
+                            $validated['enrollment_status'] = 'SUBMITTED';
+                        } else if (!$isRenewal) {
+                            $validated['enrollment_status'] = 'FOR-ENROLLMENT';
+                        }
+
                         $dependentModel->update($validated);
                         $results[] = $dependentModel;
                     } else {
@@ -229,31 +240,28 @@ class EnrolleeManageDependentController extends Controller
                 // Handle skip hierarchy fields in HealthInsurance
                 $health = HealthInsurance::where('dependent_id', $dependentModel->id)->first();
 
-                if (isset($dep['is_skipping']) && $dep['is_skipping']) {
-                    $skipFields = [
-                        'is_skipping' => $dep['is_skipping'],
-                        'reason_for_skipping' => isset($dep['reason_for_skipping']) ? $dep['reason_for_skipping'] : null,
-                        'attachment_for_skipping' => isset($dep['attachment_for_skipping']) ? $dep['attachment_for_skipping'] : null,
-                    ];
-                    if ($health) {
-                        $health->update($skipFields);
-                    } else {
-                        $skipFields['dependent_id'] = $dependentModel->id;
-                        HealthInsurance::create($skipFields);
-                    }
+                $healthInsuranceUpdate = [
+                    'is_skipping' => $dep['is_skipping'] ?? 0,
+                    'reason_for_skipping' => $dep['reason_for_skipping'] ?? null,
+                    'attachment_for_skipping' => $dep['attachment_for_skipping'] ?? null,
+                    'is_renewal' => $isRenewal,
+                ];
+
+                if ($health) {
+                    $health->update($healthInsuranceUpdate);
                 } else {
-                    // If is_skipping is not set, remove skip hierarchy fields and delete skip_hierarchy attachments
-                    if ($health) {
-                        $health->update([
-                            'is_skipping' => 0,
-                            'reason_for_skipping' => null,
-                            'attachment_for_skipping' => null,
-                        ]);
-                    }
+                    $healthInsuranceUpdate['dependent_id'] = $dependentModel->id;
+                    HealthInsurance::create($healthInsuranceUpdate);
+                }
+
+                if (!isset($dep['is_skipping']) || (isset($dep['is_skipping']) && !$dep['is_skipping'])) {
+
                     // Delete skip_hierarchy attachments for this dependent
                     $skipAttachments = Attachment::where('dependent_id', $dependentModel->id)
                         ->where('attachment_for', 'skip_hierarchy')->get();
+
                     $attachmentController = new AttachmentController();
+
                     foreach ($skipAttachments as $attachment) {
                         $attachmentController->destroy($attachment->id);
                     }

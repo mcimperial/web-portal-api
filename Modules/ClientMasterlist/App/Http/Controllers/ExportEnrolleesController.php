@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use App\Http\Traits\UppercaseInput;
+use App\Models\Company;
 
 class ExportEnrolleesController extends Controller
 {
@@ -200,7 +201,7 @@ class ExportEnrolleesController extends Controller
             $this->updateSubmittedEnrollees($enrollees);
         }
 
-        return $this->createCsvResponse($csv, $filters['enrollment_status']);
+        return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
     }
 
     /**
@@ -630,9 +631,30 @@ class ExportEnrolleesController extends Controller
     /**
      * Create CSV response with proper headers
      */
-    private function createCsvResponse($csv, $enrollmentStatus)
+    private function createCsvResponse($csv, $enrollmentStatus, $enrollees = null)
     {
-        $filename = 'EXPORT_ENROLLEES_' . ($enrollmentStatus ?: 'ALL') . '_' . date('Ymd_His') . '.csv';
+        // Get company and provider information from the first enrollee
+        $company = 'UNKNOWN';
+        $provider = 'UNKNOWN';
+
+        if ($enrollees && count($enrollees) > 0) {
+            $firstEnrollee = $enrollees->first();
+
+            // Get company code through enrollment relationship
+            if ($firstEnrollee->enrollment && $firstEnrollee->enrollment->company_id) {
+                $companyRecord = Company::find($firstEnrollee->enrollment->company_id);
+                if ($companyRecord && $companyRecord->company_code) {
+                    $company = $companyRecord->company_code;
+                }
+            }
+
+            // Get insurance provider title through enrollment relationship  
+            if ($firstEnrollee->enrollment && $firstEnrollee->enrollment->insuranceProvider) {
+                $provider = $firstEnrollee->enrollment->insuranceProvider->title ?? 'UNKNOWN';
+            }
+        }
+
+        $filename = 'EXPORT_C-' . $company . '_P-' . $provider . '_S-' . ($enrollmentStatus ?: 'ALL') . '_DT-' . date('Ymd_His') . '.csv';
 
         return response($csv)
             ->header('Content-Type', 'text/csv; charset=UTF-8')

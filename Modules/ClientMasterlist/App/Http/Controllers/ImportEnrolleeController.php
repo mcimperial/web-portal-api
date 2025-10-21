@@ -24,6 +24,73 @@ class ImportEnrolleeController extends Controller
     use UppercaseInput, DateSanitizer;
 
     /**
+     * Analyze and sanitize dates in bulk import data with improved format detection
+     * 
+     * @param array $importData Array of import rows
+     * @param array $dateFields Array of date field names to process
+     * @return array Analysis results and sanitized data
+     */
+    private function analyzeBulkDates(array $importData, array $dateFields)
+    {
+        // Collect all date values for analysis
+        $allDates = [];
+        foreach ($importData as $row) {
+            foreach ($dateFields as $field) {
+                if (!empty($row[$field])) {
+                    $allDates[] = $row[$field];
+                }
+            }
+        }
+
+        // Analyze date formats
+        $analysis = $this->analyzeDateFormats($allDates);
+
+        // Log the aggressive enforcement decision
+        if ($analysis['dmy_indicators'] > 0) {
+            Log::info("AGGRESSIVE DD/MM FORMAT ENFORCEMENT ACTIVATED", [
+                'total_dates_analyzed' => count($allDates),
+                'dd_mm_indicators_found' => $analysis['dmy_indicators'],
+                'ambiguous_dates_forced_to_dd_mm' => $analysis['ambiguous_dates'],
+                'enforcement_reason' => 'Found DD/MM indicators - forcing ALL dates to DD/MM format'
+            ]);
+        }
+
+        Log::info("Bulk date analysis completed", [
+            'total_dates_analyzed' => count($allDates),
+            'recommended_format' => $analysis['recommended_format'],
+            'confidence' => $analysis['confidence'],
+            'dmy_indicators' => $analysis['dmy_indicators'],
+            'mdy_indicators' => $analysis['mdy_indicators'],
+            'ambiguous_dates' => $analysis['ambiguous_dates']
+        ]);
+
+        return $analysis;
+    }
+
+    /**
+     * Sanitize dates using detected format preference
+     * 
+     * @param mixed $date Date value to sanitize
+     * @param string $detectedFormat Format preference from bulk analysis
+     * @return string|null Sanitized date or null
+     */
+    private function sanitizeDateWithFormat($date, $detectedFormat)
+    {
+        if (empty($date)) return null;
+
+        $sanitized = $this->sanitizeDate($date, $detectedFormat);
+
+        if (!$sanitized) {
+            Log::warning("Failed to sanitize date", [
+                'original_date' => $date,
+                'detected_format' => $detectedFormat
+            ]);
+        }
+
+        return $sanitized;
+    }
+
+    /**
      * Normalize values for comparison to avoid unnecessary updates
      */
     private function normalizeValue($value)
@@ -67,6 +134,31 @@ class ImportEnrolleeController extends Controller
             $enrollees = $request->input('enrollees', []);
             $enrollmentId = $request->input('enrollment_id');
 
+            // Perform bulk date analysis before processing individual records
+            $dateFields = [
+                'birth_date',
+                'employment_start_date',
+                'employment_end_date',
+            ];
+
+            // Check if user specified a date format preference
+            $forcedFormat = $request->input('date_format', 'mdy'); // 'dmy', 'mdy', or null for auto
+
+            if ($forcedFormat && in_array($forcedFormat, ['dmy', 'mdy'])) {
+                $dateAnalysis = ['recommended_format' => $forcedFormat];
+                Log::info("Using forced date format", [
+                    'total_enrollees' => count($enrollees),
+                    'forced_date_format' => $forcedFormat
+                ]);
+            } else {
+                $dateAnalysis = $this->analyzeBulkDates($enrollees, $dateFields);
+                Log::info("Starting import with date format analysis", [
+                    'total_enrollees' => count($enrollees),
+                    'detected_date_format' => $dateAnalysis['recommended_format'],
+                    'date_confidence' => $dateAnalysis['confidence']
+                ]);
+            }
+
             $principalMap = [];
             $dependentsByPrincipal = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
@@ -76,34 +168,6 @@ class ImportEnrolleeController extends Controller
                 $relationRaw = $enrolleeData['relation'] ?? '';
                 $relation = strtoupper(trim($relationRaw));
                 $employeeId = $enrolleeData['employee_id'] ?? null;
-
-                // Basic validation for required fields
-                if (empty($employeeId)) {
-                    Log::error('Missing employee_id for enrollee', ['index' => $index]);
-                    throw new \Exception("Employee ID is required for enrollee at index {$index}");
-                }
-
-                if (empty($enrolleeData['first_name'] ?? '') || empty($enrolleeData['last_name'] ?? '')) {
-                    Log::error('Missing name fields for enrollee', [
-                        'index' => $index,
-                        'employee_id' => $employeeId,
-                        'first_name' => $enrolleeData['first_name'] ?? '',
-                        'last_name' => $enrolleeData['last_name'] ?? ''
-                    ]);
-                    throw new \Exception("First name and last name are required for employee {$employeeId}");
-                }
-
-                // Validate relation field
-                if (empty($relation)) {
-                    Log::error('Missing or empty relation field', [
-                        'index' => $index,
-                        'employee_id' => $employeeId,
-                        'relation_raw' => $relationRaw,
-                        'first_name' => $enrolleeData['first_name'] ?? '',
-                        'last_name' => $enrolleeData['last_name'] ?? ''
-                    ]);
-                    throw new \Exception("Relation field is required for enrollee {$enrolleeData['first_name']} {$enrolleeData['last_name']} (employee: {$employeeId}) at index {$index}. Expected values: PRINCIPAL, EMPLOYEE, SPOUSE, CHILD, etc.");
-                }
 
                 // Separate health insurance fields from enrollee data
                 $healthInsuranceData = [];
@@ -118,7 +182,7 @@ class ImportEnrolleeController extends Controller
                 // Process health insurance data
                 $isPrincipal = ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE');
 
-                $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, $isPrincipal ? '0' : '1');
+                $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, $isPrincipal ? false : true);
 
                 if (isset($enrolleeData['enrollment_status']) || !empty($enrolleeData['enrollment_status'])) {
                     $enrolleeData['enrollment_status'] = $enrolleeData['enrollment_status'];
@@ -138,7 +202,7 @@ class ImportEnrolleeController extends Controller
 
                 if ($isPrincipal) {
 
-                    $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $enrollmentId, $employeeId);
+                    $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $enrollmentId, $employeeId, $dateAnalysis['recommended_format']);
 
                     // Verify principal was created/updated successfully
                     if (!$principal || !$principal->id) {
@@ -150,14 +214,14 @@ class ImportEnrolleeController extends Controller
                     // Attach health insurance if data exists
                     if (!empty($healthInsuranceData)) {
                         // Set coverage_end_date from employment_end_date if employee is INACTIVE
-                        if (isset($enrolleeData['coverage_end_date'])) {
-                            $healthInsuranceData['coverage_end_date'] = $enrolleeData['coverage_end_date'];
+                        if (isset($enrolleeData['employment_end_date'])) {
+                            $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
                         }
 
                         $this->attachHealthInsurance(new Request([
                             'enrollee_id' => $principal->id,
                             'insurance' => $healthInsuranceData
-                        ]));
+                        ]), $dateAnalysis['recommended_format']);
                     }
                 } else {
                     if (!isset($dependentsByPrincipal[$employeeId])) {
@@ -204,7 +268,7 @@ class ImportEnrolleeController extends Controller
                 $response = $this->attachDependents(new Request([
                     'enrollee_id' => $principal->id,
                     'dependents' => $dependentsData
-                ]));
+                ]), $dateAnalysis['recommended_format']);
 
                 // Attach health insurance for each dependent
                 if ($response->getStatusCode() === 200) {
@@ -217,7 +281,7 @@ class ImportEnrolleeController extends Controller
                             $this->attachHealthInsurance(new Request([
                                 'dependent_id' => $createdDependents[$index]['id'],
                                 'insurance' => $healthInsuranceData
-                            ]));
+                            ]), $dateAnalysis['recommended_format']);
                         }
                     }
                 } else {
@@ -256,12 +320,14 @@ class ImportEnrolleeController extends Controller
     {
         // Find company by company_code
         $company = Company::where('company_code', strtoupper($companyCode))->first();
+
         if (!$company) {
             throw new \Exception('Company not found with code: ' . $companyCode);
         }
 
         // Find insurance provider by title
         $insuranceProvider = InsuranceProvider::where('title', strtoupper($insuranceProviderTitle))->first();
+
         if (!$insuranceProvider) {
             throw new \Exception('Insurance provider not found with title: ' . $insuranceProviderTitle);
         }
@@ -288,10 +354,32 @@ class ImportEnrolleeController extends Controller
         try {
             $enrollees = $request->input('enrollees', []);
 
-            Log::info('Import request data:', [
-                'enrollees_count' => count($enrollees),
-                'first_enrollee' => $enrollees[0] ?? null
-            ]);
+            // Perform bulk date analysis before processing individual records
+            $dateFields = [
+                'birth_date',
+                'employment_start_date',
+                'employment_end_date',
+            ];
+
+            // Check if user specified a date format preference
+            $forcedFormat = $request->input('date_format', 'dmy'); // 'dmy', 'mdy', or null for auto
+
+            if ($forcedFormat && in_array($forcedFormat, ['dmy', 'mdy'])) {
+                $dateAnalysis = ['recommended_format' => $forcedFormat];
+                Log::info('Using forced date format for import with company and provider', [
+                    'enrollees_count' => count($enrollees),
+                    'forced_date_format' => $forcedFormat,
+                    'first_enrollee' => $enrollees[0] ?? null
+                ]);
+            } else {
+                $dateAnalysis = $this->analyzeBulkDates($enrollees, $dateFields);
+                Log::info('Import request data with date format analysis:', [
+                    'enrollees_count' => count($enrollees),
+                    'first_enrollee' => $enrollees[0] ?? null,
+                    'detected_date_format' => $dateAnalysis['recommended_format'],
+                    'date_confidence' => $dateAnalysis['confidence']
+                ]);
+            }
 
             $principalMap = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
@@ -323,6 +411,7 @@ class ImportEnrolleeController extends Controller
 
                 // Separate health insurance fields from enrollee data
                 $healthInsuranceData = [];
+
                 foreach ($insuranceFields as $field) {
                     if (array_key_exists($field, $enrolleeData)) {
                         $healthInsuranceData[$field] = $enrolleeData[$field];
@@ -330,25 +419,27 @@ class ImportEnrolleeController extends Controller
                     }
                 }
 
-                // Process health insurance data
-                $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, '0');
-                //$enrolleeData['enrollment_status'] = 'PENDING';
-
                 // Handle employment end date for health insurance
                 if (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) {
                     $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
                 }
 
-                // Create or update principal with soft delete handling
-                $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId);
-                $principalMap[$employeeId] = $principal;
+                // Process health insurance data
+                $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
 
-                // Attach health insurance if data exists
-                if (!empty($healthInsuranceData)) {
-                    $this->attachHealthInsurance(new Request([
-                        'enrollee_id' => $principal->id,
-                        'insurance' => $healthInsuranceData
-                    ]));
+                if (!$healthInsuranceData['is_renewal']) {
+
+                    // Create or update principal with soft delete handling
+                    $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
+                    $principalMap[$employeeId] = $principal;
+
+                    // Attach health insurance if data exists
+                    if (!empty($healthInsuranceData)) {
+                        $this->attachHealthInsurance(new Request([
+                            'enrollee_id' => $principal->id,
+                            'insurance' => $healthInsuranceData
+                        ]), $dateAnalysis['recommended_format']);
+                    }
                 }
             }
 
@@ -359,8 +450,10 @@ class ImportEnrolleeController extends Controller
 
             // Commit all transaction levels to ensure data is actually saved
             $transactionLevel = DB::transactionLevel();
+
             for ($i = 0; $i < $transactionLevel; $i++) {
                 DB::commit();
+
                 Log::info('Committed transaction level', [
                     'level' => $i + 1,
                     'remaining_levels' => DB::transactionLevel()
@@ -372,18 +465,9 @@ class ImportEnrolleeController extends Controller
                 'final_transaction_level' => DB::transactionLevel()
             ]);
 
-            // Verify data was actually saved
-            $totalPrincipals = Enrollee::withTrashed()->count();
-            $rawPrincipalsCount = DB::select("SELECT COUNT(*) as count FROM cm_principal")[0]->count ?? 0;
-
-            Log::info('Post-commit verification for importWithCompanyAndProvider', [
-                'eloquent_count' => $totalPrincipals,
-                'raw_sql_count' => $rawPrincipalsCount,
-                'expected_principals' => count($principalMap)
-            ]);
-
             return response()->json(['message' => 'Import successful'], 200);
         } catch (\Exception $e) {
+
             Log::error('Exception occurred during importWithCompanyAndProvider', [
                 'error' => $e->getMessage(),
                 'transaction_level_before_rollback' => DB::transactionLevel()
@@ -391,6 +475,7 @@ class ImportEnrolleeController extends Controller
 
             // Rollback all transaction levels
             $transactionLevel = DB::transactionLevel();
+
             for ($i = 0; $i < $transactionLevel; $i++) {
                 DB::rollBack();
                 Log::info('Rolled back transaction level', [
@@ -410,24 +495,25 @@ class ImportEnrolleeController extends Controller
     /**
      * Create or update principal with soft delete handling
      */
-    private function createOrUpdatePrincipalWithSoftDelete(array $enrolleeData, int $enrollmentId, string $employeeId): Enrollee
+    private function createOrUpdatePrincipalWithSoftDelete(array $enrolleeData, int $enrollmentId, string $employeeId, string $dateFormat = 'auto'): Enrollee
     {
         $enrolleeData['enrollment_id'] = $enrollmentId;
 
         // Store original employment_end_date before sanitization to check for soft deletion
         $originalEmploymentEndDate = $enrolleeData['employment_end_date'] ?? null;
 
-        // Sanitize date fields
+        // Sanitize date fields using detected format
         $enrolleeDateFields = ['birth_date', 'employment_start_date', 'employment_end_date'];
 
         foreach ($enrolleeDateFields as $dateField) {
             if (isset($enrolleeData[$dateField]) && !empty($enrolleeData[$dateField])) {
                 $originalDate = $enrolleeData[$dateField];
-                $enrolleeData[$dateField] = $this->sanitizeDate($enrolleeData[$dateField]);
+                $enrolleeData[$dateField] = $this->sanitizeDateWithFormat($enrolleeData[$dateField], $dateFormat);
                 Log::info("Sanitized enrollee date field", [
                     'field' => $dateField,
                     'original' => $originalDate,
-                    'sanitized' => $enrolleeData[$dateField]
+                    'sanitized' => $enrolleeData[$dateField],
+                    'format_used' => $dateFormat
                 ]);
             }
         }
@@ -442,41 +528,39 @@ class ImportEnrolleeController extends Controller
         if ((isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) ||
             ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)))
         ) {
-
             if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
                 $enrolleeData['status'] = 'INACTIVE';
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
-                //$shouldSoftDelete = true;
+                $shouldSoftDelete = true;
             }
-
-            // Set coverage_end_date for health insurance
-            $enrolleeData['coverage_end_date'] = $enrolleeData['employment_end_date'] ?? $originalEmploymentEndDate;
         }
 
-        $principalQuery = Enrollee::withTrashed()
+        $principalQuery = Enrollee::with(['healthInsurance'])
+            ->withTrashed()
             ->where('employee_id', $employeeId)
             ->where('enrollment_id', $enrollmentId);
 
         // Always include birth_date in the query to ensure proper uniqueness
-        if (isset($enrolleeData['birth_date'])) {
+        /* if (isset($enrolleeData['birth_date'])) {
             $principalQuery = $principalQuery->where('birth_date', $enrolleeData['birth_date']);
         } else {
             $principalQuery = $principalQuery->whereNull('birth_date');
-        }
+        } */
 
         $existingPrincipal = $principalQuery->first();
 
+        $isRenewal = $existingPrincipal && $existingPrincipal->healthInsurance
+            ? $existingPrincipal->healthInsurance->is_renewal
+            : false;
+
         if ($existingPrincipal) {
-            if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
+
+            return $existingPrincipal;
+            /* if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
                 // Simplified logic: If record is trashed, restore it if no employment_end_date, otherwise update but keep trashed
-                if (!$shouldSoftDelete) {
-                    // No employment_end_date means employee is active, so restore from trash
-                    $existingPrincipal->restore();
+                if (!$isRenewal)
                     $existingPrincipal->update($enrolleeData);
-                } else {
-                    // Has employment_end_date, so update data but keep it trashed
-                    $existingPrincipal->update($enrolleeData);
-                }
+                //$existingPrincipal->restore();
             } else {
                 // Check for changes before updating existing active record
                 $hasChanges = false;
@@ -506,19 +590,18 @@ class ImportEnrolleeController extends Controller
 
                 // Update if there are changes
                 if ($hasChanges) {
-                    $existingPrincipal->update($enrolleeData);
+                    if (!$isRenewal)
+                        $existingPrincipal->update($enrolleeData);
                 }
 
                 // Handle soft deletion if employment_end_date exists
                 if ($shouldSoftDelete) {
-
                     $currentUserId = auth()->check() ? auth()->user()->id : 1;
                     $existingPrincipal->update(['deleted_by' => $currentUserId]);
                     $existingPrincipal->delete();
                 }
             }
-
-            return $existingPrincipal;
+            return $existingPrincipal; */
         } else {
 
             // Ensure employee_id is set properly to prevent auto-generation
@@ -549,7 +632,7 @@ class ImportEnrolleeController extends Controller
         }
     }
 
-    public function attachDependents(Request $request): JsonResponse
+    public function attachDependents(Request $request, string $dateFormat = 'auto'): JsonResponse
     {
         DB::beginTransaction();
 
@@ -587,11 +670,12 @@ class ImportEnrolleeController extends Controller
 
                         $originalDate = $filtered[$dateField];
 
-                        $filtered[$dateField] = $this->sanitizeDate($filtered[$dateField]);
+                        $filtered[$dateField] = $this->sanitizeDateWithFormat($filtered[$dateField], $dateFormat);
                         Log::info("Sanitized dependent date field", [
                             'field' => $dateField,
                             'original' => $originalDate,
-                            'sanitized' => $filtered[$dateField]
+                            'sanitized' => $filtered[$dateField],
+                            'format_used' => $dateFormat
                         ]);
                     }
                 }
@@ -635,7 +719,7 @@ class ImportEnrolleeController extends Controller
     /**
      * Process health insurance data and convert boolean fields
      */
-    private function processHealthInsuranceData(array $healthInsuranceData, string $defaultCompanyPaidValue = '0'): array
+    private function processHealthInsuranceData(array $healthInsuranceData, bool $defaultCompanyPaidValue = false): array
     {
         // Convert is_company_paid from 'Yes'/'No' to 1/0 if present
         if (isset($healthInsuranceData['is_company_paid'])) {
@@ -643,10 +727,10 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_company_paid'] = (int)$healthInsuranceData['is_company_paid'];
             } else {
                 $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
-                $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
+                $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? true : false;
             }
         } else {
-            $healthInsuranceData['is_company_paid'] = (int)$defaultCompanyPaidValue;
+            $healthInsuranceData['is_company_paid'] = true;
         }
 
         // Convert is_renewal from 'Yes'/'No' to 1/0 if present
@@ -655,10 +739,10 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_renewal'] = (int)$healthInsuranceData['is_renewal'];
             } else {
                 $value = strtoupper(trim($healthInsuranceData['is_renewal']));
-                $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
+                $healthInsuranceData['is_renewal'] = ($value === 'YES') ? true : false;
             }
         } else {
-            $healthInsuranceData['is_renewal'] = 0;
+            $healthInsuranceData['is_renewal'] = false;
         }
 
         // Convert is_skipping from 'Yes'/'No' to 1/0 if present
@@ -667,14 +751,14 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_skipping'] = (int)$healthInsuranceData['is_skipping'];
             } else {
                 $value = strtoupper(trim($healthInsuranceData['is_skipping']));
-                $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
+                $healthInsuranceData['is_skipping'] = ($value === 'YES') ? true : false;
             }
         } else {
-            $healthInsuranceData['is_skipping'] = 0;
+            $healthInsuranceData['is_skipping'] = false;
 
             if (isset($healthInsuranceData['reason_for_skipping'])) {
                 if (!empty($healthInsuranceData['reason_for_skipping'])) {
-                    $healthInsuranceData['is_skipping'] = 1;
+                    $healthInsuranceData['is_skipping'] = true;
                 }
             }
         }
@@ -682,7 +766,7 @@ class ImportEnrolleeController extends Controller
         return $healthInsuranceData;
     }
 
-    public function attachHealthInsurance(Request $request): JsonResponse
+    public function attachHealthInsurance(Request $request, string $dateFormat = 'auto'): JsonResponse
     {
         DB::beginTransaction();
 
@@ -714,11 +798,12 @@ class ImportEnrolleeController extends Controller
             foreach ($dateFields as $dateField) {
                 if (isset($filtered[$dateField]) && !empty($filtered[$dateField])) {
                     $originalDate = $filtered[$dateField];
-                    $filtered[$dateField] = $this->sanitizeDate($filtered[$dateField]);
+                    $filtered[$dateField] = $this->sanitizeDateWithFormat($filtered[$dateField], $dateFormat);
                     Log::info("Sanitized insurance date field", [
                         'field' => $dateField,
                         'original' => $originalDate,
-                        'sanitized' => $filtered[$dateField]
+                        'sanitized' => $filtered[$dateField],
+                        'format_used' => $dateFormat
                     ]);
                 }
             }
