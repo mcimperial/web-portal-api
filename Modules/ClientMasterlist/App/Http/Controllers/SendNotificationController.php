@@ -656,7 +656,7 @@ class SendNotificationController extends Controller
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
-                    'columns' => [$columns]
+                    'columns' => $columns
                 ];
             case 'REPORT: ATTACHMENT (APPROVED)':
                 // Return data for CSV generation for approved enrollees
@@ -670,7 +670,7 @@ class SendNotificationController extends Controller
                     'with_dependents' => true,
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
-                    'columns' => [$columns]
+                    'columns' => $columns
                 ];
             default:
                 // No action needed for other types
@@ -804,7 +804,7 @@ class SendNotificationController extends Controller
 
             // Create a request object with the parameters
             $request = new Request([
-                'maxicare_customized_column' => $statusResult['maxicare_customized_column'] ?? false,
+                'maxicare_customized_column' => $statusResult['maxicare_customized_column'],
                 'enrollment_id' => $statusResult['enrollment_id'],
                 'enrollment_status' => $statusResult['enrollment_status'] ?? null,
                 'export_enrollment_type' => $statusResult['export_enrollment_type'] ?? 'REGULAR',

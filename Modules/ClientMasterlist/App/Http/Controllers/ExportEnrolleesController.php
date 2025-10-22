@@ -179,7 +179,6 @@ class ExportEnrolleesController extends Controller
 
         $enrollees = $query->get();
 
-
         if ($filters['maxicare_customized_column']) {
             Log::info('Maxicare customized column is true. Adding Maxicare specific columns.');
             // Merge Maxicare specific columns
@@ -361,11 +360,23 @@ class ExportEnrolleesController extends Controller
         // Normalize columns input
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
+        } elseif (is_array($columns)) {
+            // Flatten any nested arrays and ensure all values are strings
+            $flatColumns = [];
+            array_walk_recursive($columns, function ($value) use (&$flatColumns) {
+                if (is_string($value) || is_numeric($value)) {
+                    $flatColumns[] = (string)$value;
+                }
+            });
+            $columns = $flatColumns;
+        } else {
+            // If it's neither string nor array, default to empty array
+            $columns = [];
         }
 
-        // Remove empty and duplicate columns
+        // Remove empty and duplicate columns - now we're sure all values are strings
         $columns = array_values(array_unique(array_filter($columns, function ($v) {
-            return trim($v) !== '';
+            return is_string($v) && trim($v) !== '';
         })));
 
         Log::info('Initial columns after normalization', ['columns' => $columns]);
