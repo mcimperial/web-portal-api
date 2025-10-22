@@ -187,7 +187,7 @@ class ExportEnrolleesController extends Controller
         }
 
         // Process columns based on enrollee data
-        $columns = $this->processColumns($columns, $enrollees);
+        $columns = $this->processColumns($columns, $enrollees, $filters['maxicare_customized_column']);
 
         // Generate CSV data
         $headers = $this->generateHeaders($columns, $filters['maxicare_customized_column']);
