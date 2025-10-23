@@ -586,7 +586,7 @@ class SendNotificationController extends Controller
             $insuranceProvider = $notification->enrollment->insuranceProvider->title;
         }
 
-        if ($insuranceProvider === 'MAXICARE') {
+        /* if ($insuranceProvider === 'MAXICARE') {
             // Return empty to skip Maxicare submitted report generation
             $columns = [
                 'maxicare_account_code',
@@ -636,7 +636,9 @@ class SendNotificationController extends Controller
                 'department',
                 'position',
             ];
-        }
+        } */
+
+        $columns = [];
 
         switch ($notificationType) {
             case 'APPROVED BY HMO (WELCOME EMAIL)':

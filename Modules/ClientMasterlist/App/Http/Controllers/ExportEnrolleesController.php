@@ -75,7 +75,10 @@ class ExportEnrolleesController extends Controller
         'certificate_date_issued'
     ];
 
-    private const MAXICARE_CUSTOM_COLUMNS = [
+    /**
+     * Maxicare specific custom columns
+     */
+    private const MAXICARE_COLUMN_LABELS = [
         // Maxicare specific add-on columns
         'maxicare_account_code' => 'Account Code',
         'maxicare_employee_id' => 'Employee No',
@@ -111,9 +114,24 @@ class ExportEnrolleesController extends Controller
     ];
 
     /**
-     * Maxicare specific add-on fields
+     * specific custom headers for automatic export
      */
-    private const MAXICARE_ADDON_FIELDS = [
+    private const AUTO_HEADER = [
+        'enrollment_status',
+        'relation',
+        'employee_id',
+        'first_name',
+        'last_name',
+        'middle_name',
+        'birth_date',
+        'gender',
+        'email1',
+        'phone1',
+        'department',
+        'position'
+    ];
+
+    private const AUTO_MAXICARE_CUSTOM_HEADER = [
         'maxicare_account_code',
         'maxicare_employee_id',
         'maxicare_first_name',
@@ -165,8 +183,6 @@ class ExportEnrolleesController extends Controller
         $withDependents = $request->query('with_dependents', false);
         $isForAttachment = $request->query('for_attachment', false);
 
-        $columns = $request->query('columns', []);
-
         // Build query and get enrollees
         $query = $this->buildBaseQuery($filters);
 
@@ -182,7 +198,13 @@ class ExportEnrolleesController extends Controller
         if ($filters['maxicare_customized_column']) {
             Log::info('Maxicare customized column is true. Adding Maxicare specific columns.');
             // Merge Maxicare specific columns
-            $columns = self::MAXICARE_ADDON_FIELDS;
+            $columns = self::AUTO_MAXICARE_CUSTOM_HEADER;
+        } else {
+            if ($isForAttachment) {
+                $columns = self::AUTO_HEADER;
+            } else {
+                $columns = $request->query('columns', []);
+            }
         }
 
         // Process columns based on enrollee data
@@ -219,7 +241,21 @@ class ExportEnrolleesController extends Controller
      */
     private function buildBaseQuery($filters = [])
     {
-        $query = Enrollee::with(['healthInsurance', 'dependents', 'enrollment.insuranceProvider'])
+        // Build the relationships array based on enrollment status filter
+        $relationships = ['healthInsurance', 'enrollment.insuranceProvider'];
+
+        if (isset($filters['enrollment_status']) && $filters['enrollment_status'] === 'APPROVED') {
+            // When filtering for APPROVED status, only load APPROVED dependents
+            Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
+            $relationships['dependents'] = function ($query) {
+                $query->where('enrollment_status', 'APPROVED');
+            };
+        } else {
+            // Load all active dependents (default behavior)
+            $relationships[] = 'dependents';
+        }
+
+        $query = Enrollee::with($relationships)
             ->where('status', 'ACTIVE')
             ->whereNull('deleted_at');
 
@@ -235,19 +271,35 @@ class ExportEnrolleesController extends Controller
                 'export_enrollment_type' => $filters['export_enrollment_type'] ?? null
             ]);
             $this->applyEnrollmentStatusFilter($query, $filters);
-        } else {
-            Log::info('Skipping enrollment status filter - no enrollment_status provided', [
-                'filters' => $filters
-            ]);
         }
 
         // Apply date range filters
         if (!empty($filters['date_from'])) {
-            $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
+            if ($filters['enrollment_status'] === 'APPROVED') {
+                $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                    // Filter records where coverage starts on or after the date_from
+                    $subQ->where(function ($dateQ) use ($filters) {
+                        $dateQ->where('coverage_start_date', '<', $filters['date_from'])
+                            ->orWhereNull('coverage_start_date');
+                    });
+                });
+            } else {
+                $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
+            }
         }
 
         if (!empty($filters['date_to'])) {
-            $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
+            if ($filters['enrollment_status'] === 'APPROVED') {
+                $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                    // Filter records where coverage ends on or before the date_to
+                    $subQ->where(function ($dateQ) use ($filters) {
+                        $dateQ->where('coverage_end_date', '<', $filters['date_to'])
+                            ->orWhereNull('coverage_end_date');
+                    });
+                });
+            } else {
+                $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
+            }
         }
 
         return $query;
@@ -262,11 +314,6 @@ class ExportEnrolleesController extends Controller
         $enrollmentStatus = $filters['enrollment_status'];
         $exportType = $filters['export_enrollment_type'];
 
-        Log::info('Inside applyEnrollmentStatusFilter', [
-            'enrollmentStatus' => $enrollmentStatus,
-            'exportType' => $exportType
-        ]);
-
         if ($exportType === 'RENEWAL') {
             Log::info('Applying RENEWAL export filters');
             // For RENEWAL exports, ALWAYS ensure is_renewal is true first
@@ -276,13 +323,9 @@ class ExportEnrolleesController extends Controller
             });
 
             if ($enrollmentStatus === 'PENDING') {
-                Log::info('RENEWAL with PENDING status - filtering for FOR-RENEWAL');
-                // enrollment_status is FOR-RENEWAL (since PENDING renewals show as FOR-RENEWAL)
                 $query->where('enrollment_status', 'FOR-RENEWAL');
             } else {
                 if (isset($enrollmentStatus)) {
-                    Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
-                    // For other statuses in RENEWAL export
                     $query->where('enrollment_status', $enrollmentStatus);
                 }
             }
@@ -290,7 +333,6 @@ class ExportEnrolleesController extends Controller
             $query->whereHas('healthInsurance', function ($subQ) {
                 $subQ->where('is_renewal', false);
             });
-            Log::info('Applying REGULAR export filters');
             // For REGULAR exports, ensure is_renewal is false
             if (isset($enrollmentStatus)) {
                 Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
@@ -298,10 +340,8 @@ class ExportEnrolleesController extends Controller
                 $query->where('enrollment_status', $enrollmentStatus);
             }
         } else {
-            Log::info('Applying ALL export filters (no specific type)');
             // For ALL exports (no specific type filter)
             if ($enrollmentStatus === 'PENDING') {
-                Log::info('ALL export with PENDING status - filtering for FOR-RENEWAL OR PENDING');
                 $query->where(function ($q) {
                     $q->where('enrollment_status', 'FOR-RENEWAL')
                         ->orWhere('enrollment_status', 'PENDING');
@@ -340,7 +380,7 @@ class ExportEnrolleesController extends Controller
     {
         if ($maxicareCustomizedColumn) {
             $headers = array_map(function ($col) {
-                return self::MAXICARE_CUSTOM_COLUMNS[$col] ?? $col;
+                return self::MAXICARE_COLUMN_LABELS[$col] ?? $col;
             }, $columns);
         } else {
             $headers = array_map(function ($col) {
@@ -480,6 +520,9 @@ class ExportEnrolleesController extends Controller
 
             case 'is_renewal':
                 return !$isPrincipal && $principal ? ($principal->healthInsurance->is_renewal ? 'YES' : 'NO') : ($entity->healthInsurance->is_renewal ? 'YES' : 'NO');
+
+            case 'is_company_paid':
+                return !$isPrincipal && $principal ? ($principal->healthInsurance->is_company_paid ? 'YES' : 'NO') : ($entity->healthInsurance->is_company_paid ? 'YES' : 'NO');
 
             case 'required_document':
                 if (

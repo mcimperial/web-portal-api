@@ -191,6 +191,29 @@ class EnrolleeController extends Controller
             'certificate_date_issued' => 'nullable|date',
         ]);
         $data = $this->uppercaseStrings($validated);
+
+        if (!empty($insuranceData['certificate_number']) && $data['enrollment_status'] <> 'APPROVED' && !$insuranceData['is_renewal']) {
+            $insuranceData['certificate_date_issued'] = date('Y-m-d');
+            $data['enrollment_status'] = 'APPROVED';
+
+            if (empty($insuranceData['coverage_start_date'])) {
+                $insuranceData['coverage_start_date'] = date('Y-m-d', strtotime('+1 month', strtotime(date('Y-m-01'))));
+            }
+        }
+
+        // Check employment_end_date to possibly update status and enrollment_status
+        if ((isset($data['employment_end_date']) && !empty($data['employment_end_date'])) || (isset($data['coverage_end_date']) && !empty($data['coverage_end_date']))) {
+            if (($data['employment_end_date'] < date('Y-m-d')) || ($data['coverage_end_date'] < date('Y-m-d'))) {
+                $data['status'] = 'INACTIVE';
+                $data['enrollment_status'] = 'RESIGNED';
+            }
+            if (isset($data['employment_end_date']) && !empty($data['employment_end_date']))
+                $insuranceData['coverage_end_date'] = $data['employment_end_date'];
+
+            if (isset($data['coverage_end_date']) && !empty($data['coverage_end_date']))
+                $data['employment_end_date'] = $data['coverage_end_date'];
+        }
+
         $enrollee = Enrollee::create($data);
         // Save health insurance
         $insuranceData['principal_id'] = $enrollee->id;
@@ -249,11 +272,36 @@ class EnrolleeController extends Controller
             'certificate_date_issued' => 'nullable|date',
         ]);
         $data = $this->uppercaseStrings($validated);
+
+        if (!empty($insuranceData['certificate_number']) && $data['enrollment_status'] <> 'APPROVED' && !$insuranceData['is_renewal']) {
+            $insuranceData['certificate_date_issued'] = date('Y-m-d');
+            $data['enrollment_status'] = 'APPROVED';
+
+            if (empty($insuranceData['coverage_start_date'])) {
+                $insuranceData['coverage_start_date'] = date('Y-m-d', strtotime('+1 month', strtotime(date('Y-m-01'))));
+            }
+        }
+
+        // Check employment_end_date to possibly update status and enrollment_status
+        if ((isset($data['employment_end_date']) && !empty($data['employment_end_date'])) || (isset($insuranceData['coverage_end_date']) && !empty($insuranceData['coverage_end_date']))) {
+            if (($data['employment_end_date'] < date('Y-m-d')) || ($insuranceData['coverage_end_date'] < date('Y-m-d'))) {
+                $data['status'] = 'INACTIVE';
+                $data['enrollment_status'] = 'RESIGNED';
+            }
+            if (isset($data['employment_end_date']) && !empty($data['employment_end_date']))
+                $insuranceData['coverage_end_date'] = $data['employment_end_date'];
+
+            if (isset($insuranceData['coverage_end_date']) && !empty($insuranceData['coverage_end_date']))
+                $data['employment_end_date'] = $insuranceData['coverage_end_date'];
+        }
+
         $enrollee->update($data);
+
         // Save or update health insurance
         $insuranceData['principal_id'] = $enrollee->id;
         $insurance = HealthInsurance::where('principal_id', $enrollee->id)->first();
         $insuranceData = $this->uppercaseStrings($insuranceData);
+
         if ($insurance) {
             $insurance->update($insuranceData);
         } else {

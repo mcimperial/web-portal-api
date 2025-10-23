@@ -88,6 +88,7 @@ class DependentController extends Controller
     public function update(Request $request, $id)
     {
         $dependent = Dependent::findOrFail($id);
+
         $validated = $request->validate([
             'employee_id' => 'nullable|string|max:255',
             'first_name' => 'required|string|max:255',

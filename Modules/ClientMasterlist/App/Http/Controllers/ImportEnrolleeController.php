@@ -540,6 +540,7 @@ class ImportEnrolleeController extends Controller
             ->where('enrollment_id', $enrollmentId);
 
         // Always include birth_date in the query to ensure proper uniqueness
+
         /* if (isset($enrolleeData['birth_date'])) {
             $principalQuery = $principalQuery->where('birth_date', $enrolleeData['birth_date']);
         } else {
@@ -555,6 +556,7 @@ class ImportEnrolleeController extends Controller
         if ($existingPrincipal) {
 
             return $existingPrincipal;
+
             /* if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
                 // Simplified logic: If record is trashed, restore it if no employment_end_date, otherwise update but keep trashed
                 if (!$isRenewal)
