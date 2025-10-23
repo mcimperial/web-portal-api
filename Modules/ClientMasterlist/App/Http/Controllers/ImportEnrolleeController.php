@@ -427,19 +427,19 @@ class ImportEnrolleeController extends Controller
                 // Process health insurance data
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
 
-                if (!$healthInsuranceData['is_renewal']) {
-                    // Create or update principal with soft delete handling
-                    $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
-                    $principalMap[$employeeId] = $principal;
+                //if (!$healthInsuranceData['is_renewal']) {
+                // Create or update principal with soft delete handling
+                $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
+                $principalMap[$employeeId] = $principal;
 
-                    // Attach health insurance if data exists
-                    if (!empty($healthInsuranceData)) {
-                        $this->attachHealthInsurance(new Request([
-                            'enrollee_id' => $principal->id,
-                            'insurance' => $healthInsuranceData
-                        ]), $dateAnalysis['recommended_format']);
-                    }
+                // Attach health insurance if data exists
+                if (!empty($healthInsuranceData)) {
+                    $this->attachHealthInsurance(new Request([
+                        'enrollee_id' => $principal->id,
+                        'insurance' => $healthInsuranceData
+                    ]), $dateAnalysis['recommended_format']);
                 }
+                //}
             }
 
             Log::info('About to commit transaction', [
