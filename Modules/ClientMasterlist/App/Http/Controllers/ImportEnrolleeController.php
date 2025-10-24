@@ -743,8 +743,6 @@ class ImportEnrolleeController extends Controller
                     $value = strtoupper(trim($healthInsuranceData['is_renewal']));
                     $healthInsuranceData['is_renewal'] = ($value === 'YES') ? true : false;
                 }
-            } else {
-                $healthInsuranceData['is_renewal'] = false;
             }
         }
 

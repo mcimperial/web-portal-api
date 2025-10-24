@@ -398,25 +398,6 @@ class ExportEnrolleesController extends Controller
      */
     private function processColumns($columns, $enrollees, $maxicareCustomizedColumn = false)
     {
-        if (!$maxicareCustomizedColumn) {
-            // Always add effective_date
-            if (!in_array('effective_date', $columns)) {
-                $columns[] = 'effective_date';
-            }
-
-            // Always add enrollment_status
-            if (!in_array('enrollment_status', $columns)) {
-                $columns[] = 'enrollment_status';
-            }
-
-            // Add relation column if withDependents is true
-            if (!in_array('relation', $columns)) {
-                $columns[] = 'relation';
-            }
-        }
-
-        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
-
         // Normalize columns input
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
@@ -441,6 +422,25 @@ class ExportEnrolleesController extends Controller
 
         Log::info('Initial columns after normalization', ['columns' => $columns]);
 
+
+        if (!$maxicareCustomizedColumn) {
+            // Always add effective_date
+            if (!in_array('effective_date', $columns)) {
+                $columns[] = 'effective_date';
+            }
+
+            // Always add enrollment_status
+            if (!in_array('enrollment_status', $columns)) {
+                $columns[] = 'enrollment_status';
+            }
+
+            // Add relation column if withDependents is true
+            if (!in_array('relation', $columns)) {
+                $columns[] = 'relation';
+            }
+        }
+
+        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
 
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
