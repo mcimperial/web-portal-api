@@ -18,6 +18,7 @@ class Enrollment extends Model
         'note',
         'with_address',
         'with_skip_hierarchy',
+        'account_code',
         'premium',
         'premium_computation',
         'premium_variable',

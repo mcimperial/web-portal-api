@@ -20,6 +20,7 @@ class ExportEnrolleesController extends Controller
         'remarks' => 'Remarks',
         'reason_for_skipping' => 'Reason for Skipping',
         'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+        'effective_date' => 'Effective Date',
         //'attachment' => 'Attachment for Skip Hierarchy',
         'required_document' => 'Required Document',
         'enrollment_status' => 'Enrollment Status',
@@ -397,6 +398,25 @@ class ExportEnrolleesController extends Controller
      */
     private function processColumns($columns, $enrollees, $maxicareCustomizedColumn = false)
     {
+        if (!$maxicareCustomizedColumn) {
+            // Always add effective_date
+            if (!in_array('effective_date', $columns)) {
+                $columns[] = 'effective_date';
+            }
+
+            // Always add enrollment_status
+            if (!in_array('enrollment_status', $columns)) {
+                $columns[] = 'enrollment_status';
+            }
+
+            // Add relation column if withDependents is true
+            if (!in_array('relation', $columns)) {
+                $columns[] = 'relation';
+            }
+        }
+
+        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
+
         // Normalize columns input
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
@@ -421,19 +441,6 @@ class ExportEnrolleesController extends Controller
 
         Log::info('Initial columns after normalization', ['columns' => $columns]);
 
-        if ($maxicareCustomizedColumn) {
-            // Always add enrollment_status
-            if (!in_array('enrollment_status', $columns)) {
-                $columns[] = 'enrollment_status';
-            }
-
-            // Add relation column if withDependents is true
-            if (!in_array('relation', $columns)) {
-                $columns[] = 'relation';
-            }
-        }
-
-        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
 
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
@@ -506,6 +513,9 @@ class ExportEnrolleesController extends Controller
                 }
                 return '';
 
+            case 'effective_date':
+                return date('Y-m-d', strtotime('first day of next month'));
+
             case 'enrollment_status':
                 return $entity->enrollment_status ?? '';
 
@@ -568,7 +578,11 @@ class ExportEnrolleesController extends Controller
                 return '';
 
             case 'maxicare_account_code':
-                return '9700729635';
+                // For dependents, use principal's enrollment account code
+                $enrollment = $isPrincipal ? $entity->enrollment : ($principal ? $principal->enrollment : null);
+                return $enrollment && $enrollment->account_code
+                    ? ($enrollment->account_code ?? '')
+                    : '';
 
             case 'maxicare_employee_id':
                 return $isPrincipal ? ($entity->employee_id ?? '') : ($principal ? ($principal->employee_id ?? '') : '');
@@ -626,7 +640,7 @@ class ExportEnrolleesController extends Controller
                 return $entity->birth_date;
 
             case 'maxicare_effective_date':
-                return date('Y-m-d', strtotime('+1 month'));
+                return date('Y-m-d', strtotime('first day of next month'));
 
             case 'maxicare_date_hired':
                 return $entity->employment_start_date;
