@@ -20,7 +20,7 @@ class EnrolleeManageDependentController extends Controller
 
     public function show($uuid)
     {
-        $enrollee = Enrollee::with(['dependents.healthInsurance', 'healthInsurance',  'enrollment'])->where('uuid', $uuid)->first();
+        $enrollee = Enrollee::with(['dependents.healthInsurance', 'healthInsurance',  'enrollment', 'enrollment.company'])->where('uuid', $uuid)->first();
 
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);

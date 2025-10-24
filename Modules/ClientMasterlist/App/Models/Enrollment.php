@@ -37,4 +37,9 @@ class Enrollment extends Model
     {
         return $this->belongsTo(InsuranceProvider::class, 'insurance_provider_id');
     }
+
+    public function company()
+    {
+        return $this->belongsTo(\App\Models\Company::class, 'company_id');
+    }
 }
