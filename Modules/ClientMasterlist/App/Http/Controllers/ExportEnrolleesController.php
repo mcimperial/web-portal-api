@@ -588,13 +588,13 @@ class ExportEnrolleesController extends Controller
                 return $isPrincipal ? ($entity->employee_id ?? '') : ($principal ? ($principal->employee_id ?? '') : '');
 
             case 'maxicare_first_name':
-                return $isPrincipal ? ($entity->first_name ?? '') : ($principal ? ($principal->first_name ?? '') : '');
+                return $entity->first_name ?? '';
 
             case 'maxicare_last_name':
-                return $isPrincipal ? ($entity->last_name ?? '') : ($principal ? ($principal->last_name ?? '') : '');
+                return $entity->last_name ?? '';
 
             case 'maxicare_middle_name':
-                return $isPrincipal ? ($entity->middle_name ?? '') : ($principal ? ($principal->middle_name ?? '') : '');
+                return $entity->middle_name ?? '';
 
             case 'maxicare_member_type':
                 return $isPrincipal ? 'P' : 'D';
