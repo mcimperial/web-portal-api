@@ -621,6 +621,28 @@ class ExportEnrolleesController extends Controller
                         return 'P'; // Other
                 }
 
+            case 'maxicare_address_line_1':
+                // Parse comma-separated address: address_line_1, address_line_2, city, province, postal_code
+                $addressParts = $this->parseAddress($entity->address ?? '');
+                return $addressParts['address_line_1'];
+
+            case 'maxicare_address_line_2':
+                $addressParts = $this->parseAddress($entity->address ?? '');
+                return $addressParts['address_line_2'];
+
+            case 'maxicare_city':
+                $addressParts = $this->parseAddress($entity->address ?? '');
+                return $addressParts['city'];
+
+            case 'maxicare_province':
+                $addressParts = $this->parseAddress($entity->address ?? '');
+                return $addressParts['province'];
+
+            case 'maxicare_postal_code':
+                $addressParts = $this->parseAddress($entity->address ?? '');
+                return $addressParts['postal_code'];
+
+
             case 'maxicare_civil_status':
                 // Use the marital_status from the entity, or default value
                 $maritalStatus = $entity->marital_status ?? '';
@@ -810,5 +832,40 @@ class ExportEnrolleesController extends Controller
                 $enrollee->save();
             }
         }
+    }
+
+    /**
+     * Parse comma-separated address into categorized components
+     * Expected format: address_line_1, address_line_2, city, province, postal_code
+     *
+     * @param string $address
+     * @return array
+     */
+    private function parseAddress($address)
+    {
+        // Initialize default values
+        $addressParts = [
+            'address_line_1' => '',
+            'address_line_2' => '',
+            'city' => '',
+            'province' => '',
+            'postal_code' => ''
+        ];
+
+        if (empty($address)) {
+            return $addressParts;
+        }
+
+        // Split by comma and trim whitespace
+        $parts = array_map('trim', explode(',', $address));
+
+        // Map parts to their respective fields (handle cases where there might be fewer than 5 parts)
+        if (isset($parts[0])) $addressParts['address_line_1'] = $parts[0];
+        if (isset($parts[1])) $addressParts['address_line_2'] = $parts[1];
+        if (isset($parts[2])) $addressParts['city'] = $parts[2];
+        if (isset($parts[3])) $addressParts['province'] = $parts[3];
+        if (isset($parts[4])) $addressParts['postal_code'] = $parts[4];
+
+        return $addressParts;
     }
 }
