@@ -586,65 +586,15 @@ class SendNotificationController extends Controller
             $insuranceProvider = $notification->enrollment->insuranceProvider->title;
         }
 
-        /* if ($insuranceProvider === 'MAXICARE') {
-            // Return empty to skip Maxicare submitted report generation
-            $columns = [
-                'maxicare_account_code',
-                'maxicare_employee_id',
-                'maxicare_first_name',
-                'maxicare_last_name',
-                'maxicare_middle_name',
-                'maxicare_extension',
-                'maxicare_mononymous',
-                'maxicare_gender',
-                'maxicare_member_type',
-                'maxicare_relation',
-                'maxicare_address_line_1',
-                'maxicare_address_line_2',
-                'maxicare_city',
-                'maxicare_province',
-                'maxicare_postal_code',
-                'maxicare_civil_status',
-                'maxicare_birth_date',
-                'maxicare_mobile_no',
-                'maxicare_email',
-                'maxicare_effective_date',
-                'maxicare_date_hired',
-                'maxicare_date_regularization',
-                'maxicare_philhealth',
-                'maxicare_plan_code',
-                'maxicare_card_issuance',
-                'maxicare_remarks',
-                'maxicare_birth_certificate',
-                'maxicare_employee_cenomar',
-                'maxicare_partner_cenomar',
-                'maxicare_employee_barangay_certification',
-                'maxicare_partner_barangay_certification',
-            ];
-        } else {
-            $columns = [
-                'enrollment_status',
-                'relation',
-                'employee_id',
-                'first_name',
-                'last_name',
-                'middle_name',
-                'birth_date',
-                'gender',
-                'email1',
-                'phone1',
-                'department',
-                'position',
-            ];
-        } */
-
         $columns = [];
 
         switch ($notificationType) {
             case 'APPROVED BY HMO (WELCOME EMAIL)':
-                return $this->getEnrolleesByStatus($enrollmentId, 'APPROVED', $notification);
+                return $this->getEnrolleesByStatus($enrollmentId, 'NC', 'APPROVED', $notification);
             case 'ENROLLMENT START (PENDING)':
-                return $this->getEnrolleesByStatus($enrollmentId, 'PENDING', $notification);
+                return $this->getEnrolleesByStatus($enrollmentId, true, 'PENDING', $notification);
+            case 'ENROLLMENT START W/OUT DEP (PENDING)':
+                return $this->getEnrolleesByStatus($enrollmentId, false, 'PENDING', $notification);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
                 // Return data for CSV generation instead of enrollee IDs
                 return [
@@ -683,7 +633,7 @@ class SendNotificationController extends Controller
     /**
      * Get all enrollees with APPROVED status updated today for the given enrollment
      */
-    private function getEnrolleesByStatus($enrollmentId = null, $status = null, $notification = null)
+    private function getEnrolleesByStatus($enrollmentId = null, $withDependents, $status = null, $notification = null)
     {
         if (!$enrollmentId) {
             return [];
@@ -692,9 +642,13 @@ class SendNotificationController extends Controller
         $dateRange = $this->calculateDateRangeFromSchedule($notification);
 
         $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
-            ->where('enrollment_status', $status)
-            //->where('updated_at', '>=', '2025-10-06 00:00:00') // Use calculated date range
-            //->where('updated_at', '<=', '2025-10-07 23:59:59')   // Use calculated date range
+            ->where('enrollment_status', $status);
+
+        if ($withDependents !== 'NC') {
+            $enrollees = $enrollees->where('with_dependents', $withDependents);
+        }
+
+        $enrollees = $enrollees
             ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
             ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
             ->whereNull('deleted_at')
