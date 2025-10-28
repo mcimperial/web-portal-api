@@ -125,11 +125,13 @@ class ExportEnrolleesController extends Controller
         'last_name',
         'middle_name',
         'birth_date',
+        'marital_status',
         'gender',
         'email1',
         'phone1',
         'department',
-        'position'
+        'position',
+        'effective_date',
     ];
 
     private const AUTO_MAXICARE_CUSTOM_HEADER = [
