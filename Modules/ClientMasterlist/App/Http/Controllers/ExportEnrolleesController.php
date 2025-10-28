@@ -198,6 +198,29 @@ class ExportEnrolleesController extends Controller
 
         $enrollees = $query->get();
 
+        // Debug: Log the is_renewal values for REGULAR exports
+        if ($filters['export_enrollment_type'] === 'REGULAR') {
+            Log::info('DEBUG: Checking is_renewal values for REGULAR export', [
+                'total_enrollees' => $enrollees->count()
+            ]);
+
+            foreach ($enrollees as $index => $enrollee) {
+                $isRenewal = $enrollee->healthInsurance ? $enrollee->healthInsurance->is_renewal : 'no_health_insurance';
+                Log::info("DEBUG: Enrollee #{$index}", [
+                    'enrollee_id' => $enrollee->id,
+                    'employee_id' => $enrollee->employee_id,
+                    'is_renewal' => $isRenewal,
+                    'has_health_insurance' => $enrollee->healthInsurance ? 'yes' : 'no'
+                ]);
+
+                // Only log first 5 to avoid overwhelming logs
+                if ($index >= 4) {
+                    Log::info('DEBUG: Truncating debug logs after 5 records...');
+                    break;
+                }
+            }
+        }
+
         if ($filters['maxicare_customized_column']) {
             Log::info('Maxicare customized column is true. Adding Maxicare specific columns.');
             // Merge Maxicare specific columns
@@ -313,9 +336,13 @@ class ExportEnrolleesController extends Controller
      */
     private function applyEnrollmentStatusFilter($query, $filters)
     {
-        #test
         $enrollmentStatus = $filters['enrollment_status'];
         $exportType = $filters['export_enrollment_type'];
+
+        Log::info('Applying enrollment status filter', [
+            'enrollment_status' => $enrollmentStatus,
+            'export_enrollment_type' => $exportType
+        ]);
 
         if ($exportType === 'RENEWAL') {
             Log::info('Applying RENEWAL export filters');
@@ -333,16 +360,18 @@ class ExportEnrolleesController extends Controller
                 }
             }
         } elseif ($exportType === 'REGULAR') {
+            Log::info('Applying REGULAR export filters - filtering for is_renewal = false');
+            // For REGULAR exports, ensure is_renewal is false
             $query->whereHas('healthInsurance', function ($subQ) {
                 $subQ->where('is_renewal', false);
             });
-            // For REGULAR exports, ensure is_renewal is false
+
             if (isset($enrollmentStatus)) {
-                Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
-                // For other statuses in RENEWAL export
+                Log::info('REGULAR with enrollment status filter', ['status' => $enrollmentStatus]);
                 $query->where('enrollment_status', $enrollmentStatus);
             }
         } else {
+            Log::info('Applying ALL export filters (no type restriction)');
             // For ALL exports (no specific type filter)
             if ($enrollmentStatus === 'PENDING') {
                 $query->where(function ($q) {
@@ -351,12 +380,17 @@ class ExportEnrolleesController extends Controller
                 });
             } else {
                 if (isset($enrollmentStatus)) {
-                    Log::info('RENEWAL with other status', ['status' => $enrollmentStatus]);
-                    // For other statuses in RENEWAL export
+                    Log::info('ALL export with enrollment status filter', ['status' => $enrollmentStatus]);
                     $query->where('enrollment_status', $enrollmentStatus);
                 }
             }
         }
+
+        // Log the final SQL query after applying filters
+        Log::info('Final query after applying enrollment status filter', [
+            'sql' => $query->toSql(),
+            'bindings' => $query->getBindings()
+        ]);
     }
 
     /**
