@@ -555,12 +555,11 @@ class ImportEnrolleeController extends Controller
 
         if ($existingPrincipal) {
 
-            return $existingPrincipal;
-
-            /* if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
+            if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
                 // Simplified logic: If record is trashed, restore it if no employment_end_date, otherwise update but keep trashed
-                if (!$isRenewal)
+                if (!$isRenewal) {
                     $existingPrincipal->update($enrolleeData);
+                }
                 //$existingPrincipal->restore();
             } else {
                 // Check for changes before updating existing active record
@@ -591,8 +590,15 @@ class ImportEnrolleeController extends Controller
 
                 // Update if there are changes
                 if ($hasChanges) {
-                    if (!$isRenewal)
+                    Log::info('Updating existing principal with changes', [
+                        'employee_id' => $employeeId,
+                        'changes' => $changes,
+                        'is_renewal' => $isRenewal
+                    ]);
+
+                    if (!$isRenewal) {
                         $existingPrincipal->update($enrolleeData);
+                    }
                 }
 
                 // Handle soft deletion if employment_end_date exists
@@ -602,7 +608,7 @@ class ImportEnrolleeController extends Controller
                     $existingPrincipal->delete();
                 }
             }
-            return $existingPrincipal; */
+            return $existingPrincipal;
         } else {
 
             // Ensure employee_id is set properly to prevent auto-generation

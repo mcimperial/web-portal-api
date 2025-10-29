@@ -644,7 +644,7 @@ class SendNotificationController extends Controller
         $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
             ->where('enrollment_status', $status);
 
-        if ($withDependents !== 'NC') {
+        if ($withDependents <> 'NC') {
             $enrollees = $enrollees->where('with_dependents', $withDependents);
         }
 
