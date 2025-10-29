@@ -539,14 +539,6 @@ class ImportEnrolleeController extends Controller
             ->where('employee_id', $employeeId)
             ->where('enrollment_id', $enrollmentId);
 
-        // Always include birth_date in the query to ensure proper uniqueness
-
-        /* if (isset($enrolleeData['birth_date'])) {
-            $principalQuery = $principalQuery->where('birth_date', $enrolleeData['birth_date']);
-        } else {
-            $principalQuery = $principalQuery->whereNull('birth_date');
-        } */
-
         $existingPrincipal = $principalQuery->first();
 
         $isRenewal = $existingPrincipal && $existingPrincipal->healthInsurance
