@@ -30,6 +30,7 @@ class Enrollee extends Model
         'first_name',
         'last_name',
         'middle_name',
+        'suffix',
         'birth_date',
         'gender',
         'nationality',

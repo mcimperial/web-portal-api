@@ -29,6 +29,7 @@ class ExportEnrolleesController extends Controller
         'first_name' => 'First Name',
         'last_name' => 'Last Name',
         'middle_name' => 'Middle Name',
+        'suffix' => 'Suffix',
         'birth_date' => 'Birth Date',
         'gender' => 'Gender',
         'marital_status' => 'Marital Status',
@@ -124,6 +125,7 @@ class ExportEnrolleesController extends Controller
         'first_name',
         'last_name',
         'middle_name',
+        'suffix',
         'birth_date',
         'marital_status',
         'gender',
@@ -631,6 +633,9 @@ class ExportEnrolleesController extends Controller
 
             case 'maxicare_middle_name':
                 return $entity->middle_name ?? '';
+
+            case 'maxicare_extension':
+                return $entity->suffix ?? '';
 
             case 'maxicare_member_type':
                 return $isPrincipal ? 'P' : 'D';

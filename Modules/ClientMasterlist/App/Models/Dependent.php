@@ -20,6 +20,7 @@ class Dependent extends Model
         'first_name',
         'last_name',
         'middle_name',
+        'suffix',
         'relation',
         'birth_date',
         'gender',
