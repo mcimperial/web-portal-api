@@ -81,6 +81,14 @@ class DependentController extends Controller
             }
         }
 
+        // Update principal's updated_at timestamp when dependent is created
+        if (!empty($validated['principal_id'])) {
+            $principal = \Modules\ClientMasterlist\App\Models\Enrollee::find($validated['principal_id']);
+            if ($principal) {
+                $principal->touch();
+            }
+        }
+
         $dependent->load('healthInsurance');
         return $dependent;
     }
@@ -152,6 +160,14 @@ class DependentController extends Controller
             }
         }
 
+        // Update principal's updated_at timestamp when dependent is updated
+        if (isset($dependent->principal_id)) {
+            $principal = \Modules\ClientMasterlist\App\Models\Enrollee::find($dependent->principal_id);
+            if ($principal) {
+                $principal->touch();
+            }
+        }
+
         $dependent->load('healthInsurance');
         return $dependent;
     }
@@ -170,7 +186,17 @@ class DependentController extends Controller
             $dependent->deleted_by = auth()->id();
             $dependent->save();
         }
+
         $dependent->delete();
+
+        // Update principal's updated_at timestamp when dependent is deleted
+        if (isset($dependent->principal_id)) {
+            $principal = \Modules\ClientMasterlist\App\Models\Enrollee::find($dependent->principal_id);
+            if ($principal) {
+                $principal->touch();
+            }
+        }
+
         return response()->json(['success' => true, 'message' => 'Dependent soft deleted']);
     }
 }

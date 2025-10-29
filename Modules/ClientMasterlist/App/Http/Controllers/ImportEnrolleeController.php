@@ -692,20 +692,22 @@ class ImportEnrolleeController extends Controller
                 $existingDependent = $dependentQuery->first();
 
                 if ($existingDependent) {
-
-                    if ($existingDependent->trashed()) {
-                        $existingDependent->restore();
-                    }
-
                     $existingDependent->update($filtered);
                     $dependent = $existingDependent;
                 } else {
-
                     $dependent = Dependent::create($filtered);
                 }
 
                 $createdDependents[] = $dependent;
             }
+
+            // Update the principal's updated_at timestamp to reflect dependent changes
+            $enrollee->touch();
+
+            Log::info("Updated principal timestamp due to dependent changes", [
+                'principal_id' => $enrolleeId,
+                'dependents_processed' => count($createdDependents)
+            ]);
 
             DB::commit();
             return response()->json(['message' => 'Dependents attached successfully', 'dependents' => $createdDependents], 200);
@@ -848,6 +850,30 @@ class ImportEnrolleeController extends Controller
             } else {
                 $insurance = HealthInsurance::create($filtered);
             }
+
+            // Update the principal's updated_at timestamp when health insurance is attached
+            if ($enrolleeId) {
+                // Direct principal insurance update
+                $enrollee->touch();
+                Log::info("Updated principal timestamp due to health insurance changes", [
+                    'principal_id' => $enrolleeId,
+                    'insurance_type' => 'principal'
+                ]);
+            } elseif ($dependentId) {
+                // Dependent insurance update - update the principal through the dependent
+                if ($dependent && $dependent->principal_id) {
+                    $principal = Enrollee::find($dependent->principal_id);
+                    if ($principal) {
+                        $principal->touch();
+                        Log::info("Updated principal timestamp due to dependent health insurance changes", [
+                            'principal_id' => $dependent->principal_id,
+                            'dependent_id' => $dependentId,
+                            'insurance_type' => 'dependent'
+                        ]);
+                    }
+                }
+            }
+
             DB::commit();
             return response()->json(['message' => 'Health insurance attached successfully', 'insurance' => $insurance], 200);
         } catch (\Exception $e) {
