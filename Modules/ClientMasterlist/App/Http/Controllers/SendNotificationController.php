@@ -48,6 +48,7 @@ class SendNotificationController extends Controller
             'has_csv_attachment' => $request->has('csv_attachment')
         ]);
 
+        $enrollmentType = $request->input('enrollment_type');
         $enrolleeStatus = $request->input('enrollee_status');
 
         // If enrollee_status is provided, find all enrollees with that status for this enrollment
@@ -59,9 +60,20 @@ class SendNotificationController extends Controller
                 $enrollmentId = $notification->enrollment_id;
 
                 // Find enrollees with the given status and enrollment_id
-                $enrolleeQuery = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $enrollmentId)
+                $enrolleeQuery = Enrollee::with(['healthInsurance'])
+                    ->where('enrollment_id', $enrollmentId)
                     ->where('enrollment_status', $enrolleeStatus)
                     ->whereNull('deleted_at');
+
+                if ($enrollmentType === 'RENEWAL') {
+                    $enrolleeQuery->whereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', true);
+                    });
+                } elseif ($enrollmentType === 'REGULAR') {
+                    $enrolleeQuery->whereHas('healthInsurance', function ($subQ) {
+                        $subQ->where('is_renewal', false);
+                    });
+                }
 
                 // Apply date filtering if provided
                 if ($request->has('dateFrom') && $request->filled('dateFrom')) {
@@ -651,6 +663,7 @@ class SendNotificationController extends Controller
         $enrollees = $enrollees
             ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
             ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
+            ->where('status', 'ACTIVE')
             ->whereNull('deleted_at')
             ->get();
 

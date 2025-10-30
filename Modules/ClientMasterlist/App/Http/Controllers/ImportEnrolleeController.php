@@ -169,6 +169,30 @@ class ImportEnrolleeController extends Controller
                 $relation = strtoupper(trim($relationRaw));
                 $employeeId = $enrolleeData['employee_id'] ?? null;
 
+                // Handle employee_id with generated number format (employee_id-generated_number)
+                $originalEmployeeId = $employeeId;
+                if ($employeeId && strpos($employeeId, '-') !== false) {
+                    $baseEmployeeId = explode('-', $employeeId)[0];
+
+                    // Check if base employee_id exists as principal in this enrollment
+                    $existingPrincipal = Enrollee::withTrashed()
+                        ->where('employee_id', $baseEmployeeId)
+                        ->where('enrollment_id', $enrollmentId)
+                        ->first();
+
+                    if ($existingPrincipal) {
+                        // Use the base employee_id if principal exists
+                        $employeeId = $baseEmployeeId;
+                        $enrolleeData['employee_id'] = $baseEmployeeId;
+                        Log::info("Found existing principal with base employee_id", [
+                            'original_employee_id' => $originalEmployeeId,
+                            'base_employee_id' => $baseEmployeeId,
+                            'existing_principal_id' => $existingPrincipal->id
+                        ]);
+                    }
+                    // If no existing principal found, keep the original employee_id with generated number
+                }
+
                 // Separate health insurance fields from enrollee data
                 $healthInsuranceData = [];
 
@@ -180,17 +204,18 @@ class ImportEnrolleeController extends Controller
                 }
 
                 // Process health insurance data
-                $isPrincipal = ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE');
+                $isPrincipal = ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE' || $relation === 'EMPLOYEES');
 
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, true);
+                $isRenewal = isset($this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal']) ? $this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal'] : false;
 
                 if (isset($enrolleeData['enrollment_status']) || !empty($enrolleeData['enrollment_status'])) {
                     $enrolleeData['enrollment_status'] = $enrolleeData['enrollment_status'];
                 } else {
                     // Set enrollment status based on health insurance data
-                    if (!empty($healthInsuranceData['certificate_number']) && (!$healthInsuranceData['is_renewal'])) {
+                    if (!empty($healthInsuranceData['certificate_number']) && !$isRenewal) {
                         $enrolleeData['enrollment_status'] = 'APPROVED';
-                    } elseif (!empty($healthInsuranceData['certificate_number']) && $healthInsuranceData['is_renewal']) {
+                    } elseif (!empty($healthInsuranceData['certificate_number']) && $isRenewal) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
                     } elseif ($healthInsuranceData['is_skipping'] || !empty($healthInsuranceData['reason_for_skipping'])) {
                         $enrolleeData['enrollment_status'] = 'SKIPPED';
@@ -224,6 +249,10 @@ class ImportEnrolleeController extends Controller
                         ]), $dateAnalysis['recommended_format']);
                     }
                 } else {
+                    if ($relation === 'DEPENDENTS' || $relation === 'DEPENDENT') {
+                        unset($enrolleeData['relation']);
+                    }
+
                     if (!isset($dependentsByPrincipal[$employeeId])) {
                         $dependentsByPrincipal[$employeeId] = [];
                     }
@@ -532,6 +561,16 @@ class ImportEnrolleeController extends Controller
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
                 $shouldSoftDelete = true;
             }
+        } else {
+            if ((isset($healthInsuranceData['certificate_number']) && !empty($healthInsuranceData['certificate_number']))) {
+
+                if (empty($healthInsuranceData['coverage_start_date'])) {
+                    $healthInsuranceData['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
+                }
+
+                $enrolleeData['status'] = 'ACTIVE';
+                $enrolleeData['enrollment_status'] = 'APPROVED';
+            }
         }
 
         $principalQuery = Enrollee::with(['healthInsurance'])
@@ -546,13 +585,12 @@ class ImportEnrolleeController extends Controller
             : false;
 
         if ($existingPrincipal) {
-
             if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
                 // Simplified logic: If record is trashed, restore it if no employment_end_date, otherwise update but keep trashed
-                if (!$isRenewal) {
+                /* if (!$isRenewal) {
                     $existingPrincipal->update($enrolleeData);
-                }
-                //$existingPrincipal->restore();
+                } */
+                $existingPrincipal->update($enrolleeData);
             } else {
                 // Check for changes before updating existing active record
                 $hasChanges = false;
@@ -588,9 +626,9 @@ class ImportEnrolleeController extends Controller
                         'is_renewal' => $isRenewal
                     ]);
 
-                    if (!$isRenewal) {
-                        $existingPrincipal->update($enrolleeData);
-                    }
+                    //if (!$isRenewal) {
+                    $existingPrincipal->update($enrolleeData);
+                    //}
                 }
 
                 // Handle soft deletion if employment_end_date exists
