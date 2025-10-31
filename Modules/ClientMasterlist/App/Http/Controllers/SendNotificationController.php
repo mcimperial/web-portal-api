@@ -475,6 +475,23 @@ class SendNotificationController extends Controller
             // Only check if the cron schedule is due, ignore last_sent_at
             if (!$this->isCronDue($notification->schedule, $now)) continue;
 
+            // Additional safeguard: prevent sending the same notification multiple times within a short period
+            if ($notification->last_sent_at) {
+                $lastSent = \Carbon\Carbon::parse($notification->last_sent_at);
+                $minutesSinceLastSent = $now->diffInMinutes($lastSent);
+
+                // Don't send again if it was sent in the last 30 minutes
+                // This prevents duplicate sends due to cron running multiple times
+                if ($minutesSinceLastSent < 30) {
+                    Log::info("Skipping notification - sent too recently", [
+                        'notification_id' => $notification->id,
+                        'last_sent_at' => $notification->last_sent_at,
+                        'minutes_since_last_sent' => $minutesSinceLastSent
+                    ]);
+                    continue;
+                }
+            }
+
             Log::info("Processing scheduled notification", [
                 'notification_id' => $notification->id,
                 'notification_type' => $notification->notification_type,
@@ -653,19 +670,40 @@ class SendNotificationController extends Controller
 
         $dateRange = $this->calculateDateRangeFromSchedule($notification);
 
-        $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
-            ->where('enrollment_status', $status);
+        $enrollees = Enrollee::with(['healthInsurance'])
+            ->where('enrollment_id', $enrollmentId)
+            ->where('enrollment_status', $status)
+            ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
+            ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
+            ->where('status', 'ACTIVE')
+            ->whereNull('deleted_at');
+
+        if ($status === 'APPROVED') {
+            $enrollees = $enrollees->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where('is_renewal', false);
+            });
+        }
 
         if ($withDependents <> 'NC') {
             $enrollees = $enrollees->where('with_dependents', $withDependents);
         }
 
-        $enrollees = $enrollees
-            ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
-            ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
-            ->where('status', 'ACTIVE')
-            ->whereNull('deleted_at')
-            ->get();
+        $enrollees = $enrollees->get();
+
+        Log::info("Enrollee search query executed", [
+            'enrollment_id' => $enrollmentId,
+            'status' => $status,
+            'date_range_from' => $dateRange['from'],
+            'date_range_to' => $dateRange['to'],
+            'found_count' => $enrollees->count(),
+            'enrollee_details' => $enrollees->map(function ($enrollee) {
+                return [
+                    'id' => $enrollee->id,
+                    'updated_at' => $enrollee->updated_at,
+                    'enrollment_status' => $enrollee->enrollment_status
+                ];
+            })->toArray()
+        ]);
 
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
@@ -719,18 +757,27 @@ class SendNotificationController extends Controller
                 $dateFrom = $currentScheduledTime->copy();
                 $dateTo = $now;
 
-                // Determine the interval and subtract accordingly to get the "from" date
-                if ($minutes !== '*' && $hours === '*') {
-                    // Every minute (but not * * * * *) - subtract 1 minute
-                    $dateFrom->subMinutes(1);
-                } elseif ($hours === '*') {
-                    // Hourly (every hour) - subtract 1 hour
+                // Determine the interval based on cron schedule pattern
+                // Fixed logic to handle common patterns correctly
+                if ($notification->schedule === '0 18 * * *') {
+                    // Daily at 6 PM - look for enrollees updated since yesterday 6 PM
+                    $dateFrom->subDays(1);
+                } elseif (preg_match('/^\* \d+ \* \* \*$/', $notification->schedule)) {
+                    // Pattern like "* 18 * * *" (every minute during a specific hour)
+                    // This should probably be "0 18 * * *" instead, but handle gracefully
+                    // Look for enrollees updated in the last hour only
+                    $dateFrom->subHours(1);
+                } elseif ($minutes !== '*' && $hours !== '*') {
+                    // Specific time (e.g., "30 18 * * *") - daily at specific time
+                    $dateFrom->subDays(1);
+                } elseif ($hours === '*' && $days === '*') {
+                    // Hourly pattern (e.g., "0 * * * *") - subtract 1 hour
                     $dateFrom->subHours(1);
                 } elseif ($days === '*') {
-                    // Daily (every day) - subtract 1 day
+                    // Daily pattern - subtract 1 day
                     $dateFrom->subDays(1);
                 } elseif ($months === '*') {
-                    // Monthly (every month) - subtract 1 month
+                    // Monthly pattern - subtract 1 month
                     $dateFrom->subMonths(1);
                 } else {
                     // Default to 1 day for other patterns
@@ -827,13 +874,29 @@ class SendNotificationController extends Controller
 
     /**
      * Check if a cron expression is due now
+     * Fixed to prevent multiple executions within the same minute
      */
     private function isCronDue($cron, $now)
     {
         try {
             $cronExp = \Cron\CronExpression::factory($cron);
-            return $cronExp->isDue($now);
+
+            // Only return true if this is the exact scheduled time
+            // This prevents multiple executions within the same minute
+            $isDue = $cronExp->isDue($now);
+
+            // Additional check: make sure we're at the start of the minute (seconds = 0)
+            // This prevents the cron from running multiple times within the same minute
+            if ($isDue && $now->second === 0) {
+                return true;
+            }
+
+            return false;
         } catch (\Exception $e) {
+            Log::error("Failed to parse cron expression", [
+                'cron' => $cron,
+                'error' => $e->getMessage()
+            ]);
             return false;
         }
     }
