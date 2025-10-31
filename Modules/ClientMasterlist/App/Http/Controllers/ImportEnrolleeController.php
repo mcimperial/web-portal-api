@@ -209,9 +209,7 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, true);
                 $isRenewal = isset($this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal']) ? $this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal'] : false;
 
-                if (isset($enrolleeData['enrollment_status']) && !empty($enrolleeData['enrollment_status'])) {
-                    $enrolleeData['enrollment_status'] = $enrolleeData['enrollment_status'];
-                } else {
+                if (!isset($enrolleeData['enrollment_status'])) {
                     // Set enrollment status based on health insurance data
                     if (!empty($healthInsuranceData['certificate_number']) && !$isRenewal) {
                         $enrolleeData['enrollment_status'] = 'APPROVED';
