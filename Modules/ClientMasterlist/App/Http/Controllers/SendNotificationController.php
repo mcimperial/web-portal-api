@@ -671,7 +671,7 @@ class SendNotificationController extends Controller
             $enrollees = $enrollees->where('with_dependents', $withDependents);
         }
 
-        $enrollees = $enrollees->limit(10)->get();
+        $enrollees = $enrollees->get();
 
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
