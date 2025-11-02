@@ -76,9 +76,10 @@ class NotificationController extends Controller
             'message' => 'sometimes|string',
             'is_html' => 'boolean',
             'schedule' => 'nullable|string',
+            'useScheduler' => 'boolean',
         ]);
 
-        if ($request->data('useScheduler') === false) {
+        if (!$data['useScheduler']) {
             $data['schedule'] = null;
         }
 
