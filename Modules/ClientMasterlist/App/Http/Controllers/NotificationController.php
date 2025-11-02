@@ -77,6 +77,11 @@ class NotificationController extends Controller
             'is_html' => 'boolean',
             'schedule' => 'nullable|string',
         ]);
+
+        if (!$request->data('useScheduler')) {
+            $data['schedule'] = null;
+        }
+
         // Uppercase all fields except 'message'
         $upperData = $data;
         foreach ($upperData as $key => $value) {
