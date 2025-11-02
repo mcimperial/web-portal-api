@@ -32,7 +32,7 @@ use Modules\ClientMasterlist\App\Models\Enrollee;
  * - AttachmentHandlerService: Manages CSV generation and file attachments
  * - SchedulerService: Handles cron scheduling and date calculations
  */
-class SendNotificationController extends Controller
+class SendNotificationControllerx extends Controller
 {
     private $notificationService;
     private $recipientResolver;
