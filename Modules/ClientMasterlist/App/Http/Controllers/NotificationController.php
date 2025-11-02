@@ -79,9 +79,9 @@ class NotificationController extends Controller
             'useScheduler' => 'boolean',
         ]);
 
-        /* if (!$data['useScheduler']) {
+        if (!$data['useScheduler']) {
             $data['schedule'] = null;
-        } */
+        }
 
         // Uppercase all fields except 'message'
         $upperData = $data;
