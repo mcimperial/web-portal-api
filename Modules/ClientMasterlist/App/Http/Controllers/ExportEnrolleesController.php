@@ -276,11 +276,14 @@ class ExportEnrolleesController extends Controller
             // When filtering for APPROVED status, only load APPROVED dependents
             Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
             $relationships['dependents'] = function ($query) {
-                $query->where('enrollment_status', 'APPROVED');
+                $query->where('enrollment_status', 'APPROVED')
+                    ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
             };
         } else {
-            // Load all active dependents (default behavior)
-            $relationships[] = 'dependents';
+            // Load all active dependents (default behavior) with all their attachments
+            $relationships['dependents'] = function ($query) {
+                $query->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+            };
         }
 
         $query = Enrollee::with($relationships)
@@ -483,6 +486,7 @@ class ExportEnrolleesController extends Controller
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
         $hasRequiredDocument = false;
+        $hasMultipleRequiredDocs = false;
 
         foreach ($enrollees as $enrollee) {
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
@@ -490,6 +494,16 @@ class ExportEnrolleesController extends Controller
                     if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
                         $hasSkippedOrOverage = true;
                     }
+
+                    // Check for required documents using the new relationship
+                    if ($dependent->requiredDocuments && $dependent->requiredDocuments->count() > 0) {
+                        $hasRequiredDocument = true;
+                        if ($dependent->requiredDocuments->count() > 1) {
+                            $hasMultipleRequiredDocs = true;
+                        }
+                    }
+
+                    // Also check legacy single attachment for backward compatibility
                     if (
                         method_exists($dependent, 'attachmentForRequirement') &&
                         $dependent->attachmentForRequirement &&
@@ -497,6 +511,7 @@ class ExportEnrolleesController extends Controller
                     ) {
                         $hasRequiredDocument = true;
                     }
+
                     if ($hasSkippedOrOverage && $hasRequiredDocument) {
                         break 2;
                     }
@@ -573,11 +588,20 @@ class ExportEnrolleesController extends Controller
                 return !$isPrincipal && $principal ? ($principal->healthInsurance->is_company_paid ? 'YES' : 'NO') : ($entity->healthInsurance->is_company_paid ? 'YES' : 'NO');
 
             case 'required_document':
-                if (
-                    !$isPrincipal && method_exists($entity, 'attachmentForRequirement') &&
-                    $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
-                ) {
-                    return $entity->attachmentForRequirement->file_path;
+                if (!$isPrincipal) {
+                    // First check if there are multiple required documents using the new relationship
+                    if ($entity->requiredDocuments && $entity->requiredDocuments->count() > 0) {
+                        $filePaths = $entity->requiredDocuments->pluck('file_path')->toArray();
+                        return implode('; ', $filePaths);
+                    }
+
+                    // Fallback to legacy single attachment for backward compatibility
+                    if (
+                        method_exists($entity, 'attachmentForRequirement') &&
+                        $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
+                    ) {
+                        return $entity->attachmentForRequirement->file_path;
+                    }
                 }
                 return '';
 
@@ -721,11 +745,20 @@ class ExportEnrolleesController extends Controller
                 return 'Y';
 
             case 'required_document':
-                if (
-                    !$isPrincipal && method_exists($entity, 'attachmentForRequirement') &&
-                    $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
-                ) {
-                    return $entity->attachmentForRequirement->file_path;
+                if (!$isPrincipal) {
+                    // First check if there are multiple required documents using the new relationship
+                    if ($entity->requiredDocuments && $entity->requiredDocuments->count() > 0) {
+                        $filePaths = $entity->requiredDocuments->pluck('file_path')->toArray();
+                        return implode('; ', $filePaths);
+                    }
+
+                    // Fallback to legacy single attachment for backward compatibility
+                    if (
+                        method_exists($entity, 'attachmentForRequirement') &&
+                        $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
+                    ) {
+                        return $entity->attachmentForRequirement->file_path;
+                    }
                 }
                 return '';
 

@@ -247,6 +247,7 @@ class ImportEnrolleeController extends Controller
                         ]), $dateAnalysis['recommended_format']);
                     }
                 } else {
+
                     if ($relation === 'DEPENDENTS' || $relation === 'DEPENDENT') {
                         unset($enrolleeData['relation']);
                     }
@@ -254,6 +255,7 @@ class ImportEnrolleeController extends Controller
                     if (!isset($dependentsByPrincipal[$employeeId])) {
                         $dependentsByPrincipal[$employeeId] = [];
                     }
+
                     $dependentsByPrincipal[$employeeId][] = [
                         'enrollee_data' => $enrolleeData,
                         'health_insurance_data' => $healthInsuranceData
@@ -338,37 +340,6 @@ class ImportEnrolleeController extends Controller
 
             return response()->json(['message' => 'Import failed', 'error' => $e->getMessage()], 500);
         }
-    }
-
-    /**
-     * Find enrollment by company code and insurance provider title
-     */
-    private function findEnrollmentByCompanyAndProvider(string $companyCode, string $insuranceProviderTitle): int
-    {
-        // Find company by company_code
-        $company = Company::where('company_code', strtoupper($companyCode))->first();
-
-        if (!$company) {
-            throw new \Exception('Company not found with code: ' . $companyCode);
-        }
-
-        // Find insurance provider by title
-        $insuranceProvider = InsuranceProvider::where('title', strtoupper($insuranceProviderTitle))->first();
-
-        if (!$insuranceProvider) {
-            throw new \Exception('Insurance provider not found with title: ' . $insuranceProviderTitle);
-        }
-
-        // Find enrollment by company_id and insurance_provider_id
-        $enrollment = Enrollment::where('company_id', $company->id)
-            ->where('insurance_provider_id', $insuranceProvider->id)
-            ->first();
-
-        if (!$enrollment) {
-            throw new \Exception('No enrollment found for company: ' . $companyCode . ' and insurance provider: ' . $insuranceProviderTitle);
-        }
-
-        return $enrollment->id;
     }
 
     /**
@@ -519,6 +490,37 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Find enrollment by company code and insurance provider title
+     */
+    private function findEnrollmentByCompanyAndProvider(string $companyCode, string $insuranceProviderTitle): int
+    {
+        // Find company by company_code
+        $company = Company::where('company_code', strtoupper($companyCode))->first();
+
+        if (!$company) {
+            throw new \Exception('Company not found with code: ' . $companyCode);
+        }
+
+        // Find insurance provider by title
+        $insuranceProvider = InsuranceProvider::where('title', strtoupper($insuranceProviderTitle))->first();
+
+        if (!$insuranceProvider) {
+            throw new \Exception('Insurance provider not found with title: ' . $insuranceProviderTitle);
+        }
+
+        // Find enrollment by company_id and insurance_provider_id
+        $enrollment = Enrollment::where('company_id', $company->id)
+            ->where('insurance_provider_id', $insuranceProvider->id)
+            ->first();
+
+        if (!$enrollment) {
+            throw new \Exception('No enrollment found for company: ' . $companyCode . ' and insurance provider: ' . $insuranceProviderTitle);
+        }
+
+        return $enrollment->id;
+    }
+
+    /**
      * Create or update principal with soft delete handling
      */
     private function createOrUpdatePrincipalWithSoftDelete(array $enrolleeData, int $enrollmentId, string $employeeId, string $dateFormat = 'auto'): Enrollee
@@ -583,59 +585,51 @@ class ImportEnrolleeController extends Controller
             : false;
 
         if ($existingPrincipal) {
-            if (method_exists($existingPrincipal, 'trashed') && $existingPrincipal->trashed()) {
-                // Simplified logic: If record is trashed, restore it if no employment_end_date, otherwise update but keep trashed
-                /* if (!$isRenewal) {
-                    $existingPrincipal->update($enrolleeData);
-                } */
-                $existingPrincipal->update($enrolleeData);
-            } else {
-                // Check for changes before updating existing active record
-                $hasChanges = false;
-                $changes = [];
 
-                foreach ($enrolleeData as $key => $value) {
+            // Check for changes before updating existing active record
+            $hasChanges = false;
+            $changes = [];
 
-                    // Skip timestamps and internal fields
-                    if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
-                        continue;
-                    }
+            foreach ($enrolleeData as $key => $value) {
 
-                    $currentValue = $existingPrincipal->getAttribute($key);
-                    $normalizedCurrentValue = $this->normalizeValue($currentValue);
-                    $normalizedNewValue = $this->normalizeValue($value);
-
-                    if ($normalizedCurrentValue !== $normalizedNewValue) {
-                        $hasChanges = true;
-                        $changes[$key] = [
-                            'old' => $currentValue,
-                            'new' => $value,
-                            'old_normalized' => $normalizedCurrentValue,
-                            'new_normalized' => $normalizedNewValue
-                        ];
-                    }
+                // Skip timestamps and internal fields
+                if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
+                    continue;
                 }
 
-                // Update if there are changes
-                if ($hasChanges) {
-                    Log::info('Updating existing principal with changes', [
-                        'employee_id' => $employeeId,
-                        'changes' => $changes,
-                        'is_renewal' => $isRenewal
-                    ]);
+                $currentValue = $existingPrincipal->getAttribute($key);
+                $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                $normalizedNewValue = $this->normalizeValue($value);
 
-                    //if (!$isRenewal) {
-                    $existingPrincipal->update($enrolleeData);
-                    //}
-                }
-
-                // Handle soft deletion if employment_end_date exists
-                if ($shouldSoftDelete) {
-                    $currentUserId = auth()->check() ? auth()->user()->id : 1;
-                    $existingPrincipal->update(['deleted_by' => $currentUserId]);
-                    $existingPrincipal->delete();
+                if ($normalizedCurrentValue !== $normalizedNewValue) {
+                    $hasChanges = true;
+                    $changes[$key] = [
+                        'old' => $currentValue,
+                        'new' => $value,
+                        'old_normalized' => $normalizedCurrentValue,
+                        'new_normalized' => $normalizedNewValue
+                    ];
                 }
             }
+
+            // Update if there are changes
+            if ($hasChanges) {
+                Log::info('Updating existing principal with changes', [
+                    'employee_id' => $employeeId,
+                    'changes' => $changes,
+                    'is_renewal' => $isRenewal
+                ]);
+
+                $existingPrincipal->update($enrolleeData);
+            }
+
+            // Handle soft deletion if employment_end_date exists
+            if ($shouldSoftDelete) {
+                $currentUserId = auth()->check() ? auth()->user()->id : 1;
+                $existingPrincipal->update(['deleted_by' => $currentUserId]);
+                $existingPrincipal->delete();
+            }
+
             return $existingPrincipal;
         } else {
 

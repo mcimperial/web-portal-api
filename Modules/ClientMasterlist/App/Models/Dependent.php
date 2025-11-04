@@ -41,6 +41,19 @@ class Dependent extends Model
         return $this->hasOne(Attachment::class, 'dependent_id');
     }
 
+    // Get all attachments for this dependent
+    public function attachments()
+    {
+        return $this->hasMany(Attachment::class, 'dependent_id');
+    }
+
+    // Get all required_document attachments
+    public function requiredDocuments()
+    {
+        return $this->hasMany(Attachment::class, 'dependent_id')
+            ->where('attachment_for', 'required_document');
+    }
+
     // Get the latest skip_hierarchy attachment only
     public function attachmentForSkipHierarchy()
     {
