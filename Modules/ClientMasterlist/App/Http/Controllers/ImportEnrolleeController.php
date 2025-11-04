@@ -425,7 +425,6 @@ class ImportEnrolleeController extends Controller
                 // Process health insurance data
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
 
-                //if (!$healthInsuranceData['is_renewal']) {
                 // Create or update principal with soft delete handling
                 $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
                 $principalMap[$employeeId] = $principal;
@@ -437,7 +436,6 @@ class ImportEnrolleeController extends Controller
                         'insurance' => $healthInsuranceData
                     ]), $dateAnalysis['recommended_format']);
                 }
-                //}
             }
 
             Log::info('About to commit transaction', [
@@ -561,6 +559,8 @@ class ImportEnrolleeController extends Controller
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
                 $shouldSoftDelete = true;
             }
+
+            $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
         } else {
             if ((isset($healthInsuranceData['certificate_number']) && !empty($healthInsuranceData['certificate_number']))) {
 
