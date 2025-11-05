@@ -225,9 +225,13 @@ class ImportEnrolleeController extends Controller
                     // Set enrollment status based on health insurance data
                     if (!empty($healthInsuranceData['certificate_number']) && !$isRenewal) {
                         $enrolleeData['enrollment_status'] = 'APPROVED';
-                    } elseif (!empty($healthInsuranceData['certificate_number']) && $isRenewal) {
+                    }
+
+                    if (!empty($healthInsuranceData['certificate_number']) && $isRenewal) {
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
-                    } elseif ($healthInsuranceData['is_skipping'] || !empty($healthInsuranceData['reason_for_skipping'])) {
+                    }
+
+                    if ($healthInsuranceData['is_skipping'] || !empty($healthInsuranceData['reason_for_skipping'])) {
                         $enrolleeData['enrollment_status'] = 'SKIPPED';
                     }
                 }
