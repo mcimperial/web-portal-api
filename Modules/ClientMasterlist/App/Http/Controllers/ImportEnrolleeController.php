@@ -100,6 +100,11 @@ class ImportEnrolleeController extends Controller
             return null;
         }
 
+        // Handle boolean values consistently
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+
         // Convert to string and trim whitespace
         $normalized = trim((string) $value);
 
@@ -108,19 +113,26 @@ class ImportEnrolleeController extends Controller
             return null;
         }
 
-        // Convert to uppercase for string comparison (since we use uppercaseStrings)
-        if (is_string($value) && !is_numeric($normalized)) {
-            $normalized = strtoupper($normalized);
+        // Handle string representations of booleans
+        $upperNormalized = strtoupper($normalized);
+        if (in_array($upperNormalized, ['TRUE', 'FALSE', 'YES', 'NO'])) {
+            return in_array($upperNormalized, ['TRUE', 'YES']) ? 1 : 0;
         }
 
-        // Handle numeric values
+        // Handle numeric values (including decimal precision issues)
         if (is_numeric($normalized)) {
-            // If it's a whole number, convert to int, otherwise float
+            // If it's a whole number, convert to int, otherwise float with consistent precision
             if ((float) $normalized == (int) $normalized) {
                 return (int) $normalized;
             } else {
-                return (float) $normalized;
+                // Round to 2 decimal places to avoid precision issues
+                return round((float) $normalized, 2);
             }
+        }
+
+        // Convert to uppercase for string comparison (since we use uppercaseStrings)
+        if (is_string($value) && !is_numeric($normalized)) {
+            $normalized = strtoupper($normalized);
         }
 
         return $normalized;
@@ -568,6 +580,10 @@ class ImportEnrolleeController extends Controller
                     $healthInsuranceData['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
                 }
 
+                if (empty($healthInsuranceData['coverage_start_date'])) {
+                    $healthInsuranceData['certificate_date_issued'] = date('Y-m-d');
+                }
+
                 $enrolleeData['status'] = 'ACTIVE';
                 $enrolleeData['enrollment_status'] = 'APPROVED';
             }
@@ -607,9 +623,39 @@ class ImportEnrolleeController extends Controller
                         'old' => $currentValue,
                         'new' => $value,
                         'old_normalized' => $normalizedCurrentValue,
-                        'new_normalized' => $normalizedNewValue
+                        'new_normalized' => $normalizedNewValue,
+                        'old_type' => gettype($currentValue),
+                        'new_type' => gettype($value)
                     ];
                 }
+            }
+
+            // Debug: Log all field comparisons even when there are no changes
+            if (!$hasChanges) {
+                $allComparisons = [];
+                foreach ($enrolleeData as $key => $value) {
+                    if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
+                        continue;
+                    }
+                    $currentValue = $existingPrincipal->getAttribute($key);
+                    $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                    $normalizedNewValue = $this->normalizeValue($value);
+
+                    $allComparisons[$key] = [
+                        'old' => $currentValue,
+                        'new' => $value,
+                        'old_normalized' => $normalizedCurrentValue,
+                        'new_normalized' => $normalizedNewValue,
+                        'are_equal' => $normalizedCurrentValue === $normalizedNewValue,
+                        'old_type' => gettype($currentValue),
+                        'new_type' => gettype($value)
+                    ];
+                }
+
+                Log::info('Principal comparison details (no changes detected)', [
+                    'employee_id' => $employeeId,
+                    'comparisons' => $allComparisons
+                ]);
             }
 
             // Update if there are changes
@@ -621,13 +667,27 @@ class ImportEnrolleeController extends Controller
                 ]);
 
                 $existingPrincipal->update($enrolleeData);
+            } else {
+                Log::info('No principal changes detected, skipping update', [
+                    'employee_id' => $employeeId,
+                    'is_renewal' => $isRenewal
+                ]);
             }
 
             // Handle soft deletion if employment_end_date exists
             if ($shouldSoftDelete) {
+                Log::info('Soft deleting principal due to employment_end_date', [
+                    'employee_id' => $employeeId,
+                    'employment_end_date' => $enrolleeData['employment_end_date'] ?? null
+                ]);
                 $currentUserId = auth()->check() ? auth()->user()->id : 1;
                 $existingPrincipal->update(['deleted_by' => $currentUserId]);
                 $existingPrincipal->delete();
+            } else {
+                Log::info('No soft deletion needed for principal', [
+                    'employee_id' => $employeeId,
+                    'has_employment_end_date' => isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])
+                ]);
             }
 
             return $existingPrincipal;
@@ -685,6 +745,7 @@ class ImportEnrolleeController extends Controller
 
             $dependentFields = (new Dependent())->getFillable();
             $createdDependents = [];
+            $hasChanges = false;
 
             foreach ($dependentsData as $dependentData) {
                 $filtered = array_intersect_key($dependentData, array_flip($dependentFields));
@@ -722,22 +783,75 @@ class ImportEnrolleeController extends Controller
                 $existingDependent = $dependentQuery->first();
 
                 if ($existingDependent) {
-                    $existingDependent->update($filtered);
+                    // Check for changes before updating
+                    $dependentHasChanges = false;
+                    $dependentChanges = [];
+
+                    foreach ($filtered as $key => $value) {
+                        if (in_array($key, ['created_at', 'updated_at'])) {
+                            continue;
+                        }
+                        $currentValue = $existingDependent->getAttribute($key);
+                        $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                        $normalizedNewValue = $this->normalizeValue($value);
+
+                        if ($normalizedCurrentValue !== $normalizedNewValue) {
+                            $dependentHasChanges = true;
+                            $dependentChanges[$key] = [
+                                'old' => $currentValue,
+                                'new' => $value,
+                                'old_normalized' => $normalizedCurrentValue,
+                                'new_normalized' => $normalizedNewValue
+                            ];
+                        }
+                    }
+
+                    if ($dependentHasChanges) {
+                        Log::info("Updating existing dependent with changes", [
+                            'dependent_id' => $existingDependent->id,
+                            'principal_id' => $enrolleeId,
+                            'changes' => $dependentChanges
+                        ]);
+                        $existingDependent->update($filtered);
+                        $hasChanges = true;
+                    } else {
+                        Log::info("No changes detected for existing dependent, skipping update", [
+                            'dependent_id' => $existingDependent->id,
+                            'principal_id' => $enrolleeId,
+                            'birth_date' => $filtered['birth_date'] ?? null
+                        ]);
+                    }
                     $dependent = $existingDependent;
                 } else {
+                    Log::info("Creating new dependent", [
+                        'principal_id' => $enrolleeId,
+                        'birth_date' => $filtered['birth_date'] ?? null
+                    ]);
                     $dependent = Dependent::create($filtered);
+                    $hasChanges = true;
                 }
 
                 $createdDependents[] = $dependent;
             }
 
-            // Update the principal's updated_at timestamp to reflect dependent changes
-            $enrollee->touch();
-
-            Log::info("Updated principal timestamp due to dependent changes", [
-                'principal_id' => $enrolleeId,
-                'dependents_processed' => count($createdDependents)
-            ]);
+            // Only update the principal's updated_at timestamp if there were actual changes
+            if ($hasChanges) {
+                $enrollee->touch();
+                Log::info("Updated principal timestamp due to dependent changes", [
+                    'principal_id' => $enrolleeId,
+                    'dependents_processed' => count($createdDependents),
+                    'actual_changes' => true,
+                    'changes_count' => array_sum(array_map(function ($dep) {
+                        return isset($dep['has_changes']) ? ($dep['has_changes'] ? 1 : 0) : 1;
+                    }, $createdDependents))
+                ]);
+            } else {
+                Log::info("No dependent changes detected, principal timestamp not updated", [
+                    'principal_id' => $enrolleeId,
+                    'dependents_processed' => count($createdDependents),
+                    'all_dependents_unchanged' => true
+                ]);
+            }
 
             DB::commit();
             return response()->json(['message' => 'Dependents attached successfully', 'dependents' => $createdDependents], 200);
@@ -758,10 +872,10 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_company_paid'] = (int)$healthInsuranceData['is_company_paid'];
             } else {
                 $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
-                $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? true : false;
+                $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
             }
         } else {
-            $healthInsuranceData['is_company_paid'] = true;
+            $healthInsuranceData['is_company_paid'] = 1;
         }
 
         if ($withRenewalChecking) {
@@ -771,7 +885,7 @@ class ImportEnrolleeController extends Controller
                     $healthInsuranceData['is_renewal'] = (int)$healthInsuranceData['is_renewal'];
                 } else {
                     $value = strtoupper(trim($healthInsuranceData['is_renewal']));
-                    $healthInsuranceData['is_renewal'] = ($value === 'YES') ? true : false;
+                    $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
                 }
             }
         }
@@ -782,13 +896,13 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_skipping'] = (int)$healthInsuranceData['is_skipping'];
             } else {
                 $value = strtoupper(trim($healthInsuranceData['is_skipping']));
-                $healthInsuranceData['is_skipping'] = ($value === 'YES') ? true : false;
+                $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
             }
         } else {
-            $healthInsuranceData['is_skipping'] = false;
+            $healthInsuranceData['is_skipping'] = 0;
             if (isset($healthInsuranceData['reason_for_skipping'])) {
                 if (!empty($healthInsuranceData['reason_for_skipping'])) {
-                    $healthInsuranceData['is_skipping'] = true;
+                    $healthInsuranceData['is_skipping'] = 1;
                 }
             }
         }
@@ -865,43 +979,94 @@ class ImportEnrolleeController extends Controller
             // Check for existing insurance by principal_id or dependent_id
             $insuranceQuery = HealthInsurance::query();
             if (isset($filtered['principal_id'])) {
-
                 $insuranceQuery->where('principal_id', $filtered['principal_id']);
             } elseif (isset($filtered['dependent_id'])) {
-
                 $insuranceQuery->where('dependent_id', $filtered['dependent_id']);
             }
 
             $existingInsurance = $insuranceQuery->first();
 
-            if ($existingInsurance) {
-                $existingInsurance->update($filtered);
-                $insurance = $existingInsurance;
-            } else {
-                $insurance = HealthInsurance::create($filtered);
-            }
+            $hasInsuranceChanges = false;
 
-            // Update the principal's updated_at timestamp when health insurance is attached
-            if ($enrolleeId) {
-                // Direct principal insurance update
-                $enrollee->touch();
-                Log::info("Updated principal timestamp due to health insurance changes", [
-                    'principal_id' => $enrolleeId,
-                    'insurance_type' => 'principal'
-                ]);
-            } elseif ($dependentId) {
-                // Dependent insurance update - update the principal through the dependent
-                if ($dependent && $dependent->principal_id) {
-                    $principal = Enrollee::find($dependent->principal_id);
-                    if ($principal) {
-                        $principal->touch();
-                        Log::info("Updated principal timestamp due to dependent health insurance changes", [
-                            'principal_id' => $dependent->principal_id,
-                            'dependent_id' => $dependentId,
-                            'insurance_type' => 'dependent'
-                        ]);
+            if ($existingInsurance) {
+                // Check for changes before updating
+                $insuranceChanges = [];
+
+                foreach ($filtered as $key => $value) {
+                    if (in_array($key, ['created_at', 'updated_at'])) {
+                        continue;
+                    }
+                    $currentValue = $existingInsurance->getAttribute($key);
+                    $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                    $normalizedNewValue = $this->normalizeValue($value);
+
+                    if ($normalizedCurrentValue !== $normalizedNewValue) {
+                        $hasInsuranceChanges = true;
+                        $insuranceChanges[$key] = [
+                            'old' => $currentValue,
+                            'new' => $value,
+                            'old_normalized' => $normalizedCurrentValue,
+                            'new_normalized' => $normalizedNewValue
+                        ];
                     }
                 }
+
+                if ($hasInsuranceChanges) {
+                    Log::info("Updating existing health insurance with changes", [
+                        'insurance_id' => $existingInsurance->id,
+                        'principal_id' => $enrolleeId ?? null,
+                        'dependent_id' => $dependentId ?? null,
+                        'changes' => $insuranceChanges
+                    ]);
+                    $existingInsurance->update($filtered);
+                } else {
+                    Log::info("No changes detected for existing health insurance, skipping update", [
+                        'insurance_id' => $existingInsurance->id,
+                        'principal_id' => $enrolleeId ?? null,
+                        'dependent_id' => $dependentId ?? null
+                    ]);
+                }
+                $insurance = $existingInsurance;
+            } else {
+                Log::info("Creating new health insurance", [
+                    'principal_id' => $enrolleeId ?? null,
+                    'dependent_id' => $dependentId ?? null
+                ]);
+                $insurance = HealthInsurance::create($filtered);
+                $hasInsuranceChanges = true;
+            }
+
+            // Only update the principal's updated_at timestamp when there are actual changes
+            if ($hasInsuranceChanges) {
+                if ($enrolleeId) {
+                    // Direct principal insurance update
+                    $enrollee->touch();
+                    Log::info("Updated principal timestamp due to health insurance changes", [
+                        'principal_id' => $enrolleeId,
+                        'insurance_type' => 'principal',
+                        'actual_changes' => true
+                    ]);
+                } elseif ($dependentId) {
+                    // Dependent insurance update - update the principal through the dependent
+                    if ($dependent && $dependent->principal_id) {
+                        $principal = Enrollee::find($dependent->principal_id);
+                        if ($principal) {
+                            $principal->touch();
+                            Log::info("Updated principal timestamp due to dependent health insurance changes", [
+                                'principal_id' => $dependent->principal_id,
+                                'dependent_id' => $dependentId,
+                                'insurance_type' => 'dependent',
+                                'actual_changes' => true
+                            ]);
+                        }
+                    }
+                }
+            } else {
+                Log::info("No health insurance changes detected, principal timestamp not updated", [
+                    'principal_id' => $enrolleeId ?? ($dependent->principal_id ?? null),
+                    'dependent_id' => $dependentId ?? null,
+                    'insurance_type' => $enrolleeId ? 'principal' : 'dependent'
+                ]);
             }
 
             DB::commit();

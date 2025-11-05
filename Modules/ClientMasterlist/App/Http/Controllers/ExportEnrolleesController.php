@@ -486,7 +486,6 @@ class ExportEnrolleesController extends Controller
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
         $hasRequiredDocument = false;
-        $hasMultipleRequiredDocs = false;
 
         foreach ($enrollees as $enrollee) {
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
@@ -498,9 +497,6 @@ class ExportEnrolleesController extends Controller
                     // Check for required documents using the new relationship
                     if ($dependent->requiredDocuments && $dependent->requiredDocuments->count() > 0) {
                         $hasRequiredDocument = true;
-                        if ($dependent->requiredDocuments->count() > 1) {
-                            $hasMultipleRequiredDocs = true;
-                        }
                     }
 
                     // Also check legacy single attachment for backward compatibility
@@ -739,8 +735,17 @@ class ExportEnrolleesController extends Controller
                 return 'R';
 
             case 'maxicare_plan_code':
-                return $isPrincipal ? 'M0010165856000010P' : 'M0010165856000020D';
+                // Check if entity has own plan
+                if (isset($entity->healthInsurance->plan) && !empty($entity->healthInsurance->plan)) {
+                    return $this->parsePlanCode($entity->healthInsurance->plan, $isPrincipal);
+                }
 
+                // If dependent has no plan, copy from principal
+                if (!$isPrincipal && $principal && isset($principal->healthInsurance->plan) && !empty($principal->healthInsurance->plan)) {
+                    return $this->parsePlanCode($principal->healthInsurance->plan, false); // Always false for dependent
+                }
+                // Fallback to default codes
+                return $isPrincipal ? 'M0010165856000010P' : 'M0010165856000020D';
             case 'maxicare_card_issuance':
                 return 'Y';
 
@@ -941,5 +946,41 @@ class ExportEnrolleesController extends Controller
         if (isset($parts[4])) $addressParts['postal_code'] = $parts[4];
 
         return $addressParts;
+    }
+
+    /**
+     * Parse plan code based on comma-separated format
+     *
+     * @param string $plan
+     * @param bool $isPrincipal
+     * @return string
+     */
+    private function parsePlanCode($plan, $isPrincipal)
+    {
+        $plan = trim($plan);
+
+        if (strpos($plan, ',') === false) {
+            // Single value: apply P/D logic for dependents
+            return (!$isPrincipal && substr($plan, -1) === 'P')
+                ? substr($plan, 0, -1) . 'D'
+                : $plan;
+        }
+
+        $planParts = array_map('trim', explode(',', $plan));
+        $partCount = count($planParts);
+
+        if ($partCount == 2) {
+            // Format: plan_code_principal,plan_code_dependent
+            return $isPrincipal ? $planParts[0] : $planParts[1];
+        } elseif ($partCount == 3) {
+            // Format: plan_name,plan_code_principal,plan_code_dependent
+            return $isPrincipal ? $planParts[1] : $planParts[2];
+        } else {
+            // Fallback: use first part and apply P/D logic
+            $planCode = $planParts[0];
+            return (!$isPrincipal && substr($planCode, -1) === 'P')
+                ? substr($planCode, 0, -1) . 'D'
+                : $planCode;
+        }
     }
 }

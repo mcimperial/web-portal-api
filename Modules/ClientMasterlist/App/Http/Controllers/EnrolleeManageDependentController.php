@@ -206,7 +206,7 @@ class EnrolleeManageDependentController extends Controller
                     $validated['employee_id'] = $employeeId;
                 }
 
-                $validated['enrollment_status'] = 'PENDING';
+                $validated['enrollment_status'] = 'FOR-APPROVAL';
 
                 isset($dep['is_skipping']) && $dep['is_skipping'] ? $validated['enrollment_status'] = 'SKIPPED' : null;
                 // Uppercase string fields
@@ -224,9 +224,9 @@ class EnrolleeManageDependentController extends Controller
                     if ($dependentModel) {
 
                         if ($isRenewal && !empty($dependentModel->healthInsurance->certificate_number)) {
-                            $validated['enrollment_status'] = 'SUBMITTED';
+                            $validated['enrollment_status'] = 'FOR-APPROVAL';
                         } else if (!$isRenewal) {
-                            $validated['enrollment_status'] = 'FOR-ENROLLMENT';
+                            $validated['enrollment_status'] = 'FOR-APPROVAL';
                         }
 
                         $dependentModel->update($validated);
