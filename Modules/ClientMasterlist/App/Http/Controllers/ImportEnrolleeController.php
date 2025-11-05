@@ -229,9 +229,6 @@ class ImportEnrolleeController extends Controller
                         $enrolleeData['enrollment_status'] = 'FOR-RENEWAL';
                     } elseif ($healthInsuranceData['is_skipping'] || !empty($healthInsuranceData['reason_for_skipping'])) {
                         $enrolleeData['enrollment_status'] = 'SKIPPED';
-                    } else {
-                        // Default status when no specific condition is met
-                        $enrolleeData['enrollment_status'] = 'PENDING';
                     }
                 }
 
