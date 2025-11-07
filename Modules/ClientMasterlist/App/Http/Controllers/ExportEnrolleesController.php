@@ -277,12 +277,14 @@ class ExportEnrolleesController extends Controller
             Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
             $relationships['dependents'] = function ($query) {
                 $query->whereIn('enrollment_status', ['APPROVED'])
+                    ->where('status', 'ACTIVE')
                     ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
             };
         } else {
             // Load all active dependents (default behavior) with all their attachments
             $relationships['dependents'] = function ($query) {
-                $query->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+                $query->where('status', 'ACTIVE')
+                    ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
             };
         }
 

@@ -218,7 +218,11 @@ class EnrolleeController extends Controller
             $query->where(function ($q) use ($search) {
                 $q->where('first_name', 'like', "%$search%")
                     ->orWhere('last_name', 'like', "%$search%")
-                    ->orWhere('employee_id', 'like', "%$search%");
+                    ->orWhere('employee_id', 'like', "%$search%")
+                    ->orWhereHas('dependents', function ($subQ) use ($search) {
+                        $subQ->where('first_name', 'like', "%$search%")
+                            ->orWhere('last_name', 'like', "%$search%");
+                    });
             });
         }
     }

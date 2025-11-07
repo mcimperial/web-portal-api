@@ -69,6 +69,12 @@ class Dependent extends Model
             ->latest('created_at');
     }
 
+    // Dependent belongs to a principal (enrollee)
+    public function principal()
+    {
+        return $this->belongsTo(Enrollee::class, 'principal_id');
+    }
+
     // Alias for Laravel relationship naming convention
     public function health_insurance()
     {
