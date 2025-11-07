@@ -222,6 +222,12 @@ class EnrolleeController extends Controller
                     ->orWhereHas('dependents', function ($subQ) use ($search) {
                         $subQ->where('first_name', 'like', "%$search%")
                             ->orWhere('last_name', 'like', "%$search%");
+                    })
+                    ->orWhereHas('healthInsurance', function ($subQ) use ($search) {
+                        $subQ->where('certificate_number', 'like', "%$search%");
+                    })
+                    ->orWhereHas('dependents.healthInsurance', function ($subQ) use ($search) {
+                        $subQ->where('certificate_number', 'like', "%$search%");
                     });
             });
         }
