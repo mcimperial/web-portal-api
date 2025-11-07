@@ -175,7 +175,7 @@ class EnrolleeController extends Controller
         $this->applyDateRangeFilter($query, $filters['date_from'], $filters['date_to']);
 
         return $query->whereNull('deleted_at')
-            ->where('status', 'ACTIVE')
+            //->where('status', 'ACTIVE')
             ->orderBy('first_name', 'asc')
             ->orderBy('last_name', 'asc');
     }
