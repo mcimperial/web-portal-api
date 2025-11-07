@@ -937,7 +937,7 @@ class SendNotificationController extends Controller
         $rows[] = [
             'relation' => 'PRINCIPAL',
             'name' => trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
-            'certificate_number' => $getCertificateNumber($enrollee),
+            'certificate_number' => $getCertificateNumber($enrollee) ?? 'N/A',
             'enrollment_status' => $enrollee->enrollment_status ?? '',
         ];
 

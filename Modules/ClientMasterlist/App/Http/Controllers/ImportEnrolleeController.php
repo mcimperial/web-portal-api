@@ -570,7 +570,7 @@ class ImportEnrolleeController extends Controller
             if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
                 $enrolleeData['status'] = 'INACTIVE';
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
-                $shouldSoftDelete = true;
+                //$shouldSoftDelete = true;
             }
 
             $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
@@ -876,7 +876,7 @@ class ImportEnrolleeController extends Controller
                 $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
             }
         } else {
-            $healthInsuranceData['is_company_paid'] = 1;
+            $healthInsuranceData['is_company_paid'] = 0;
         }
 
         if ($withRenewalChecking) {

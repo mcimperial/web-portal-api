@@ -276,7 +276,7 @@ class ExportEnrolleesController extends Controller
             // When filtering for APPROVED status, only load APPROVED dependents
             Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
             $relationships['dependents'] = function ($query) {
-                $query->where('enrollment_status', 'APPROVED')
+                $query->whereIn('enrollment_status', ['APPROVED'])
                     ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
             };
         } else {
@@ -286,13 +286,17 @@ class ExportEnrolleesController extends Controller
             };
         }
 
-        $query = Enrollee::with($relationships)
-            ->where('status', 'ACTIVE')
-            ->whereNull('deleted_at');
+        $query = Enrollee::with($relationships);
 
         // Apply enrollment ID filter
         if (!empty($filters['enrollment_id'])) {
             $query->where('enrollment_id', $filters['enrollment_id']);
+        }
+
+
+        if ($filters['enrollment_status'] <> 'APPROVED') {
+            $query->where('status', 'ACTIVE')
+                ->whereNull('deleted_at');
         }
 
         // Apply enrollment status filter
@@ -305,12 +309,12 @@ class ExportEnrolleesController extends Controller
         }
 
         // Apply date range filters
-        if (!empty($filters['date_from'])) {
+        if (isset($filters['date_from'])) {
             if ($filters['enrollment_status'] === 'APPROVED') {
                 $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
                     // Filter records where coverage starts on or after the date_from
                     $subQ->where(function ($dateQ) use ($filters) {
-                        $dateQ->where('coverage_start_date', '<', $filters['date_from'])
+                        $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
                             ->orWhereNull('coverage_start_date');
                     });
                 });
@@ -319,12 +323,12 @@ class ExportEnrolleesController extends Controller
             }
         }
 
-        if (!empty($filters['date_to'])) {
+        if (isset($filters['date_to'])) {
             if ($filters['enrollment_status'] === 'APPROVED') {
                 $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
                     // Filter records where coverage ends on or before the date_to
                     $subQ->where(function ($dateQ) use ($filters) {
-                        $dateQ->where('coverage_end_date', '<', $filters['date_to'])
+                        $dateQ->where('coverage_end_date', '>=', $filters['date_to'])
                             ->orWhereNull('coverage_end_date');
                     });
                 });
@@ -343,11 +347,6 @@ class ExportEnrolleesController extends Controller
     {
         $enrollmentStatus = $filters['enrollment_status'];
         $exportType = $filters['export_enrollment_type'];
-
-        Log::info('Applying enrollment status filter', [
-            'enrollment_status' => $enrollmentStatus,
-            'export_enrollment_type' => $exportType
-        ]);
 
         if ($exportType === 'RENEWAL') {
             Log::info('Applying RENEWAL export filters');
@@ -382,6 +381,11 @@ class ExportEnrolleesController extends Controller
                 $query->where(function ($q) {
                     $q->where('enrollment_status', 'FOR-RENEWAL')
                         ->orWhere('enrollment_status', 'PENDING');
+                });
+            } else if ($enrollmentStatus === 'APPROVED') {
+                $query->where(function ($q) {
+                    $q->where('enrollment_status', 'APPROVED')
+                        ->orWhere('enrollment_status', 'RESIGNED');
                 });
             } else {
                 if (isset($enrollmentStatus)) {

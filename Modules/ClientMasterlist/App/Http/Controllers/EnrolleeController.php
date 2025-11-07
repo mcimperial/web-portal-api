@@ -369,9 +369,9 @@ class EnrolleeController extends Controller
             }
 
             // Sync employment and coverage end dates
-            if ($hasEmploymentEndDate) {
+            /* if ($hasEmploymentEndDate) {
                 $insuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
-            }
+            } */
 
             if ($hasCoverageEndDate) {
                 $enrolleeData['employment_end_date'] = $insuranceData['coverage_end_date'];
