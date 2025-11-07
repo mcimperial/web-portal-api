@@ -239,7 +239,9 @@ class DependentController extends Controller
     {
         if ($principalId) {
             $principal = Enrollee::find($principalId);
-            $principal?->touch();
+            if ($principal && $principal->enrollment_status !== 'APPROVED') {
+                $principal->touch();
+            }
         }
     }
 
