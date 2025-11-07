@@ -48,7 +48,7 @@ class DependentController extends Controller
         $this->handleDependentInsurance($dependent, $insuranceData);
 
         // Update principal timestamp
-        $this->updatePrincipalTimestamp($dependentData['principal_id']);
+        $this->updatePrincipalTimestamp($dependent);
 
         return $dependent->load('healthInsurance');
     }
@@ -74,7 +74,7 @@ class DependentController extends Controller
         $this->handleDependentInsurance($dependent, $insuranceData);
 
         // Update principal timestamp
-        $this->updatePrincipalTimestamp($dependent->principal_id);
+        $this->updatePrincipalTimestamp($dependent);
 
         return $dependent->load('healthInsurance');
     }
@@ -235,11 +235,13 @@ class DependentController extends Controller
     /**
      * Update principal's updated_at timestamp
      */
-    private function updatePrincipalTimestamp(?int $principalId): void
+    private function updatePrincipalTimestamp(Dependent $dependent): void
     {
+        $principalId = $dependent->principal_id ?? null;
+
         if ($principalId) {
             $principal = Enrollee::find($principalId);
-            if ($principal && $principal->enrollment_status !== 'APPROVED') {
+            if (($dependent->enrollment_status === 'APPROVED' && $dependent->status === 'ACTIVE') || $dependent->enrollment_status !== 'APPROVED') {
                 $principal->touch();
             }
         }
