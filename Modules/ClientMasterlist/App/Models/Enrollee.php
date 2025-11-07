@@ -70,7 +70,7 @@ class Enrollee extends Model
     // Principal has many dependents
     public function dependents()
     {
-        return $this->hasMany(Dependent::class, 'principal_id')->where('status', 'ACTIVE');
+        return $this->hasMany(Dependent::class, 'principal_id');
     }
 
     // Principal has one insurance provider through enrollment
