@@ -275,10 +275,35 @@ class ExportEnrolleesController extends Controller
         if (isset($filters['enrollment_status']) && $filters['enrollment_status'] === 'APPROVED') {
             // When filtering for APPROVED status, only load APPROVED dependents
             Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
-            $relationships['dependents'] = function ($query) {
+            $relationships['dependents'] = function ($query) use ($filters) {
                 $query->whereIn('enrollment_status', ['APPROVED'])
                     ->where('status', 'ACTIVE')
                     ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+
+                if (isset($filters['date_from'])) {
+                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                        // Filter records where coverage starts on or after the date_from
+                        $subQ->where(function ($dateQ) use ($filters) {
+                            $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
+                                ->orWhereNull('coverage_start_date');
+                        });
+
+                        $subQ->where(function ($dateQ) use ($filters) {
+                            $dateQ->where('certificate_date_issued', '<=', $filters['date_from'])
+                                ->orWhereNull('certificate_date_issued');
+                        });
+                    });
+                }
+
+                if (isset($filters['date_to'])) {
+                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                        // Filter records where coverage ends on or before the date_to
+                        $subQ->where(function ($dateQ) use ($filters) {
+                            $dateQ->where('coverage_end_date', '>=', $filters['date_to'])
+                                ->orWhereNull('coverage_end_date');
+                        });
+                    });
+                }
             };
         } else {
             // Load all active dependents (default behavior) with all their attachments
@@ -318,6 +343,11 @@ class ExportEnrolleesController extends Controller
                     $subQ->where(function ($dateQ) use ($filters) {
                         $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
                             ->orWhereNull('coverage_start_date');
+                    });
+
+                    $subQ->where(function ($dateQ) use ($filters) {
+                        $dateQ->where('certificate_date_issued', '<=', $filters['date_from'])
+                            ->orWhereNull('certificate_date_issued');
                     });
                 });
             } else {

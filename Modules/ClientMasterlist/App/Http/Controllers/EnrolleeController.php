@@ -42,6 +42,15 @@ class EnrolleeController extends Controller
     }
 
     /**
+     * Show a specific enrollee
+     */
+    public function show($id): JsonResponse
+    {
+        $enrollee = Enrollee::with(['dependents', 'healthInsurance'])->findOrFail($id);
+        return response()->json($enrollee);
+    }
+
+    /**
      * Store a new enrollee with health insurance
      */
     public function store(Request $request): JsonResponse
@@ -64,15 +73,6 @@ class EnrolleeController extends Controller
     }
 
     /**
-     * Show a specific enrollee
-     */
-    public function show($id): JsonResponse
-    {
-        $enrollee = Enrollee::with(['dependents', 'healthInsurance'])->findOrFail($id);
-        return response()->json($enrollee);
-    }
-
-    /**
      * Update an existing enrollee and its health insurance
      */
     public function update(Request $request, $id): JsonResponse
@@ -85,9 +85,21 @@ class EnrolleeController extends Controller
         $this->processEnrollmentLogic($enrolleeData, $insuranceData);
         $this->processEmploymentStatus($enrolleeData, $insuranceData);
 
-        // Update enrollee
+        // Update enrollee only if there are changes
         $enrolleeData = $this->uppercaseStrings($enrolleeData);
-        $enrollee->update($enrolleeData);
+
+        // Check if there are actual changes to prevent unnecessary updated_at updates
+        $hasChanges = false;
+        foreach ($enrolleeData as $key => $value) {
+            if ($enrollee->getAttribute($key) != $value) {
+                $hasChanges = true;
+                break;
+            }
+        }
+
+        if ($hasChanges) {
+            $enrollee->update($enrolleeData);
+        }
 
         // Handle insurance
         $this->updateEnrolleeInsurance($enrollee, $insuranceData);

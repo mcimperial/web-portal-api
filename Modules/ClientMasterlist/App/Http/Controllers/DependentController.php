@@ -62,19 +62,36 @@ class DependentController extends Controller
         $dependentData = $this->validateDependentData($request, false);
         $insuranceData = $this->validateInsuranceData($request);
 
+        // Store original values for comparison
+        $originalData = $dependent->toArray();
+
         // Process business logic
         $this->setEmployeeIdFromPrincipal($dependentData, $dependent);
         $this->processInsuranceLogic($insuranceData, $dependentData);
 
-        // Update dependent
+        // Update dependent only if there are changes
         $dependentData = $this->uppercaseStrings($dependentData);
-        $dependent->update($dependentData);
+
+        // Check if there are actual changes to prevent unnecessary updated_at updates
+        $hasChanges = false;
+        foreach ($dependentData as $key => $value) {
+            if ($dependent->getAttribute($key) != $value) {
+                $hasChanges = true;
+                break;
+            }
+        }
+
+        if ($hasChanges) {
+            $dependent->update($dependentData);
+        }
 
         // Handle insurance
         $this->handleDependentInsurance($dependent, $insuranceData);
 
-        // Update principal timestamp
-        $this->updatePrincipalTimestamp($dependent);
+        // Update principal timestamp only if dependent data changed
+        if ($hasChanges) {
+            $this->updatePrincipalTimestamp($dependent, $originalData);
+        }
 
         return $dependent->load('healthInsurance');
     }
@@ -235,14 +252,30 @@ class DependentController extends Controller
     /**
      * Update principal's updated_at timestamp
      */
-    private function updatePrincipalTimestamp(Dependent $dependent): void
+    private function updatePrincipalTimestamp(Dependent $dependent, array $originalData = []): void
     {
         $principalId = $dependent->principal_id ?? null;
 
         if ($principalId) {
             $principal = Enrollee::find($principalId);
-            if (($dependent->enrollment_status === 'APPROVED' && $dependent->status === 'ACTIVE') || $dependent->enrollment_status !== 'APPROVED') {
-                $principal->touch();
+
+            // Only update principal timestamp if there are meaningful changes
+            $shouldUpdateTimestamp = false;
+
+            // Check if enrollment_status or status changed
+            if (!empty($originalData)) {
+                $statusChanged = ($originalData['enrollment_status'] ?? null) !== $dependent->enrollment_status;
+                $activeStatusChanged = ($originalData['status'] ?? null) !== $dependent->status;
+                $shouldUpdateTimestamp = $statusChanged || $activeStatusChanged;
+            } else {
+                // For new dependents (store method), always update
+                $shouldUpdateTimestamp = true;
+            }
+
+            if ($shouldUpdateTimestamp && $principal) {
+                if (($dependent->enrollment_status === 'APPROVED' && $dependent->status === 'ACTIVE') || $dependent->enrollment_status !== 'APPROVED') {
+                    $principal->touch();
+                }
             }
         }
     }
@@ -276,8 +309,13 @@ class DependentController extends Controller
 
         $dependent->delete();
 
-        // Update principal timestamp
-        $this->updatePrincipalTimestamp($dependent->principal_id);
+        // Update principal timestamp (for deletion, always update)
+        if ($dependent->principal_id) {
+            $principal = Enrollee::find($dependent->principal_id);
+            if ($principal) {
+                $principal->touch();
+            }
+        }
 
         return response()->json([
             'success' => true,
