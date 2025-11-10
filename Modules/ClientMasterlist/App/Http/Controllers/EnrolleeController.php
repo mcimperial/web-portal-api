@@ -361,8 +361,10 @@ class EnrolleeController extends Controller
             $enrolleeData['enrollment_status'] !== 'APPROVED' &&
             !($insuranceData['is_renewal'] ?? false)
         ) {
+            if (empty($insuranceData['certificate_date_issued'])) {
+                $insuranceData['certificate_date_issued'] = date('Y-m-d');
+            }
 
-            $insuranceData['certificate_date_issued'] = date('Y-m-d');
             $enrolleeData['enrollment_status'] = 'APPROVED';
 
             if (empty($insuranceData['coverage_start_date'])) {
