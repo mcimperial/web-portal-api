@@ -30,6 +30,7 @@ class HealthInsurance extends Model
         'is_kyc_approved',
         'kyc_datestamp',
         'is_card_delivered',
+        'card_delivery_date',
         'notes',
         'status',
     ];

@@ -55,6 +55,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Enrollee CRUD
     Route::apiResource('enrollees', EnrolleeController::class);
 
+    // Update card delivery status
+    Route::put('enrollees/{id}/card-delivery', [EnrolleeController::class, 'updateCardDelivery']);
+
     // Dependents CRUD
     Route::apiResource('dependents', DependentController::class);
 

@@ -108,6 +108,31 @@ class EnrolleeController extends Controller
     }
 
     /**
+     * Update card delivery status for an enrollee
+     */
+    public function updateCardDelivery(Request $request, $id): JsonResponse
+    {
+        $request->validate([
+            'is_card_delivered' => 'required|boolean',
+            'card_delivery_date' => 'nullable|date',
+        ]);
+
+        $enrollee = Enrollee::findOrFail($id);
+
+        // Find or create health insurance record
+        $healthInsurance = $enrollee->healthInsurance ?? new HealthInsurance();
+        if (!$healthInsurance->exists) {
+            $healthInsurance->principal_id = $enrollee->id;
+        }
+
+        $healthInsurance->is_card_delivered = $request->is_card_delivered;
+        $healthInsurance->card_delivery_date = $request->card_delivery_date;
+        $healthInsurance->save();
+
+        return response()->json($enrollee->load(['dependents', 'healthInsurance']));
+    }
+
+    /**
      * Soft delete an enrollee and its dependents with password validation
      */
     public function destroy(Request $request, $id): JsonResponse
