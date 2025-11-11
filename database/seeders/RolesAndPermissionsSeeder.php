@@ -29,6 +29,12 @@ class RolesAndPermissionsSeeder extends Seeder
             'description' => 'Regular Employee Self Enrollment'
         ]);
 
+        $viewerRole = Role::create([
+            'name' => 'Viewer: Self Enrollment',
+            'slug' => 'viewer-se',
+            'description' => 'Viewer Self Enrollment'
+        ]);
+
         $guestRole = Role::create([
             'name' => 'Guest',
             'slug' => 'guest',
@@ -99,6 +105,16 @@ class RolesAndPermissionsSeeder extends Seeder
                 'app' => 'self-enrollment',
                 'link' => 'self-enrollment/manage-enrollment-storage',
                 'sub_app' => 'employee-se',
+            ],
+
+            // Self Enrollment - Viewer
+            [
+                'name' => 'View Enrollment',
+                'slug' => 'self-enrollment-viewer',
+                'description' => 'View self-enrollment using viewer role',
+                'app' => 'self-enrollment',
+                'link' => 'self-enrollment/manage',
+                'sub_app' => 'viewer-se',
             ],
 
             // HR Portal (example, add more as needed)

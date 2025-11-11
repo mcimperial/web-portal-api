@@ -50,6 +50,19 @@ class UserSeeder extends Seeder
         );
         $employee1->roles()->sync(Role::where('slug', 'employee-se')->first()->id);
 
+
+        // Create Viewer Users
+        $viewer1 = User::firstOrCreate(
+            ['email' => 'viewer@example.com'],
+            [
+                'role' => 'viewer-se',
+                'name' => 'John Employee',
+                'password' => Hash::make('password123'),
+                'email_verified_at' => now()
+            ]
+        );
+        $viewer1->roles()->sync(Role::where('slug', 'viewer-se')->first()->id);
+
         $employee2 = User::firstOrCreate(
             ['email' => 'guest@example.com'],
             [
