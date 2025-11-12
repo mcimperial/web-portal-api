@@ -192,7 +192,7 @@ class DependentController extends Controller
         }
 
         if (empty($insuranceData['certificate_date_issued'])) {
-            $insuranceData['certificate_date_issued'] = $insuranceData['coverage_start_date'] || date('Y-m-d');
+            $insuranceData['certificate_date_issued'] = $insuranceData['coverage_start_date'] ?? date('Y-m-d');
         }
     }
 
