@@ -573,7 +573,7 @@ class ImportEnrolleeController extends Controller
                 //$shouldSoftDelete = true;
             }
 
-            $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
+            //$healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
         } else {
             if ((isset($healthInsuranceData['certificate_number']) && !empty($healthInsuranceData['certificate_number']))) {
 
@@ -582,7 +582,7 @@ class ImportEnrolleeController extends Controller
                 }
 
                 if (empty($healthInsuranceData['coverage_start_date'])) {
-                    $healthInsuranceData['certificate_date_issued'] = date('Y-m-d');
+                    $healthInsuranceData['certificate_date_issued'] = $healthInsuranceData['coverage_start_date'];
                 }
 
                 $enrolleeData['status'] = 'ACTIVE';

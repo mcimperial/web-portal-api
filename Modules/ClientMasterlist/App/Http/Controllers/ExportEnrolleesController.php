@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Models\Enrollee;
+use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use App\Http\Traits\UppercaseInput;
 use App\Models\Company;
 
@@ -207,12 +208,15 @@ class ExportEnrolleesController extends Controller
             ]);
 
             foreach ($enrollees as $index => $enrollee) {
-                $isRenewal = $enrollee->healthInsurance ? $enrollee->healthInsurance->is_renewal : 'no_health_insurance';
+                /** @var \Modules\ClientMasterlist\App\Models\Enrollee $enrollee */
+                $healthInsurance = $enrollee->healthInsurance;
+                $isRenewal = $healthInsurance ? $healthInsurance->is_renewal : 'no_health_insurance';
+
                 Log::info("DEBUG: Enrollee #{$index}", [
                     'enrollee_id' => $enrollee->id,
                     'employee_id' => $enrollee->employee_id,
                     'is_renewal' => $isRenewal,
-                    'has_health_insurance' => $enrollee->healthInsurance ? 'yes' : 'no'
+                    'has_health_insurance' => $healthInsurance ? 'yes' : 'no'
                 ]);
 
                 // Only log first 5 to avoid overwhelming logs
