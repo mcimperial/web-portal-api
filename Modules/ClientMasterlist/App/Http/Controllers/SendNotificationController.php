@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Services\EmailSender;
 use Modules\ClientMasterlist\App\Models\Attachment;
 use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
+use Illuminate\Support\Facades\DB;
 
 use Modules\ClientMasterlist\App\Models\Enrollee;
 
@@ -351,11 +352,17 @@ class SendNotificationController extends Controller
             }
 
             if (!$result) {
+                // Log failed notification
+                $this->logNotificationSending($notification, $data, 'FAILED', 'Manual');
+
                 return response()->json([
                     'success' => false,
                     'message' => 'Infobip error: Failed to send email via service',
                 ], 500);
             }
+
+            // Log successful notification
+            $this->logNotificationSending($notification, $data, 'SUCCESS', 'Manual');
         } else {
             Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment) {
                 $message->to($to)
@@ -395,6 +402,9 @@ class SendNotificationController extends Controller
                     @unlink($csvAttachment['temp_path']);
                 }
             }
+
+            // Log successful notification
+            $this->logNotificationSending($notification, $data, 'SUCCESS', 'Manual');
         }
 
         return response()->json([
@@ -497,6 +507,7 @@ class SendNotificationController extends Controller
                 'cc' => $notification->cc,
                 'bcc' => $notification->bcc,
                 'use_saved' => true,
+                'type' => 'scheduled',
             ]);
 
             $forCount = 0; // Initialize count variable
@@ -566,7 +577,13 @@ class SendNotificationController extends Controller
                 ]);
                 continue; // Skip sending if no recipients
             }
-            $this->send($request);
+
+            $response = $this->send($request);
+
+            // Log scheduled notification result
+            $responseData = $response->getData(true);
+            $status = $responseData['success'] ? 'SUCCESS' : 'FAILED';
+            $this->logNotificationSending($notification, $request->all(), $status, 'Scheduled');
 
             Log::info("Notification sent, updating last_sent_at", [
                 'notification_id' => $notification->id
@@ -581,7 +598,6 @@ class SendNotificationController extends Controller
 
     private function checkNotificationStatus($notificationType, $enrollmentId = null, $notification = null)
     {
-
         // Use passed notification or find it if not provided
         if (!$notification) {
             $notification = Notification::with(['enrollment.insuranceProvider'])
@@ -671,17 +687,167 @@ class SendNotificationController extends Controller
             $enrollees = $enrollees->where('with_dependents', $withDependents);
         }
 
-        $enrollees = $enrollees->get();
+        $enrollees = $enrollees->limit(1)->get();
 
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
-            return $enrolleeIds;
+            // For scheduled notifications, check for duplicates in notification logs
+            // Only filter principals (enrollees without parent_enrollee_id)
+            $filteredIds = [];
+            foreach ($enrolleeIds as $enrolleeId) {
+                $enrollee = $enrollees->firstWhere('id', $enrolleeId);
+
+                // Only check for duplicates if this is a principal (no parent_enrollee_id)
+                if (empty($enrollee->parent_enrollee_id)) {
+                    // Check if this principal already has a notification log with the same status
+                    // within the last 24 hours to prevent immediate duplicates
+                    $existingLog = DB::table('cm_notification_logs')
+                        ->where('principal_id', $enrolleeId)
+                        ->where('notification_id', $notification->id)
+                        ->where('status', 'SUCCESS')
+                        ->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
+                        ->where(function ($query) use ($status) {
+                            $query->where('details', 'like', '%"enrollment_status":"' . $status . '"%')
+                                ->orWhere('details', 'like', '%"enrollment_status":null%'); // Handle null status cases
+                        })
+                        ->orderBy('date_sent', 'desc')
+                        ->first();
+
+                    if ($existingLog) {
+                        Log::info("Skipping duplicate scheduled notification for principal", [
+                            'principal_id' => $enrolleeId,
+                            'notification_id' => $notification->id,
+                            'notification_type' => $notification->notification_type,
+                            'status' => $status,
+                            'existing_log_date' => $existingLog->date_sent ?? 'unknown',
+                            'hours_since_last_send' => now()->diffInHours($existingLog->date_sent ?? now())
+                        ]);
+                        continue; // Skip this principal
+                    }
+                }
+
+                // Add to filtered list (either not a principal or no duplicate found)
+                $filteredIds[] = $enrolleeId;
+            }
+
+            if (count($filteredIds) !== count($enrolleeIds)) {
+                Log::info("Filtered out duplicate notifications", [
+                    'notification_id' => $notification->id,
+                    'original_count' => count($enrolleeIds),
+                    'filtered_count' => count($filteredIds),
+                    'status' => $status
+                ]);
+            }
+
+            return $filteredIds;
         }
 
         Log::info("STATUS BY HMO notification: No {$status} enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
 
         return [];
+    }
+
+    /**
+     * Log notification sending activity
+     */
+    private function logNotificationSending($notification, $data, $status, $type = 'Manual')
+    {
+        try {
+            // Extract recipient emails for logging
+            $recipients = [];
+            if (isset($data['to'])) {
+                $toRaw = rtrim(trim($data['to']), ',');
+                $recipients = array_filter(array_map('trim', explode(',', $toRaw)), function ($email) {
+                    return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
+                });
+            }
+
+            // Determine if this notification was sent to a principal
+            $principalId = null;
+            $sentToPrincipal = false;
+
+            // Check if enrollee_id is provided and if it's the principal
+            if (isset($data['enrollee_id']) && $data['enrollee_id']) {
+                $enrollee = Enrollee::find($data['enrollee_id']);
+                if ($enrollee) {
+                    // Check if this enrollee is a principal (no parent_enrollee_id means it's a principal)
+                    if (empty($enrollee->parent_enrollee_id)) {
+                        $principalId = $enrollee->id;
+                        $sentToPrincipal = true;
+                    }
+                }
+            }
+
+            // If no specific enrollee_id, check if notification type typically targets principals
+            if (!$sentToPrincipal && $notification && in_array($notification->notification_type, [
+                'APPROVED BY HMO (WELCOME EMAIL)',
+                'ENROLLMENT START (PENDING)',
+                'ENROLLMENT START W/OUT DEP (PENDING)'
+            ])) {
+                // For these notification types, try to find the principal from enrollment
+                if ($notification->enrollment_id) {
+                    $principal = Enrollee::where('enrollment_id', $notification->enrollment_id)
+                        ->whereNull('parent_enrollee_id')
+                        ->first();
+                    if ($principal) {
+                        $principalId = $principal->id;
+                        $sentToPrincipal = true;
+                    }
+                }
+            }
+
+            // Prepare log details
+            $enrollmentStatus = null;
+            if ($sentToPrincipal && $principalId) {
+                $principal = Enrollee::find($principalId);
+                if ($principal) {
+                    $enrollmentStatus = $principal->enrollment_status;
+                }
+            }
+
+            $details = [
+                'notification_type' => $notification->notification_type ?? 'Unknown',
+                'sending_type' => $notification->type ?? $type, // 'Manual' or 'Scheduled'
+                'status' => $status, // 'SUCCESS' or 'FAILED'
+                'recipients' => $recipients,
+                'recipient_count' => count($recipients),
+                'enrollment_id' => $notification->enrollment_id ?? null,
+                'enrollment_status' => $enrollmentStatus, // Add enrollment status for duplicate detection
+                'sent_to_principal' => $sentToPrincipal
+            ];
+
+            // Add additional context for scheduled notifications
+            if ($type === 'Scheduled') {
+                $details['schedule'] = $notification->schedule ?? null;
+                $details['auto_generated'] = true;
+            }
+
+            // Create notification log entry
+            DB::table('cm_notification_logs')->insert([
+                'notification_id' => $notification->id,
+                'principal_id' => $sentToPrincipal ? $principalId : null, // Only include if sent to principal
+                'date_sent' => now(),
+                'status' => $status,
+                'details' => json_encode($details),
+                'created_at' => now(),
+                'updated_at' => now()
+            ]);
+
+            Log::info("Notification sending logged", [
+                'notification_id' => $notification->id,
+                'principal_id' => $sentToPrincipal ? $principalId : null,
+                'type' => $type,
+                'status' => $status,
+                'recipients' => implode(', ', $recipients)
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Failed to log notification sending", [
+                'notification_id' => $notification->id ?? null,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
     }
 
     /**
