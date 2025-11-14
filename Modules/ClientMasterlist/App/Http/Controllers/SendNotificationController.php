@@ -704,7 +704,7 @@ class SendNotificationController extends Controller
                     ->where('principal_id', $enrolleeId)
                     ->where('notification_id', $notification->id)
                     ->where('status', 'SUCCESS')
-                    ->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
+                    //->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
                     ->where(function ($query) use ($status) {
                         $query->where('details', 'like', '%"enrollment_status":"' . $status . '"%')
                             ->orWhere('details', 'like', '%"enrollment_status":null%'); // Handle null status cases
