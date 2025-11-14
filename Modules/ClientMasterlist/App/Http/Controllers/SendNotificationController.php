@@ -693,41 +693,38 @@ class SendNotificationController extends Controller
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
             // For scheduled notifications, check for duplicates in notification logs
-            // Only filter principals (enrollees without parent_enrollee_id)
+            // All enrollees in this table are principals (cm_principal table)
             $filteredIds = [];
             foreach ($enrolleeIds as $enrolleeId) {
                 $enrollee = $enrollees->firstWhere('id', $enrolleeId);
 
-                // Only check for duplicates if this is a principal (no parent_enrollee_id)
-                if (empty($enrollee->parent_enrollee_id)) {
-                    // Check if this principal already has a notification log with the same status
-                    // within the last 24 hours to prevent immediate duplicates
-                    $existingLog = DB::table('cm_notification_logs')
-                        ->where('principal_id', $enrolleeId)
-                        ->where('notification_id', $notification->id)
-                        ->where('status', 'SUCCESS')
-                        ->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
-                        ->where(function ($query) use ($status) {
-                            $query->where('details', 'like', '%"enrollment_status":"' . $status . '"%')
-                                ->orWhere('details', 'like', '%"enrollment_status":null%'); // Handle null status cases
-                        })
-                        ->orderBy('date_sent', 'desc')
-                        ->first();
+                // Check if this principal already has a notification log with the same status
+                // within the last 24 hours to prevent immediate duplicates
+                $existingLog = DB::table('cm_notification_logs')
+                    ->where('principal_id', $enrolleeId)
+                    ->where('notification_id', $notification->id)
+                    ->where('status', 'SUCCESS')
+                    ->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
+                    ->where(function ($query) use ($status) {
+                        $query->where('details', 'like', '%"enrollment_status":"' . $status . '"%')
+                            ->orWhere('details', 'like', '%"enrollment_status":null%'); // Handle null status cases
+                    })
+                    ->orderBy('date_sent', 'desc')
+                    ->first();
 
-                    if ($existingLog) {
-                        Log::info("Skipping duplicate scheduled notification for principal", [
-                            'principal_id' => $enrolleeId,
-                            'notification_id' => $notification->id,
-                            'notification_type' => $notification->notification_type,
-                            'status' => $status,
-                            'existing_log_date' => $existingLog->date_sent ?? 'unknown',
-                            'hours_since_last_send' => now()->diffInHours($existingLog->date_sent ?? now())
-                        ]);
-                        continue; // Skip this principal
-                    }
+                if ($existingLog) {
+                    Log::info("Skipping duplicate scheduled notification for principal", [
+                        'principal_id' => $enrolleeId,
+                        'notification_id' => $notification->id,
+                        'notification_type' => $notification->notification_type,
+                        'status' => $status,
+                        'existing_log_date' => $existingLog->date_sent ?? 'unknown',
+                        'hours_since_last_send' => now()->diffInHours($existingLog->date_sent ?? now())
+                    ]);
+                    continue; // Skip this principal
                 }
 
-                // Add to filtered list (either not a principal or no duplicate found)
+                // Add to filtered list (no duplicate found)
                 $filteredIds[] = $enrolleeId;
             }
 
@@ -767,15 +764,13 @@ class SendNotificationController extends Controller
             $principalId = null;
             $sentToPrincipal = false;
 
-            // Check if enrollee_id is provided and if it's the principal
+            // Check if enrollee_id is provided and it's a valid principal
             if (isset($data['enrollee_id']) && $data['enrollee_id']) {
                 $enrollee = Enrollee::find($data['enrollee_id']);
                 if ($enrollee) {
-                    // Check if this enrollee is a principal (no parent_enrollee_id means it's a principal)
-                    if (empty($enrollee->parent_enrollee_id)) {
-                        $principalId = $enrollee->id;
-                        $sentToPrincipal = true;
-                    }
+                    // All enrollees in cm_principal table are principals
+                    $principalId = $enrollee->id;
+                    $sentToPrincipal = true;
                 }
             }
 
@@ -788,8 +783,7 @@ class SendNotificationController extends Controller
                 // For these notification types, try to find the principal from enrollment
                 if ($notification->enrollment_id) {
                     $principal = Enrollee::where('enrollment_id', $notification->enrollment_id)
-                        ->whereNull('parent_enrollee_id')
-                        ->first();
+                        ->first(); // All Enrollee records are principals, no need for whereNull check
                     if ($principal) {
                         $principalId = $principal->id;
                         $sentToPrincipal = true;
