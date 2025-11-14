@@ -701,8 +701,8 @@ class SendNotificationController extends Controller
                 // Check if this principal already has a notification log with the same status
                 // within the last 24 hours to prevent immediate duplicates
                 $existingLog = DB::table('cm_notification_logs')
-                    ->where('principal_id', $enrolleeId)
                     ->where('notification_id', $notification->id)
+                    ->where('principal_id', $enrolleeId)
                     ->where('status', 'SUCCESS')
                     //->where('date_sent', '>=', now()->subHours(24)) // Check last 24 hours
                     ->where(function ($query) use ($status) {
