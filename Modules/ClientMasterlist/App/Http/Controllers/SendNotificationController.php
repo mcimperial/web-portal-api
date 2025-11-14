@@ -1057,18 +1057,27 @@ class SendNotificationController extends Controller
         $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
         $link = '<a href="' . $link . '">Self-Enrollment Portal</a>';
 
+        $coverage_start_date = $enrollee->healthInsurance->coverage_start_date;
+
+        $coverageStartDate = date('F j, Y');
+        if (!empty($coverage_start_date)) {
+            $coverageStartDate = date('F j, Y', strtotime($coverage_start_date));
+        }
+
+        $firstDayOfNextMonth = date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01'))));
+
         $replacements = [
             'enrollment_link' => $data['enrollment_link'] ?? $link,
-            'coverage_start_date' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
-            'first_day_of_next_month' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
+            'coverage_start_date' => $data['coverage_start_date'] ?? $coverageStartDate,
+            'first_day_of_next_month' => $data['first_day_of_next_month'] ?? $firstDayOfNextMonth,
             'date_today' => date('F j, Y'),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
 
             // Add uppercase versions for backward compatibility
             'ENROLLMENT_LINK' => $data['enrollment_link'] ?? $link,
-            'COVERAGE_START_DATE' => $data['coverage_start_date'] ?? date('F j, Y', strtotime($enrollee->healthInsurance->coverage_start_date)),
-            'FIRST_DAY_OF_NEXT_MONTH' => $data['first_day_of_next_month'] ?? date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01')))),
+            'COVERAGE_START_DATE' => $data['coverage_start_date'] ?? $coverageStartDate,
+            'FIRST_DAY_OF_NEXT_MONTH' => $data['first_day_of_next_month'] ?? $firstDayOfNextMonth,
             'DATE_TODAY' => date('F j, Y'),
             'CERTIFICATION_TABLE' => $this->certificationTable($enrollee),
             'SUBMISSION_TABLE' => $this->submissionTable($enrollee),
