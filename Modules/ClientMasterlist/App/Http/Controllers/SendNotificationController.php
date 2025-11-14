@@ -1082,6 +1082,20 @@ class SendNotificationController extends Controller
             return '';
         }
 
+        // Get insurance provider to determine column header
+        $insuranceProvider = '';
+        if ($enrollee && $enrollee->enrollment && $enrollee->enrollment->insuranceProvider) {
+            $insuranceProvider = strtoupper($enrollee->enrollment->insuranceProvider->title ?? '');
+        }
+
+        // Determine column header based on provider
+        $certificateColumnHeader = 'Certificate No.'; // Default
+        if ($insuranceProvider === 'MAXICARE') {
+            $certificateColumnHeader = 'Card Number';
+        } elseif ($insuranceProvider === 'PHILCARE') {
+            $certificateColumnHeader = 'Certificate No.';
+        }
+
         // Helper to get certificate_number from joined health_insurance if available
         $getCertificateNumber = function ($person) {
             // If relation loaded, use it; otherwise fallback
@@ -1120,7 +1134,7 @@ class SendNotificationController extends Controller
 
         // Build HTML table
         $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
-        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>Certificate #</th><th>Status</th></tr></thead><tbody>';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>' . htmlspecialchars($certificateColumnHeader) . '</th><th>Status</th></tr></thead><tbody>';
         foreach ($rows as $row) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
