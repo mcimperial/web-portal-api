@@ -1,0 +1,11 @@
+{
+    "name": "ClientMobileApp",
+    "alias": "clientmobileapp",
+    "description": "",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\ClientMobileApp\\App\\Providers\\ClientMobileAppServiceProvider"
+    ],
+    "files": []
+}

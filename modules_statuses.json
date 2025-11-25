@@ -3,5 +3,6 @@
     "TestTry": true,
     "TestMod": true,
     "ModuleName": true,
-    "ClientMasterlist": true
+    "ClientMasterlist": true,
+    "ClientMobileApp": true
 }
