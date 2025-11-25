@@ -19,20 +19,12 @@ return [
 
     'allowed_methods' => ['*'],
 
-    /* 'allowed_origins' => [
-        env('FRONTEND_URL', 'http://localhost:3000'),
-        'http://localhost',
-        'http://localhost:5173',
-        'https://web-portal.llibi.app'
-    ], */
-
     'allowed_origins' => [
         env('FRONTEND_URL', 'http://localhost:3000'),
         'https://localhost',  // For Capacitor Android
         'capacitor://localhost',  // Alternative Capacitor scheme
         'ionic://localhost',  // For Ionic
         'http://localhost:5173',
-
         'http://localhost:8100',  // For local development
         // Add other origins as needed
         'https://web-portal.llibi.app'
@@ -41,6 +33,7 @@ return [
     'supports_credentials' => false,  // Set to false for native apps
 
     'allowed_headers' => ['*'],
+
     'allowed_methods' => ['*'],
 
     'allowed_origins_patterns' => [],
