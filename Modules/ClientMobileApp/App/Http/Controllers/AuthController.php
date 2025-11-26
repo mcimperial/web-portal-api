@@ -29,8 +29,12 @@ class AuthController extends Controller
             ]);
         }
 
-        $deviceName = $request->device_name ?? 'mobile-app';
-        $token = $user->createToken($deviceName)->plainTextToken;
+        $deviceName = $request->deviceName ?? 'mobile-app';
+
+        // Update user's device_name
+        $user->update(['device_name' => $deviceName]);
+
+        $token = $user->createToken('mobile-app')->plainTextToken;
 
         return response()->json([
             'token' => $token,
@@ -38,6 +42,7 @@ class AuthController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'device_name' => $user->device_name,
             ],
         ]);
     }
