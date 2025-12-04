@@ -11,10 +11,11 @@ use Modules\ClientMasterlist\App\Models\Attachment;
 use Illuminate\Support\Facades\Schema;
 use \App\Http\Traits\UppercaseInput;
 use \App\Http\Traits\PasswordDeleteValidation;
+use \App\Http\Traits\LogsActions;
 
 class NotificationController extends Controller
 {
-    use UppercaseInput, PasswordDeleteValidation;
+    use UppercaseInput, PasswordDeleteValidation, LogsActions;
 
     // List enrollees for notification
     public function enrollees()
@@ -59,6 +60,13 @@ class NotificationController extends Controller
             }
         }
         $notification = Notification::create($upperData);
+        
+        // Log the create action
+        $this->logCreate($notification, [
+            'notification_type' => $upperData['notification_type'] ?? null,
+            'enrollment_id' => $upperData['enrollment_id']
+        ]);
+        
         return response()->json($notification, 201);
     }
 
@@ -66,6 +74,7 @@ class NotificationController extends Controller
     public function update(Request $request, $id)
     {
         $notification = Notification::findOrFail($id);
+        $oldValues = $notification->toArray();
         $data = $request->validate([
             'notification_type' => 'nullable|string',
             'to' => 'nullable|string',
@@ -91,6 +100,12 @@ class NotificationController extends Controller
             }
         }
         $notification->update($upperData);
+        
+        // Log the update action
+        $this->logUpdate($notification, $oldValues, [
+            'notification_type' => $notification->notification_type
+        ]);
+        
         return response()->json($notification);
     }
 
@@ -106,6 +121,13 @@ class NotificationController extends Controller
             $notification->deleted_by = $user ? $user->id : null;
             $notification->save();
         }
+        
+        // Log the delete action
+        $this->logDelete($notification, [
+            'deleted_by' => $user ? $user->id : null,
+            'notification_type' => $notification->notification_type
+        ]);
+        
         $notification->delete();
         return response()->json(['message' => 'Deleted successfully']);
     }

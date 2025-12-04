@@ -14,6 +14,7 @@ use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
 use Illuminate\Support\Facades\DB;
 
 use Modules\ClientMasterlist\App\Models\Enrollee;
+use App\Http\Traits\LogsActions;
 
 /**
  * SendNotificationController
@@ -39,6 +40,8 @@ use Modules\ClientMasterlist\App\Models\Enrollee;
  */
 class SendNotificationController extends Controller
 {
+    use LogsActions;
+    
     /**
      * Handle sending a notification email.
      */
@@ -406,6 +409,16 @@ class SendNotificationController extends Controller
             // Log successful notification
             $this->logNotificationSending($notification, $data, 'SUCCESS', 'Manual');
         }
+        
+        // Log the notification send action
+        $this->logAction(
+            'CREATE',
+            $notification,
+            null,
+            ['to' => $to, 'subject' => $subjectBody],
+            'Notification sent successfully',
+            ['notification_type' => $notification->notification_type, 'send_type' => 'single_email']
+        );
 
         return response()->json([
             'success' => true,

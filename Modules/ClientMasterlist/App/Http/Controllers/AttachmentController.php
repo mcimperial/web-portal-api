@@ -9,9 +9,11 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\Attachment;
 use Illuminate\Support\Facades\Storage;
+use App\Http\Traits\LogsActions;
 
 class AttachmentController extends Controller
 {
+    use LogsActions;
     public function index(Request $request)
     {
         $query = Attachment::query();
@@ -123,6 +125,12 @@ class AttachmentController extends Controller
             'file_name' => $file->getClientOriginalName(),
             'file_type' => $file->getClientMimeType(),
         ]);
+        
+        // Log the create action
+        $this->logCreate($attachment, [
+            'attachment_for' => $attachmentFor,
+            'file_name' => $file->getClientOriginalName()
+        ]);
 
         return response()->json([
             'success' => $log,
@@ -134,6 +142,13 @@ class AttachmentController extends Controller
     public function destroy($id)
     {
         $attachment = Attachment::findOrFail($id);
+        
+        // Log the delete action before deletion
+        $this->logDelete($attachment, [
+            'file_name' => $attachment->file_name,
+            'attachment_for' => $attachment->attachment_for
+        ]);
+        
         // Extract the object key from the file_path
         $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
         $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';
@@ -151,7 +166,15 @@ class AttachmentController extends Controller
     {
         $attachments = Attachment::where('dependent_id', $dependentId)->get();
         $deleted = 0;
+        
         foreach ($attachments as $attachment) {
+            // Log each deletion
+            $this->logDelete($attachment, [
+                'file_name' => $attachment->file_name,
+                'attachment_for' => $attachment->attachment_for,
+                'batch_delete_by_dependent' => true
+            ]);
+            
             // Extract the object key from the file_path
             $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
             $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';

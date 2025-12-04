@@ -9,10 +9,11 @@ use Modules\ClientMasterlist\App\Models\Enrollee;
 use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
+use App\Http\Traits\LogsActions;
 
 class EnrolleeController extends Controller
 {
-    use UppercaseInput, PasswordDeleteValidation;
+    use UppercaseInput, PasswordDeleteValidation, LogsActions;
 
     /**
      * List all enrollees for an enrollment with filtering and pagination
@@ -68,6 +69,12 @@ class EnrolleeController extends Controller
 
         // Handle insurance
         $this->createEnrolleeInsurance($enrollee, $insuranceData);
+        
+        // Log the create action
+        $this->logCreate($enrollee, [
+            'insurance_data' => $insuranceData,
+            'enrollment_status' => $enrolleeData['enrollment_status']
+        ]);
 
         return response()->json($enrollee->load(['dependents', 'healthInsurance']), 201);
     }
@@ -78,6 +85,7 @@ class EnrolleeController extends Controller
     public function update(Request $request, $id): JsonResponse
     {
         $enrollee = Enrollee::findOrFail($id);
+        $oldValues = $enrollee->toArray();
         $enrolleeData = $this->validateEnrolleeData($request);
         $insuranceData = $this->validateInsuranceData($request);
 
@@ -103,6 +111,12 @@ class EnrolleeController extends Controller
 
         // Handle insurance
         $this->updateEnrolleeInsurance($enrollee, $insuranceData);
+        
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'insurance_data' => $insuranceData,
+            'had_changes' => $hasChanges
+        ]);
 
         return response()->json($enrollee->load(['dependents', 'healthInsurance']));
     }
@@ -128,6 +142,16 @@ class EnrolleeController extends Controller
         $healthInsurance->is_card_delivered = $request->is_card_delivered;
         $healthInsurance->card_delivery_date = $request->card_delivery_date;
         $healthInsurance->save();
+        
+        // Log the card delivery update
+        $this->logAction(
+            'UPDATE',
+            $enrollee,
+            null,
+            ['is_card_delivered' => $request->is_card_delivered, 'card_delivery_date' => $request->card_delivery_date],
+            'Updated card delivery status',
+            ['action_type' => 'card_delivery_update']
+        );
 
         return response()->json($enrollee->load(['dependents', 'healthInsurance']));
     }
@@ -150,6 +174,13 @@ class EnrolleeController extends Controller
         // Set deleted_by and soft delete enrollee
         $enrollee->deleted_by = auth()->id() ?? $user->id ?? null;
         $enrollee->save();
+        
+        // Log the delete action
+        $this->logDelete($enrollee, [
+            'deleted_by' => $enrollee->deleted_by,
+            'deleted_dependents_count' => $enrollee->dependents()->count()
+        ]);
+        
         $enrollee->delete();
 
         return response()->json(['message' => 'Deleted']);

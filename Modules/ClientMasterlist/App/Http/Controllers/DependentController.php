@@ -10,10 +10,11 @@ use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 
 use App\Http\Traits\UppercaseInput;
+use App\Http\Traits\LogsActions;
 
 class DependentController extends Controller
 {
-    use UppercaseInput;
+    use UppercaseInput, LogsActions;
 
     /**
      * Get all dependents for a principal
@@ -49,6 +50,12 @@ class DependentController extends Controller
 
         // Update principal timestamp
         $this->updatePrincipalTimestamp($dependent);
+        
+        // Log the create action
+        $this->logCreate($dependent, [
+            'principal_id' => $dependentData['principal_id'],
+            'insurance_data' => $insuranceData
+        ]);
 
         return $dependent->load('healthInsurance');
     }
@@ -59,6 +66,7 @@ class DependentController extends Controller
     public function update(Request $request, $id)
     {
         $dependent = Dependent::findOrFail($id);
+        $oldValues = $dependent->toArray();
         $dependentData = $this->validateDependentData($request, false);
         $insuranceData = $this->validateInsuranceData($request);
 
@@ -92,6 +100,12 @@ class DependentController extends Controller
         if ($hasChanges) {
             $this->updatePrincipalTimestamp($dependent, $originalData);
         }
+        
+        // Log the update action
+        $this->logUpdate($dependent, $oldValues, [
+            'insurance_data' => $insuranceData,
+            'had_changes' => $hasChanges
+        ]);
 
         return $dependent->load('healthInsurance');
     }
@@ -306,6 +320,12 @@ class DependentController extends Controller
             $dependent->deleted_by = auth()->id();
             $dependent->save();
         }
+        
+        // Log the delete action
+        $this->logDelete($dependent, [
+            'deleted_by' => auth()->id(),
+            'principal_id' => $dependent->principal_id
+        ]);
 
         $dependent->delete();
 

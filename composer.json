@@ -11,7 +11,7 @@
         "laravel/sanctum": "^3.3",
         "laravel/tinker": "^2.8",
         "league/flysystem-aws-s3-v3": "3.0",
-        "mailersend/mailersend": "^0.34.0",
+        "mailersend/mailersend": "^0.31.0",
         "nwidart/laravel-modules": "^10.0",
         "spatie/laravel-permission": "^6.10"
     },

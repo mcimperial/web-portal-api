@@ -7,6 +7,7 @@ use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
+use App\Http\Traits\LogsActions;
 use Illuminate\Support\Facades\Schema;
 
 use Modules\ClientMasterlist\App\Models\UserCM;
@@ -14,7 +15,7 @@ use Modules\ClientMasterlist\App\Models\EnrollmentRole;
 
 class EnrollmentController extends Controller
 {
-    use UppercaseInput, PasswordDeleteValidation;
+    use UppercaseInput, PasswordDeleteValidation, LogsActions;
 
     public function index()
     {
@@ -59,6 +60,10 @@ class EnrollmentController extends Controller
             $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
         }
         $enrollment = Enrollment::create($validated);
+        
+        // Log the create action
+        $this->logCreate($enrollment, ['request_data' => $request->all()]);
+        
         return response()->json($enrollment, 201);
     }
 
@@ -70,6 +75,7 @@ class EnrollmentController extends Controller
     public function update(Request $request, $id)
     {
         $enrollment = Enrollment::findOrFail($id);
+        $oldValues = $enrollment->toArray();
         $validated = $request->validate([
             'company_id' => 'nullable|integer|exists:company,id',
             'insurance_provider_id' => 'nullable|integer|exists:cm_insurance_provider,id',
@@ -96,6 +102,10 @@ class EnrollmentController extends Controller
             $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
         }
         $enrollment->update($validated);
+        
+        // Log the update action
+        $this->logUpdate($enrollment, $oldValues, ['request_data' => $request->all()]);
+        
         return response()->json($enrollment);
     }
 
@@ -111,6 +121,10 @@ class EnrollmentController extends Controller
             $enrollment->deleted_by = $user ? $user->id : null;
             $enrollment->save();
         }
+        
+        // Log the delete action
+        $this->logDelete($enrollment, ['deleted_by' => $user ? $user->id : null]);
+        
         $enrollment->delete();
         return response()->json(['message' => 'Deleted successfully']);
     }
@@ -142,6 +156,10 @@ class EnrollmentController extends Controller
         }
 
         $assignment = EnrollmentRole::create($validated);
+        
+        // Log the assignment
+        $this->logCreate($assignment, ['action' => 'assign_user_to_enrollment']);
+        
         return response()->json($assignment, 201);
     }
 
@@ -153,6 +171,10 @@ class EnrollmentController extends Controller
         }
 
         $assignment = EnrollmentRole::findOrFail($id);
+        
+        // Log the removal
+        $this->logDelete($assignment, ['action' => 'remove_user_from_enrollment']);
+        
         $assignment->delete();
         return response()->json(['message' => 'User removed from enrollment successfully']);
     }

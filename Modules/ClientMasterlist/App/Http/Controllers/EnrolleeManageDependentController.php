@@ -13,10 +13,11 @@ use Modules\ClientMasterlist\App\Models\Notification;
 use Modules\ClientMasterlist\App\Http\Controllers\SendNotificationController;
 
 use App\Http\Traits\UppercaseInput;
+use App\Http\Traits\LogsActions;
 
 class EnrolleeManageDependentController extends Controller
 {
-    use UppercaseInput;
+    use UppercaseInput, LogsActions;
 
     public function show($uuid)
     {
@@ -62,6 +63,8 @@ class EnrolleeManageDependentController extends Controller
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
+        
+        $oldValues = $enrollee->toArray();
 
         $validated = $request->validate([
             'gender' => 'required|string|max:255',
@@ -70,6 +73,12 @@ class EnrolleeManageDependentController extends Controller
 
         $enrollee->fill($validated);
         $enrollee->save();
+        
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'update_gender_marital_status',
+            'uuid' => $uuid
+        ]);
 
         return response()->json([
             'success' => true,
@@ -84,6 +93,8 @@ class EnrolleeManageDependentController extends Controller
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
+        
+        $oldValues = $enrollee->toArray();
 
         $validated = $request->validate([
             'enrollment_status' => 'required|string|max:255'
@@ -117,6 +128,13 @@ class EnrolleeManageDependentController extends Controller
 
         $enrollee->fill($validated);
         $enrollee->save();
+        
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'update_on_renewal',
+            'uuid' => $uuid,
+            'overage_dependents_updated' => true
+        ]);
 
         return response()->json([
             'success' => true,
@@ -132,6 +150,8 @@ class EnrolleeManageDependentController extends Controller
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
+        
+        $oldValues = $enrollee->toArray();
 
         $validated = $request->validate([
             'first_name' => 'required|string|max:255',
@@ -153,6 +173,12 @@ class EnrolleeManageDependentController extends Controller
         if ($enrollee->enrollment_status === 'SUBMITTED') {
             $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
         }
+        
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'enrollee_update',
+            'uuid' => $uuid
+        ]);
 
         return response()->json([
             'success' => true,
@@ -230,14 +256,35 @@ class EnrolleeManageDependentController extends Controller
                         }
 
                         $dependentModel->update($validated);
+                        
+                        // Log the update action
+                        $this->logUpdate($dependentModel, $dependentModel->getOriginal(), [
+                            'action' => 'batch_update_dependent',
+                            'principal_id' => $enrolleeId
+                        ]);
+                        
                         $results[] = $dependentModel;
                     } else {
                         unset($validated['id']);
                         $dependentModel = Dependent::create($validated);
+                        
+                        // Log the create action
+                        $this->logCreate($dependentModel, [
+                            'action' => 'batch_create_dependent',
+                            'principal_id' => $enrolleeId
+                        ]);
+                        
                         $results[] = $dependentModel;
                     }
                 } else {
                     $dependentModel = Dependent::create($validated);
+                    
+                    // Log the create action
+                    $this->logCreate($dependentModel, [
+                        'action' => 'batch_create_dependent',
+                        'principal_id' => $enrolleeId
+                    ]);
+                    
                     $results[] = $dependentModel;
                 }
 

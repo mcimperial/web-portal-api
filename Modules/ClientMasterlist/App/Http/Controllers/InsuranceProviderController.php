@@ -6,12 +6,13 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\InsuranceProvider;
 use App\Http\Traits\UppercaseInput;
+use App\Http\Traits\LogsActions;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Traits\PasswordDeleteValidation;
 
 class InsuranceProviderController extends Controller
 {
-    use UppercaseInput, PasswordDeleteValidation;
+    use UppercaseInput, PasswordDeleteValidation, LogsActions;
 
     public function index()
     {
@@ -33,13 +34,19 @@ class InsuranceProviderController extends Controller
             'status' => 'required|string',
         ]);
         $validated = $this->uppercaseStrings($validated);
-        return InsuranceProvider::create($validated);
+        $insuranceProvider = InsuranceProvider::create($validated);
+        
+        // Log the create action
+        $this->logCreate($insuranceProvider);
+        
+        return $insuranceProvider;
     }
 
 
     public function update(Request $request, $id)
     {
         $insuranceProvider = InsuranceProvider::findOrFail($id);
+        $oldValues = $insuranceProvider->toArray();
         $validated = $request->validate([
             'title' => 'sometimes|required|string|max:255',
             'note' => 'nullable|string',
@@ -47,6 +54,10 @@ class InsuranceProviderController extends Controller
         ]);
         $validated = $this->uppercaseStrings($validated);
         $insuranceProvider->update($validated);
+        
+        // Log the update action
+        $this->logUpdate($insuranceProvider, $oldValues);
+        
         return $insuranceProvider;
     }
 
@@ -62,6 +73,10 @@ class InsuranceProviderController extends Controller
             $insuranceProvider->deleted_by = $user ? $user->id : null;
             $insuranceProvider->save();
         }
+        
+        // Log the delete action
+        $this->logDelete($insuranceProvider, ['deleted_by' => $user ? $user->id : null]);
+        
         $insuranceProvider->delete();
         return response()->json(['message' => 'Insurance provider deleted']);
     }
