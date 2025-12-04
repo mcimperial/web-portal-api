@@ -3,14 +3,14 @@
 namespace Modules\ClientMasterlist\App\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Modules\ClientMasterlist\App\Models\Enrollment;
+use Modules\ClientMasterlist\App\Models\Enrollee;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class Notification extends Model
+class NotificationLogs extends Model
 {
     use SoftDeletes;
 
-    protected $table = 'cm_notification';
+    protected $table = 'cm_notification_logs';
 
     protected $fillable = [
         'notification_id',
@@ -20,6 +20,11 @@ class Notification extends Model
         'details',
     ];
 
+    protected $casts = [
+        'details' => 'array',
+        'date_sent' => 'datetime',
+    ];
+
     public function notification()
     {
         return $this->belongsTo(Notification::class, 'notification_id');
@@ -27,6 +32,6 @@ class Notification extends Model
 
     public function principal()
     {
-        return $this->belongsTo(Enrollment::class, 'principal_id');
+        return $this->belongsTo(Enrollee::class, 'principal_id');
     }
 }
