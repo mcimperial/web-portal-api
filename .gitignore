@@ -17,3 +17,22 @@ yarn-error.log
 /.fleet
 /.idea
 /.vscode
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+
+# Testing
+/coverage
+/.phpunit.result.cache
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~

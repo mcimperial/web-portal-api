@@ -12,6 +12,7 @@ use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
 use Modules\ClientMasterlist\App\Http\Controllers\ImportEnrolleeController;
 use Modules\ClientMasterlist\App\Http\Controllers\SendNotificationController;
 use Modules\ClientMasterlist\App\Http\Controllers\NotificationController;
+use Modules\ClientMasterlist\App\Http\Controllers\ActionLogController;
 
 /*
     |--------------------------------------------------------------------------
@@ -42,6 +43,7 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
         Route::get('enrollments/get-enrollment-roles', 'getEnrollmentRoles');
         Route::post('enrollments/assign-user', 'assignUserToEnrollment');
         Route::delete('enrollments/remove-user/{id}', 'removeUserFromEnrollment');
+        Route::get('enrollments/{id}/access', 'getEnrollmentAccess');
     });
 
     // Enrollment CRUD
@@ -73,6 +75,12 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     // Send Notification API
     Route::post('send-notification', [SendNotificationController::class, 'send']);
+
+    // Action Logs API
+    Route::controller(ActionLogController::class)->group(function () {
+        Route::get('action-logs/latest', 'getLatestForEnrollment');
+        Route::get('action-logs/all', 'getAllForEnrollment');
+    });
 });
 
 // Public Attachments CRUD (no auth)

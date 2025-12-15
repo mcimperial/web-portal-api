@@ -67,9 +67,74 @@ class EnrollmentController extends Controller
         return response()->json($enrollment, 201);
     }
 
-    public function show($id)
+    public function show(Request $request, $id)
     {
-        return Enrollment::findOrFail($id);
+        $enrollment = Enrollment::findOrFail($id);
+        $user = $request->user();
+
+        // Check if user has access to this enrollment
+        if (!$this->userHasAccessToEnrollment($user, $enrollment)) {
+            return response()->json([
+                'message' => 'Unauthorized access to this enrollment'
+            ], 403);
+        }
+
+        return $enrollment;
+    }
+
+    /**
+     * Check if user has access to a specific enrollment
+     */
+    private function userHasAccessToEnrollment($user, $enrollment): bool
+    {
+        // Admin roles have access to all enrollments
+        if ($user->hasRole('admin') || 
+            $user->hasRole('admin-se') || 
+            $user->hasRole('manager-se')) {
+            return true;
+        }
+
+        // Check if user is assigned to this enrollment
+        $hasEnrollmentRole = EnrollmentRole::where('user_id', $user->id)
+            ->where('enrollment_id', $enrollment->id)
+            ->exists();
+
+        if ($hasEnrollmentRole) {
+            return true;
+        }
+
+        // Viewer-se role should not have access by default unless assigned
+        return false;
+    }
+
+    /**
+     * Get user permissions for a specific enrollment
+     */
+    public function getEnrollmentAccess(Request $request, $id)
+    {
+        $enrollment = Enrollment::findOrFail($id);
+        $user = $request->user();
+
+        if (!$this->userHasAccessToEnrollment($user, $enrollment)) {
+            return response()->json([
+                'message' => 'Unauthorized access to this enrollment'
+            ], 403);
+        }
+
+        // Determine permissions
+        $isAdmin = $user->hasRole('admin') || 
+                   $user->hasRole('admin-se') || 
+                   $user->hasRole('manager-se');
+
+        $canEdit = $isAdmin;
+        $canView = true; // If they have access, they can view
+
+        return response()->json([
+            'can_edit' => $canEdit,
+            'can_view' => $canView,
+            'is_admin' => $isAdmin,
+            'role' => $user->roles->first()?->slug ?? null,
+        ]);
     }
 
     public function update(Request $request, $id)
