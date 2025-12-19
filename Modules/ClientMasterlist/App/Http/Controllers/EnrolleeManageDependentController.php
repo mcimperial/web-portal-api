@@ -327,8 +327,23 @@ class EnrolleeManageDependentController extends Controller
         }
 
         // If all dependents processed successfully, update principal's enrollment_status to SUBMITTED
+        $oldStatus = $principal->enrollment_status;
         $principal->enrollment_status = 'SUBMITTED';
         $principal->save();
+
+        // Log the status change to SUBMITTED
+        $this->logAction(
+            'UPDATE',
+            $principal,
+            ['enrollment_status' => $oldStatus],
+            ['enrollment_status' => 'SUBMITTED'],
+            "Enrollment submitted by {$principal->first_name} {$principal->last_name}",
+            [
+                'enrollment_id' => $principal->enrollment_id,
+                'action' => 'enrollment_submitted',
+                'dependents_count' => count($dependents)
+            ]
+        );
 
         $this->sendEmailNotification($principal->enrollment_id, $enrolleeId, $principal->email1);
 
