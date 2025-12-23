@@ -1070,7 +1070,7 @@ class SendNotificationController extends Controller
         $link = $baseUrl . '/self-enrollment?id=' . $enrollee->uuid;
         $link = '<a href="' . $link . '">Self-Enrollment Portal</a>';
 
-        $coverage_start_date = $enrollee->healthInsurance->coverage_start_date;
+        $coverage_start_date = $enrollee->healthInsurance?->coverage_start_date;
 
         $coverageStartDate = date('F j, Y');
         if (!empty($coverage_start_date)) {
