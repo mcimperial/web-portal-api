@@ -103,6 +103,9 @@ class EnrolleeManageDependentController extends Controller
         // Get age_restriction from enrollment settings
         $ageRestriction = $enrollee->enrollment ? $enrollee->enrollment->age_restriction : null;
 
+        // Parse age restriction format: CH:15D-25,AD:25-75
+        $parsedRestriction = $this->parseAgeRestriction($ageRestriction);
+
         // Update overage dependents' enrollment_status to OVERAGE
         $dependents = Dependent::where('principal_id', $enrollee->id)->get();
 
@@ -114,20 +117,11 @@ class EnrolleeManageDependentController extends Controller
             if ($birthDate && $relation) {
                 $age = \Carbon\Carbon::parse($birthDate)->age;
                 
-                // If age_restriction is set, use it; otherwise use default rules
-                if ($ageRestriction !== null) {
-                    // Use the age_restriction value from enrollment settings
-                    if ($age > $ageRestriction) {
-                        $isOverage = true;
-                    }
-                } else {
-                    // Default rules when age_restriction is not set
-                    if (($relation === 'CHILD' || $relation === 'SIBLING') && $age > 23) {
-                        $isOverage = true;
-                    } else if (($relation === 'SPOUSE' || $relation === 'PARENT' || $relation === 'DOMESTIC PARTNER') && $age > 65) {
-                        $isOverage = true;
-                    }
-                    // Add more rules for other relations if needed
+                // Get age limits based on relation type
+                $maxAge = $this->getMaxAgeForRelation($relation, $parsedRestriction);
+                
+                if ($maxAge !== null && $age > $maxAge) {
+                    $isOverage = true;
                 }
             }
             
@@ -390,5 +384,86 @@ class EnrolleeManageDependentController extends Controller
             ]);
             $notificationController->send($notificationRequest);
         }
+    }
+
+    /**
+     * Parse age restriction string format
+     * Format: CH:15D-25,AD:25-75
+     * - CH = Child/Sibling
+     * - AD = Adult (Parent/Spouse/Domestic Partner)
+     * - D suffix = Days (e.g., 15D)
+     * - No suffix = Years
+     */
+    private function parseAgeRestriction($ageRestriction)
+    {
+        if (empty($ageRestriction)) {
+            return null;
+        }
+
+        $result = [];
+        $parts = array_map('trim', explode(',', $ageRestriction));
+
+        foreach ($parts as $part) {
+            $segments = array_map('trim', explode(':', $part));
+            if (count($segments) !== 2) continue;
+
+            list($prefix, $range) = $segments;
+            $rangeParts = array_map('trim', explode('-', $range));
+            if (count($rangeParts) !== 2) continue;
+
+            list($minStr, $maxStr) = $rangeParts;
+
+            // Check if min has 'D' suffix (days)
+            $minInDays = false;
+            if (strtoupper(substr($minStr, -1)) === 'D') {
+                $min = intval(substr($minStr, 0, -1));
+                $minInDays = true;
+            } else {
+                $min = intval($minStr);
+            }
+
+            $max = intval($maxStr);
+
+            $prefix = strtoupper($prefix);
+            if ($prefix === 'CH') {
+                $result['child'] = ['min' => $min, 'max' => $max, 'minInDays' => $minInDays];
+            } else if ($prefix === 'AD') {
+                $result['adult'] = ['min' => $min, 'max' => $max, 'minInDays' => $minInDays];
+            }
+        }
+
+        return !empty($result) ? $result : null;
+    }
+
+    /**
+     * Get maximum age for a relation type
+     */
+    private function getMaxAgeForRelation($relation, $parsedRestriction)
+    {
+        if ($parsedRestriction === null) {
+            // Default values
+            if (in_array($relation, ['CHILD', 'SIBLING'])) {
+                return 23;
+            } else if (in_array($relation, ['PARENT', 'SPOUSE', 'DOMESTIC PARTNER'])) {
+                return 65;
+            }
+            return null;
+        }
+
+        // Use parsed restriction
+        if (in_array($relation, ['CHILD', 'SIBLING']) && isset($parsedRestriction['child'])) {
+            return $parsedRestriction['child']['max'];
+        } else if (in_array($relation, ['PARENT', 'SPOUSE', 'DOMESTIC PARTNER']) && isset($parsedRestriction['adult'])) {
+            return $parsedRestriction['adult']['max'];
+        }
+
+        // Fallback to defaults
+        if (in_array($relation, ['CHILD', 'SIBLING'])) {
+            return 23;
+        } else if (in_array($relation, ['PARENT', 'SPOUSE', 'DOMESTIC PARTNER'])) {
+            return 65;
+        }
+
+        return null;
     }
 }
