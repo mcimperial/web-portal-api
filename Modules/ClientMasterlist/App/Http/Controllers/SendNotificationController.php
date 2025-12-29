@@ -1044,14 +1044,14 @@ class SendNotificationController extends Controller
         // Determine which enrollee to use: prefer enrollee_id from $data, else from notification->enrollment_id
         $enrollee = null;
         if (!empty($data['enrollee_id'])) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment', 'dependents.healthInsurance'])
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'dependents.healthInsurance'])
                 ->where('id', $data['enrollee_id'])
                 ->whereNull('deleted_at')
                 ->first();
         }
 
         if (!$enrollee && $notification && isset($notification->enrollment_id)) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment', 'dependents.healthInsurance'])
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'dependents.healthInsurance'])
                 ->where('enrollment_id', $notification->enrollment_id)
                 ->whereNull('deleted_at')
                 ->first();
@@ -1203,7 +1203,8 @@ class SendNotificationController extends Controller
                 
                 // For premium computation, only include non-skipped dependents
                 if (!$isSkipping) {
-                    $depArr = is_array($dep) ? $dep : (array)$dep;
+                    // Convert Eloquent model to array properly using toArray() method
+                    $depArr = is_array($dep) ? $dep : (is_object($dep) && method_exists($dep, 'toArray') ? $dep->toArray() : (array)$dep);
                     $depArr['is_skipping'] = 0;
                     $dependentsArr[] = $depArr;
                 }
@@ -1292,6 +1293,14 @@ class SendNotificationController extends Controller
             }
         }
 
+        // Log premium restriction for debugging
+        if ($premiumRestriction) {
+            Log::info("Premium restriction active", [
+                'premium_restriction' => $premiumRestriction,
+                'base_premium' => $bill
+            ]);
+        }
+
         // Helper function to calculate age from birthdate
         $calculateAge = function($birthdate) {
             if (!$birthdate) return null;
@@ -1344,6 +1353,15 @@ class SendNotificationController extends Controller
                 continue;
             }
             $depIndex++;
+            
+            // Log dependent data for debugging
+            Log::info("Processing dependent", [
+                'dependent_index' => $depIndex,
+                'birth_date' => $item['birth_date'] ?? 'NOT SET',
+                'has_birth_date' => isset($item['birth_date']),
+                'dependent_keys' => array_keys($item)
+            ]);
+            
             $percent = 0;
             
             // Check if max_dependents is set and applies to this dependent
@@ -1381,6 +1399,17 @@ class SendNotificationController extends Controller
             $birthDate = $item['birth_date'] ?? null;
             $age = $calculateAge($birthDate);
             $adjustedBill = $getPremiumForAge($age, $bill);
+            
+            // Log age-based premium adjustment
+            if ($premiumRestriction && $age !== null) {
+                Log::info("Age-based premium adjustment", [
+                    'dependent_index' => $depIndex,
+                    'age' => $age,
+                    'base_premium' => $bill,
+                    'adjusted_premium' => $adjustedBill,
+                    'percentage' => $percent
+                ]);
+            }
             
             $breakdown[] = [
                 'dependentCount' => (string)$depIndex,
