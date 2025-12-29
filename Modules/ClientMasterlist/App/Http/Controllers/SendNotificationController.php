@@ -1235,6 +1235,7 @@ class SendNotificationController extends Controller
         // Premium Computation Section
         $premium = 0;
         $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
+        $premiumRestriction = $enrollee->enrollment->premium_restriction ?? null;
         $maxDependents = $enrollee->max_dependents ?? null;
 
         // Prefer enrollment premium if present, else healthInsurance
@@ -1251,7 +1252,7 @@ class SendNotificationController extends Controller
         }
 
         if ($premium > 0 && count($dependentsArr) > 0) {
-            $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation, $maxDependents);
+            $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation, $maxDependents, $premiumRestriction);
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
             $html .= '<table style="width:100%; font-size:18px; margin-bottom:8px;"><tbody>';
@@ -1262,7 +1263,7 @@ class SendNotificationController extends Controller
             $html .= '<table style="border-collapse:collapse; width:100%; font-size:15px;"><tbody>';
             foreach ($result['breakdown'] as $row) {
                 $html .= '<tr style="border-bottom:1px solid #e2e8f0;">';
-                $html .= '<td>' . htmlspecialchars($row['dependentCount']) . ' Dependent:<br />' . htmlspecialchars($row['percentage']) . ' of ₱ ' . number_format($premium, 2) . '</td>';
+                $html .= '<td>' . htmlspecialchars($row['dependentCount']) . ' Dependent:<br />' . htmlspecialchars($row['percentage']) . ' of ₱ ' . number_format($row['adjustedPremium'], 2) . '</td>';
                 $html .= '<td style="font-weight:bold;">₱ ' . number_format($row['computed'], 2) . '</td>';
                 $html .= '</tr>';
             }
@@ -1276,7 +1277,7 @@ class SendNotificationController extends Controller
     /*
      * Compute premium breakdown for dependents, similar to the React hook usePremiumComputation.
      */
-    public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null, $maxDependents = null)
+    public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null, $maxDependents = null, $premiumRestriction = null)
     {
         $breakdown = [];
         $percentMap = [];
@@ -1290,6 +1291,46 @@ class SendNotificationController extends Controller
                 }
             }
         }
+
+        // Helper function to calculate age from birthdate
+        $calculateAge = function($birthdate) {
+            if (!$birthdate) return null;
+            $birthDate = new \DateTime($birthdate);
+            $today = new \DateTime();
+            return $today->diff($birthDate)->y;
+        };
+
+        // Helper function to get premium based on age restrictions
+        $getPremiumForAge = function($age, $baseBill) use ($premiumRestriction) {
+            if (!$premiumRestriction || $age === null) return $baseBill;
+            
+            $restrictions = array_map('trim', explode(',', $premiumRestriction));
+            $ageThresholds = [];
+            
+            foreach ($restrictions as $restriction) {
+                $split = explode(':', $restriction);
+                if (count($split) === 2 && is_numeric($split[0]) && is_numeric($split[1])) {
+                    $ageThresholds[] = [
+                        'age' => intval(trim($split[0])),
+                        'premium' => floatval(trim($split[1]))
+                    ];
+                }
+            }
+            
+            // Sort by age descending to check highest age thresholds first
+            usort($ageThresholds, function($a, $b) {
+                return $b['age'] - $a['age'];
+            });
+            
+            // Find the applicable premium based on age
+            foreach ($ageThresholds as $threshold) {
+                if ($age >= $threshold['age']) {
+                    return $threshold['premium'];
+                }
+            }
+            
+            return $baseBill;
+        };
 
         // Only count non-skipped dependents for numbering, as in the React hook
         $depIndex = 0;
@@ -1336,10 +1377,16 @@ class SendNotificationController extends Controller
                 }
             }
             
+            // Calculate age and apply premium restriction if applicable
+            $birthDate = $item['birth_date'] ?? null;
+            $age = $calculateAge($birthDate);
+            $adjustedBill = $getPremiumForAge($age, $bill);
+            
             $breakdown[] = [
                 'dependentCount' => (string)$depIndex,
                 'percentage' => $percent . '%',
-                'computed' => $bill * ($percent / 100),
+                'computed' => $adjustedBill * ($percent / 100),
+                'adjustedPremium' => $adjustedBill,
             ];
         }
         $annual = array_reduce($breakdown, function ($sum, $row) {

@@ -89,7 +89,7 @@ class EnrolleeManageDependentController extends Controller
 
     public function updateOnRenewal(Request $request, $uuid)
     {
-        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        $enrollee = Enrollee::with('enrollment')->where('uuid', $uuid)->first();
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
@@ -100,6 +100,9 @@ class EnrolleeManageDependentController extends Controller
             'enrollment_status' => 'required|string|max:255'
         ]);
 
+        // Get age_restriction from enrollment settings
+        $ageRestriction = $enrollee->enrollment ? $enrollee->enrollment->age_restriction : null;
+
         // Update overage dependents' enrollment_status to OVERAGE
         $dependents = Dependent::where('principal_id', $enrollee->id)->get();
 
@@ -107,15 +110,27 @@ class EnrolleeManageDependentController extends Controller
             $birthDate = $dep->birth_date;
             $relation = strtoupper($dep->relation);
             $isOverage = false;
+            
             if ($birthDate && $relation) {
                 $age = \Carbon\Carbon::parse($birthDate)->age;
-                if (($relation === 'CHILD' || $relation === 'SIBLING') && $age > 23) {
-                    $isOverage = true;
-                } else if (($relation === 'SPOUSE' || $relation === 'PARENT' || $relation === 'DOMESTIC PARTNER') && $age > 65) {
-                    $isOverage = true;
+                
+                // If age_restriction is set, use it; otherwise use default rules
+                if ($ageRestriction !== null) {
+                    // Use the age_restriction value from enrollment settings
+                    if ($age > $ageRestriction) {
+                        $isOverage = true;
+                    }
+                } else {
+                    // Default rules when age_restriction is not set
+                    if (($relation === 'CHILD' || $relation === 'SIBLING') && $age > 23) {
+                        $isOverage = true;
+                    } else if (($relation === 'SPOUSE' || $relation === 'PARENT' || $relation === 'DOMESTIC PARTNER') && $age > 65) {
+                        $isOverage = true;
+                    }
+                    // Add more rules for other relations if needed
                 }
-                // Add more rules for other relations if needed
             }
+            
             if ($isOverage) {
                 $dep->enrollment_status = 'OVERAGE';
                 $dep->save();
@@ -133,7 +148,8 @@ class EnrolleeManageDependentController extends Controller
         $this->logUpdate($enrollee, $oldValues, [
             'action' => 'update_on_renewal',
             'uuid' => $uuid,
-            'overage_dependents_updated' => true
+            'overage_dependents_updated' => true,
+            'age_restriction_used' => $ageRestriction
         ]);
 
         return response()->json([

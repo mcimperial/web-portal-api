@@ -370,6 +370,7 @@ class EnrolleeController extends Controller
             'gender' => 'nullable|string|max:255',
             'marital_status' => 'nullable|string|max:255',
             'with_dependents' => 'nullable|boolean',
+            'max_dependents' => 'nullable|string|max:255',
             'email1' => 'required|email',
             'email2' => 'nullable|email',
             'phone1' => 'nullable|string|max:255',
