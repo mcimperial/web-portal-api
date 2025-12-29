@@ -42,6 +42,7 @@ class Enrollee extends Model
         'phone2',
         'address',
         'with_dependents',
+        'max_dependents',
         'notes',
         'deleted_by',
         'status',
