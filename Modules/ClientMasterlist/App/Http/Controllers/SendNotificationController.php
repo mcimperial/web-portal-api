@@ -1044,13 +1044,15 @@ class SendNotificationController extends Controller
         // Determine which enrollee to use: prefer enrollee_id from $data, else from notification->enrollment_id
         $enrollee = null;
         if (!empty($data['enrollee_id'])) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::where('id', $data['enrollee_id'])
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment', 'dependents.healthInsurance'])
+                ->where('id', $data['enrollee_id'])
                 ->whereNull('deleted_at')
                 ->first();
         }
 
         if (!$enrollee && $notification && isset($notification->enrollment_id)) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::where('enrollment_id', $notification->enrollment_id)
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment', 'dependents.healthInsurance'])
+                ->where('enrollment_id', $notification->enrollment_id)
                 ->whereNull('deleted_at')
                 ->first();
         }
@@ -1189,17 +1191,22 @@ class SendNotificationController extends Controller
         $dependentsArr = [];
         if (method_exists($enrollee, 'dependents')) {
             foreach ($enrollee->dependents as $dep) {
+                // Determine if dependent should be skipped
+                $isSkipping = ($dep->enrollment_status === 'SKIPPED' || $dep->enrollment_status === 'OVERAGE');
+                
                 $rows[] = [
                     'relation' => 'DEPENDENT',
                     'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
                     'certificate_number' => $dep->certificate_number ?? 'N/A',
-                    'enrollment_status' => $dep->enrollment_status == 'OVERAGE' || $dep->enrollment_status == 'SKIPPED' ? $dep->enrollment_status : '--',
-                    //'skipping' => $dep->enrollment_status === 'SKIPPED' ? ' (skipped)' : '',
+                    'enrollment_status' => $isSkipping ? $dep->enrollment_status : '--',
                 ];
-                // For premium computation, use array form and add healthInsurance->is_skipping if present
-                $depArr = is_array($dep) ? $dep : (array)$dep;
-                $depArr['is_skipping'] = $dep->enrollment_status === 'SKIPPED' ? 1 : 0;
-                $dependentsArr[] = $depArr;
+                
+                // For premium computation, only include non-skipped dependents
+                if (!$isSkipping) {
+                    $depArr = is_array($dep) ? $dep : (array)$dep;
+                    $depArr['is_skipping'] = 0;
+                    $dependentsArr[] = $depArr;
+                }
             }
         }
 
@@ -1228,6 +1235,7 @@ class SendNotificationController extends Controller
         // Premium Computation Section
         $premium = 0;
         $premiumComputation = $enrollee->enrollment->premium_computation ?? null;
+        $maxDependents = $enrollee->max_dependents ?? null;
 
         // Prefer enrollment premium if present, else healthInsurance
         if (!empty($enrollee->enrollment) && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0) {
@@ -1243,7 +1251,7 @@ class SendNotificationController extends Controller
         }
 
         if ($premium > 0 && count($dependentsArr) > 0) {
-            $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation);
+            $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation, $maxDependents);
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
             $html .= '<table style="width:100%; font-size:18px; margin-bottom:8px;"><tbody>';
@@ -1268,7 +1276,7 @@ class SendNotificationController extends Controller
     /*
      * Compute premium breakdown for dependents, similar to the React hook usePremiumComputation.
      */
-    public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null)
+    public static function PremiumComputation($dependents = [], $bill = 0, $premiumComputation = null, $maxDependents = null)
     {
         $breakdown = [];
         $percentMap = [];
@@ -1296,17 +1304,38 @@ class SendNotificationController extends Controller
             }
             $depIndex++;
             $percent = 0;
-            if (isset($percentMap[(string)$depIndex])) {
-                $percent = $percentMap[(string)$depIndex];
+            
+            // Check if max_dependents is set and applies to this dependent
+            if ($maxDependents !== null && $maxDependents > 0) {
+                if ($depIndex <= $maxDependents) {
+                    // Within max_dependents limit: use specific percentage
+                    if (isset($percentMap[(string)$depIndex])) {
+                        $percent = $percentMap[(string)$depIndex];
+                    }
+                } else {
+                    // Beyond max_dependents limit: use REST computation
+                    foreach ($percentMap as $k => $v) {
+                        if (strtoupper($k) === 'REST') {
+                            $percent = $v;
+                            break;
+                        }
+                    }
+                }
             } else {
-                // Case-insensitive ALL key
-                foreach ($percentMap as $k => $v) {
-                    if (strtoupper($k) === 'REST') {
-                        $percent = $v;
-                        break;
+                // No max_dependents set: use original logic
+                if (isset($percentMap[(string)$depIndex])) {
+                    $percent = $percentMap[(string)$depIndex];
+                } else {
+                    // Case-insensitive REST key
+                    foreach ($percentMap as $k => $v) {
+                        if (strtoupper($k) === 'REST') {
+                            $percent = $v;
+                            break;
+                        }
                     }
                 }
             }
+            
             $breakdown[] = [
                 'dependentCount' => (string)$depIndex,
                 'percentage' => $percent . '%',
