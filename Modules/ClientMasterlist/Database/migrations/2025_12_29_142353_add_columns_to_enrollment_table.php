@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('cm_enrollment', function (Blueprint $table) {
-            $table->integer('age_restriction')->nullable()->after('with_monthly');
+            $table->string('age_restriction')->nullable()->after('with_monthly');
             $table->string('hierarchy_options')->nullable()->after('age_restriction');
             $table->string('premium_restriction')->nullable()->after('hierarchy_options');
         });
