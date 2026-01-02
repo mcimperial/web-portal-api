@@ -452,7 +452,7 @@ class SendNotificationController extends Controller
         $results = [];
         foreach ($ids as $enrolleeId) {
             $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::find($enrolleeId);
-            if (!$enrollee || empty($enrollee->email1)) {
+            if (!$enrollee || (empty($enrollee->email1) && empty($enrollee->email2))) {
                 $results[] = [
                     'enrollee_id' => $enrolleeId,
                     'success' => false,
@@ -461,7 +461,12 @@ class SendNotificationController extends Controller
                 continue;
             }
             $singleData = $data;
-            $singleData['to'] = $enrollee->email1;
+            // Combine email1 and email2 (if email2 is not null)
+            $toEmails = $enrollee->email1;
+            if (!empty($enrollee->email2)) {
+                $toEmails .= ',' . $enrollee->email2;
+            }
+            $singleData['to'] = $toEmails;
             $singleData['cc'] = $data['cc'] ?? null;
             $singleData['bcc'] = $data['bcc'] ?? null;
             $singleData['enrollee_id'] = $enrolleeId;
