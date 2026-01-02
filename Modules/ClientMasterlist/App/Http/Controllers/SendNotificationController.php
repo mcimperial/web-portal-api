@@ -1348,6 +1348,7 @@ class SendNotificationController extends Controller
 
         // Only count non-skipped dependents for numbering, as in the React hook
         $depIndex = 0;
+        $age65OrLessCount = 0;
         foreach ($dependents as $item) {
             $isSkipping = false;
             if (isset($item['is_skipping'])) {
@@ -1369,59 +1370,85 @@ class SendNotificationController extends Controller
             
             $percent = 0;
             
-            // Check if max_dependents is set and applies to this dependent
-            if ($maxDependents !== null && $maxDependents > 0) {
-                if ($depIndex <= $maxDependents) {
-                    // Within max_dependents limit: use specific percentage
-                    if (isset($percentMap[(string)$depIndex])) {
-                        $percent = $percentMap[(string)$depIndex];
-                    }
-                } else {
-                    // Beyond max_dependents limit: use REST computation
-                    foreach ($percentMap as $k => $v) {
-                        if (strtoupper($k) === 'REST') {
-                            $percent = $v;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                // No max_dependents set: use original logic
-                if (isset($percentMap[(string)$depIndex])) {
-                    $percent = $percentMap[(string)$depIndex];
-                } else {
-                    // Case-insensitive REST key
-                    foreach ($percentMap as $k => $v) {
-                        if (strtoupper($k) === 'REST') {
-                            $percent = $v;
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            // Calculate age and apply premium restriction if applicable
+            // Calculate age first to determine if max_dependents applies
             $birthDate = $item['birth_date'] ?? null;
             $age = $calculateAge($birthDate);
-            $adjustedBill = $getPremiumForAge($age, $bill);
             
-            // Log age-based premium adjustment
-            if ($premiumRestriction && $age !== null) {
-                Log::info("Age-based premium adjustment", [
+            // Only apply max_dependents logic if age <= 65 and premiumRestriction exists
+            if ($premiumRestriction && $age !== null && $age > 65) {
+                // For age > 65: ignore max_dependents and premium_computation
+                // Use the full premium_restriction value directly
+                $adjustedBill = $getPremiumForAge($age, $bill);
+                
+                // Log age-based premium adjustment
+                Log::info("Age > 65: Using premium_restriction", [
                     'dependent_index' => $depIndex,
                     'age' => $age,
                     'base_premium' => $bill,
                     'adjusted_premium' => $adjustedBill,
+                    'percentage' => '100%'
+                ]);
+                
+                $breakdown[] = [
+                    'dependentCount' => (string)$depIndex,
+                    'percentage' => '100%',
+                    'computed' => $adjustedBill,
+                    'adjustedPremium' => $adjustedBill,
+                ];
+            } else {
+                // For age <= 65: count only dependents with age <= 65 for premium_computation
+                $age65OrLessCount++;
+                
+                // For age <= 65: apply max_dependents logic with premium_computation percentages
+                if ($maxDependents !== null && $maxDependents > 0) {
+                    if ($age65OrLessCount <= $maxDependents) {
+                        // Within max_dependents limit: use specific percentage
+                        if (isset($percentMap[(string)$age65OrLessCount])) {
+                            $percent = $percentMap[(string)$age65OrLessCount];
+                        }
+                    } else {
+                        // Beyond max_dependents limit: set to 0% or use REST if defined
+                        foreach ($percentMap as $k => $v) {
+                            if (strtoupper($k) === 'REST') {
+                                $percent = $v;
+                                break;
+                            }
+                        }
+                        if ($percent === 0 && !isset($percentMap['REST']) && !isset($percentMap['rest'])) {
+                            $percent = 0;
+                        }
+                    }
+                } else {
+                    // No max_dependents set: use original logic
+                    if (isset($percentMap[(string)$age65OrLessCount])) {
+                        $percent = $percentMap[(string)$age65OrLessCount];
+                    } else {
+                        // Case-insensitive REST key
+                        foreach ($percentMap as $k => $v) {
+                            if (strtoupper($k) === 'REST') {
+                                $percent = $v;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Log age-based premium adjustment
+                Log::info("Age <= 65: Using premium_computation", [
+                    'dependent_index' => $depIndex,
+                    'age65_or_less_count' => $age65OrLessCount,
+                    'age' => $age,
+                    'base_premium' => $bill,
                     'percentage' => $percent
                 ]);
+                
+                $breakdown[] = [
+                    'dependentCount' => (string)$depIndex,
+                    'percentage' => $percent . '%',
+                    'computed' => $bill * ($percent / 100),
+                    'adjustedPremium' => $bill,
+                ];
             }
-            
-            $breakdown[] = [
-                'dependentCount' => (string)$depIndex,
-                'percentage' => $percent . '%',
-                'computed' => $adjustedBill * ($percent / 100),
-                'adjustedPremium' => $adjustedBill,
-            ];
         }
         $annual = array_reduce($breakdown, function ($sum, $row) {
             return $sum + $row['computed'];
