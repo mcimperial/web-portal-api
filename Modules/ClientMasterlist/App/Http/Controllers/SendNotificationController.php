@@ -1293,7 +1293,9 @@ class SendNotificationController extends Controller
                 $split = explode(':', $part);
                 if (count($split) === 2 && is_numeric($split[1])) {
                     $label = trim($split[0]);
-                    $percentMap[$label] = floatval($split[1]);
+                    // Normalize REST to uppercase for consistent access
+                    $normalizedLabel = strtoupper($label) === 'REST' ? 'REST' : $label;
+                    $percentMap[$normalizedLabel] = floatval($split[1]);
                 }
             }
         }
@@ -1370,17 +1372,16 @@ class SendNotificationController extends Controller
             
             $percent = 0;
             
-            // Calculate age first to determine if max_dependents applies
+            // Calculate age first to determine if age-based logic applies
             $birthDate = $item['birth_date'] ?? null;
             $age = $calculateAge($birthDate);
             
-            // Only apply max_dependents logic if age <= 65 and premiumRestriction exists
+            // Only apply age-based logic when premiumRestriction exists
             if ($premiumRestriction && $age !== null && $age > 65) {
                 // For age > 65: ignore max_dependents and premium_computation
                 // Use the full premium_restriction value directly
                 $adjustedBill = $getPremiumForAge($age, $bill);
                 
-                // Log age-based premium adjustment
                 Log::info("Age > 65: Using premium_restriction", [
                     'dependent_index' => $depIndex,
                     'age' => $age,
@@ -1395,49 +1396,99 @@ class SendNotificationController extends Controller
                     'computed' => $adjustedBill,
                     'adjustedPremium' => $adjustedBill,
                 ];
-            } else {
-                // For age <= 65: count only dependents with age <= 65 for premium_computation
+            } elseif ($premiumRestriction) {
+                // For age <= 65 when premiumRestriction exists: count only dependents with age <= 65
                 $age65OrLessCount++;
                 
-                // For age <= 65: apply max_dependents logic with premium_computation percentages
+                // Apply max_dependents logic with premium_computation percentages
                 if ($maxDependents !== null && $maxDependents > 0) {
                     if ($age65OrLessCount <= $maxDependents) {
-                        // Within max_dependents limit: use specific percentage
                         if (isset($percentMap[(string)$age65OrLessCount])) {
                             $percent = $percentMap[(string)$age65OrLessCount];
+                        } elseif (isset($percentMap['1'])) {
+                            $percent = $percentMap['1'];
                         }
                     } else {
-                        // Beyond max_dependents limit: set to 0% or use REST if defined
                         foreach ($percentMap as $k => $v) {
                             if (strtoupper($k) === 'REST') {
                                 $percent = $v;
                                 break;
                             }
                         }
-                        if ($percent === 0 && !isset($percentMap['REST']) && !isset($percentMap['rest'])) {
-                            $percent = 0;
+                        if ($percent === 0 && !isset($percentMap['REST'])) {
+                            if (isset($percentMap['1'])) {
+                                $percent = $percentMap['1'];
+                            }
                         }
                     }
                 } else {
-                    // No max_dependents set: use original logic
                     if (isset($percentMap[(string)$age65OrLessCount])) {
                         $percent = $percentMap[(string)$age65OrLessCount];
                     } else {
-                        // Case-insensitive REST key
                         foreach ($percentMap as $k => $v) {
                             if (strtoupper($k) === 'REST') {
                                 $percent = $v;
                                 break;
+                            }
+                        }
+                        if ($percent === 0 && !isset($percentMap['REST'])) {
+                            if (isset($percentMap['1'])) {
+                                $percent = $percentMap['1'];
                             }
                         }
                     }
                 }
                 
-                // Log age-based premium adjustment
-                Log::info("Age <= 65: Using premium_computation", [
+                Log::info("Age <= 65 with premiumRestriction: Using premium_computation", [
                     'dependent_index' => $depIndex,
                     'age65_or_less_count' => $age65OrLessCount,
                     'age' => $age,
+                    'base_premium' => $bill,
+                    'percentage' => $percent
+                ]);
+                
+                $breakdown[] = [
+                    'dependentCount' => (string)$depIndex,
+                    'percentage' => $percent . '%',
+                    'computed' => $bill * ($percent / 100),
+                    'adjustedPremium' => $bill,
+                ];
+            } else {
+                // No premiumRestriction: use regular dependent counting (depIndex)
+                if ($maxDependents !== null && $maxDependents > 0) {
+                    if ($depIndex <= $maxDependents) {
+                        if (isset($percentMap[(string)$depIndex])) {
+                            $percent = $percentMap[(string)$depIndex];
+                        }
+                    } else {
+                        foreach ($percentMap as $k => $v) {
+                            if (strtoupper($k) === 'REST') {
+                                $percent = $v;
+                                break;
+                            }
+                        }
+                        if ($percent === 0 && !isset($percentMap['REST'])) {
+                            $percent = 0;
+                        }
+                    }
+                } else {
+                    if (isset($percentMap[(string)$depIndex])) {
+                        $percent = $percentMap[(string)$depIndex];
+                    } else {
+                        foreach ($percentMap as $k => $v) {
+                            if (strtoupper($k) === 'REST') {
+                                $percent = $v;
+                                break;
+                            }
+                        }
+                        if ($percent === 0 && !isset($percentMap['REST'])) {
+                            $percent = 0;
+                        }
+                    }
+                }
+                
+                Log::info("No premiumRestriction: Using regular counting", [
+                    'dependent_index' => $depIndex,
                     'base_premium' => $bill,
                     'percentage' => $percent
                 ]);
