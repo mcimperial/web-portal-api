@@ -83,6 +83,26 @@ return [
             ]) : [],
         ],
 
+        'mysql_sync' => [
+            'driver' => 'mysql',
+            'url' => env('DATABASE_URL'),
+            'host' => env('DB_HOST_SYNC', '127.0.0.1'),
+            'port' => env('DB_PORT_SYNC', '3306'),
+            'database' => env('DB_DATABASE_SYNC', 'forge'),
+            'username' => env('DB_USERNAME_SYNC', 'forge'),
+            'password' => env('DB_PASSWORD_SYNC', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                1009 => env('MYSQL_ATTR_SSL_CA'), // PDO::ATTR_SSL_CA
+            ]) : [],
+        ],
+
         'mariadb' => [
             'driver' => 'pgsql',
             'url' => env('DATABASE_URL'),

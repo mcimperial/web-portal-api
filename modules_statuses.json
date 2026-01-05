@@ -4,5 +4,6 @@
     "TestMod": true,
     "ModuleName": true,
     "ClientMasterlist": true,
-    "ClientMobileApp": true
+    "ClientMobileApp": true,
+    "ClientThirdParty": true
 }
