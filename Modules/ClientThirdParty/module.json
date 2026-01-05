@@ -1,0 +1,11 @@
+{
+    "name": "ClientThirdParty",
+    "alias": "clientthirdparty",
+    "description": "Module for syncing data with third-party client database",
+    "keywords": ["sync", "third-party", "integration"],
+    "priority": 0,
+    "providers": [
+        "Modules\\ClientThirdParty\\App\\Providers\\ClientThirdPartyServiceProvider"
+    ],
+    "files": []
+}
