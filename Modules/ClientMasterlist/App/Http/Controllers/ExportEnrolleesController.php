@@ -838,8 +838,15 @@ class ExportEnrolleesController extends Controller
                 return 'R';
 
             case 'maxicare_plan_code':
+                // Get enrollment from principal or dependent
+                $enrollment = $isPrincipal ? $entity->enrollment : ($principal ? $principal->enrollment : null);
+                
+                // Use enrollment's plan_code if available
+                if ($enrollment && !empty($enrollment->plan_code)) {
+                    return $this->parsePlanCode($enrollment->plan_code, $isPrincipal);
+                }
 
-                // Check if entity has own plan
+                // Fallback: Check if entity has own plan in health insurance
                 if (isset($entity->healthInsurance->plan) && !empty($entity->healthInsurance->plan)) {
                     return $this->parsePlanCode($entity->healthInsurance->plan, $isPrincipal);
                 }
@@ -850,7 +857,7 @@ class ExportEnrolleesController extends Controller
                 }
                 
                 // Fallback to default codes
-                return $isPrincipal ? 'M0010165856000010P' : 'M0010165856000020D';
+                return '';
 
             case 'maxicare_card_issuance':
                 return 'Y';
@@ -1070,10 +1077,8 @@ class ExportEnrolleesController extends Controller
         $plan = trim($plan);
 
         if (strpos($plan, ',') === false) {
-            // Single value: apply P/D logic for dependents
-            return (!$isPrincipal && substr($plan, -1) === 'P')
-                ? substr($plan, 0, -1) . 'D'
-                : $plan;
+            // Single value: return as is
+            return $plan;
         }
 
         $planParts = array_map('trim', explode(',', $plan));
@@ -1086,11 +1091,8 @@ class ExportEnrolleesController extends Controller
             // Format: plan_name,plan_code_principal,plan_code_dependent
             return $isPrincipal ? $planParts[1] : $planParts[2];
         } else {
-            // Fallback: use first part and apply P/D logic
-            $planCode = $planParts[0];
-            return (!$isPrincipal && substr($planCode, -1) === 'P')
-                ? substr($planCode, 0, -1) . 'D'
-                : $planCode;
+            // Fallback: use first part
+            return $planParts[0];
         }
     }
 

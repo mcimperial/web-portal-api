@@ -19,6 +19,7 @@ class Enrollment extends Model
         'with_address',
         'with_skip_hierarchy',
         'account_code',
+        'plan_code',
         'premium',
         'premium_computation',
         'premium_variable',
