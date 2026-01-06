@@ -122,6 +122,7 @@ class ExportEnrolleesController extends Controller
     private const AUTO_HEADER = [
         'enrollment_status',
         'relation',
+        'premium',
         'employee_id',
         'first_name',
         'last_name',
@@ -526,8 +527,25 @@ class ExportEnrolleesController extends Controller
         // Check for special cases in dependents and add columns accordingly
         $hasSkippedOrOverage = false;
         $hasRequiredDocument = false;
+        $hasPremium = false;
 
         foreach ($enrollees as $enrollee) {
+            // Check if enrollee has premium data AND (max_dependents OR premium_restriction)
+            if (!$hasPremium && $enrollee->dependents && count($enrollee->dependents) > 0) {
+                $hasMaxDependents = isset($enrollee->max_dependents) && $enrollee->max_dependents > 0;
+                $hasPremiumRestriction = $enrollee->enrollment && !empty($enrollee->enrollment->premium_restriction);
+                
+                // Only add premium column if there are dependents and either max_dependents or premium_restriction exists
+                if ($hasMaxDependents || $hasPremiumRestriction) {
+                    $hasPremiumFromEnrollment = $enrollee->enrollment && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0;
+                    $hasPremiumFromInsurance = $enrollee->healthInsurance && isset($enrollee->healthInsurance->premium) && $enrollee->healthInsurance->premium > 0;
+                    
+                    if ($hasPremiumFromEnrollment || $hasPremiumFromInsurance) {
+                        $hasPremium = true;
+                    }
+                }
+            }
+
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
                 foreach ($enrollee->dependents as $dependent) {
                     if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
@@ -548,11 +566,23 @@ class ExportEnrolleesController extends Controller
                         $hasRequiredDocument = true;
                     }
 
-                    if ($hasSkippedOrOverage && $hasRequiredDocument) {
+                    if ($hasSkippedOrOverage && $hasRequiredDocument && $hasPremium) {
                         break 2;
                     }
                 }
             }
+        }
+
+        // Add premium column if there's premium data and it's not already in columns
+        if ($hasPremium && !in_array('premium', $columns)) {
+            // Insert premium after relation
+            $relationIndex = array_search('relation', $columns);
+            if ($relationIndex !== false) {
+                array_splice($columns, $relationIndex + 1, 0, 'premium');
+            } else {
+                $columns[] = 'premium';
+            }
+            Log::info('Added premium column because premium data exists');
         }
 
         // Add required document column if needed
@@ -648,6 +678,10 @@ class ExportEnrolleesController extends Controller
 
             case 'is_company_paid':
                 return !$isPrincipal && $principal ? ($principal->healthInsurance->is_company_paid ? 'YES' : 'NO') : ($entity->healthInsurance->is_company_paid ? 'YES' : 'NO');
+
+            case 'premium':
+                // Calculate premium based on premium_computation and premium_restriction
+                return $this->calculatePremium($entity, $isPrincipal, $principal);
 
             case 'required_document':
                 if (!$isPrincipal) {
@@ -1048,5 +1082,159 @@ class ExportEnrolleesController extends Controller
                 ? substr($planCode, 0, -1) . 'D'
                 : $planCode;
         }
+    }
+
+    /**
+     * Calculate premium based on premium_computation and premium_restriction
+     * Similar logic to SendNotificationController's PremiumComputation
+     *
+     * @param object $entity The enrollee or dependent entity
+     * @param bool $isPrincipal Whether this is a principal enrollee
+     * @param object|null $principal The principal enrollee (if entity is a dependent)
+     * @return string The calculated premium amount
+     */
+    private function calculatePremium($entity, $isPrincipal, $principal = null)
+    {
+        // For principals, don't show premium (only show for dependents)
+        if ($isPrincipal) {
+            return 0.00;
+        }
+
+        // For dependents, calculate based on premium_computation and premium_restriction
+        if (!$principal) {
+            return 0.00;
+        }
+
+        // Get base premium from principal
+        $basePremium = 0;
+        if ($principal->enrollment && !empty($principal->enrollment->premium)) {
+            $basePremium = floatval($principal->enrollment->premium);
+        } elseif ($principal->healthInsurance && !empty($principal->healthInsurance->premium)) {
+            $basePremium = floatval($principal->healthInsurance->premium);
+        }
+
+        if ($basePremium == 0) {
+            return 0;
+        }
+
+        // Check if company paid
+        if ($principal->healthInsurance && $principal->healthInsurance->is_company_paid) {
+            return 0;
+        }
+
+        // Get premium_computation and premium_restriction from enrollment
+        $premiumComputation = $principal->enrollment->premium_computation ?? null;
+        $premiumRestriction = $principal->enrollment->premium_restriction ?? null;
+
+        // Parse premium_computation into a map
+        $percentMap = [];
+        if (is_string($premiumComputation) && trim($premiumComputation) !== '') {
+            $parts = array_map('trim', explode(',', $premiumComputation));
+            foreach ($parts as $part) {
+                $split = explode(':', $part);
+                if (count($split) === 2 && is_numeric($split[1])) {
+                    $label = trim($split[0]);
+                    $normalizedLabel = strtoupper($label) === 'REST' ? 'REST' : $label;
+                    $percentMap[$normalizedLabel] = floatval($split[1]);
+                }
+            }
+        }
+
+        // Calculate age
+        $age = null;
+        if ($entity->birth_date) {
+            $birthDate = new \DateTime($entity->birth_date);
+            $today = new \DateTime();
+            $age = $today->diff($birthDate)->y;
+        }
+
+        // Get premium based on age restrictions
+        $adjustedPremium = $basePremium;
+        if ($premiumRestriction && $age !== null) {
+            $restrictions = array_map('trim', explode(',', $premiumRestriction));
+            $ageThresholds = [];
+            
+            foreach ($restrictions as $restriction) {
+                $split = explode(':', $restriction);
+                if (count($split) === 2 && is_numeric($split[0]) && is_numeric($split[1])) {
+                    $ageThresholds[] = [
+                        'age' => intval(trim($split[0])),
+                        'premium' => floatval(trim($split[1]))
+                    ];
+                }
+            }
+            
+            // Sort by age descending
+            usort($ageThresholds, function($a, $b) {
+                return $b['age'] - $a['age'];
+            });
+            
+            // Find applicable premium based on age
+            foreach ($ageThresholds as $threshold) {
+                if ($age >= $threshold['age']) {
+                    $adjustedPremium = $threshold['premium'];
+                    break;
+                }
+            }
+
+            // If age > 65, return the full adjusted premium (100%)
+            if ($age > 65) {
+                return $adjustedPremium;
+            }
+        }
+
+        // For age <= 65 or no age restriction: calculate based on dependent position
+        // Need to count non-skipped dependents up to this one
+        $dependentPosition = 0;
+        if ($principal->dependents) {
+            foreach ($principal->dependents as $dep) {
+                // Skip if this dependent is marked as skipping
+                if (in_array($dep->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                    continue;
+                }
+                
+                $dependentPosition++;
+                
+                // Stop counting when we reach the current entity
+                if ($dep->id === $entity->id) {
+                    break;
+                }
+            }
+        }
+
+        // Get percentage based on dependent position
+        $percent = 0;
+        $maxDependents = $principal->max_dependents ?? null;
+
+        if ($maxDependents !== null && $maxDependents > 0) {
+            if ($dependentPosition <= $maxDependents) {
+                if (isset($percentMap[(string)$dependentPosition])) {
+                    $percent = $percentMap[(string)$dependentPosition];
+                } elseif (isset($percentMap['1'])) {
+                    $percent = $percentMap['1'];
+                }
+            } else {
+                // Over max dependents, use REST
+                if (isset($percentMap['REST'])) {
+                    $percent = $percentMap['REST'];
+                } elseif (isset($percentMap['1'])) {
+                    $percent = $percentMap['1'];
+                }
+            }
+        } else {
+            // No max dependents limit
+            if (isset($percentMap[(string)$dependentPosition])) {
+                $percent = $percentMap[(string)$dependentPosition];
+            } elseif (isset($percentMap['REST'])) {
+                $percent = $percentMap['REST'];
+            } elseif (isset($percentMap['1'])) {
+                $percent = $percentMap['1'];
+            }
+        }
+
+        // Calculate final premium
+        $calculatedPremium = $adjustedPremium * ($percent / 100);
+        
+        return $calculatedPremium;
     }
 }
