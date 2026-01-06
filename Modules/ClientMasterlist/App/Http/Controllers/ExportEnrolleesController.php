@@ -606,6 +606,32 @@ class ExportEnrolleesController extends Controller
                 return date('Y-m-d', strtotime('first day of next month'));
 
             case 'enrollment_status':
+                // Synchronize dependent enrollment status based on principal
+                if (!$isPrincipal && $principal) {
+                    $principalStatus = $principal->enrollment_status;
+                    $dependentStatus = $entity->enrollment_status;
+                    
+                    // If principal is PENDING and dependent is null/empty, set to PENDING
+                    if ($principalStatus === 'PENDING' && empty($dependentStatus)) {
+                        $entity->enrollment_status = 'PENDING';
+                        $entity->save();
+                        return 'PENDING';
+                    }
+
+                    // If principal is SUBMITTED-PERSONAL-INFORMATION and dependent is null/empty, set to SUBMITTED-PERSONAL-INFORMATION
+                    if ($principalStatus === 'SUBMITTED-PERSONAL-INFORMATION' && empty($dependentStatus)) {
+                        $entity->enrollment_status = 'SUBMITTED-PERSONAL-INFORMATION';
+                        $entity->save();
+                        return 'SUBMITTED-PERSONAL-INFORMATION';
+                    }
+                    
+                    // If principal is SUBMITTED, set dependent to FOR-APPROVAL
+                    if ($principalStatus === 'SUBMITTED') {
+                        $entity->enrollment_status = 'FOR-APPROVAL';
+                        $entity->save();
+                        return 'FOR-APPROVAL';
+                    }
+                }
                 return $entity->enrollment_status ?? '';
 
             case 'relation':
