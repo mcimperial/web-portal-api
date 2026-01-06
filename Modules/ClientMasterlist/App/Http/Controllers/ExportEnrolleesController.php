@@ -530,13 +530,14 @@ class ExportEnrolleesController extends Controller
         $hasPremium = false;
 
         foreach ($enrollees as $enrollee) {
-            // Check if enrollee has premium data AND (max_dependents OR premium_restriction)
+            // Check if enrollee has premium data AND (max_dependents OR premium_restriction OR premium_computation)
             if (!$hasPremium && $enrollee->dependents && count($enrollee->dependents) > 0) {
                 $hasMaxDependents = isset($enrollee->max_dependents) && $enrollee->max_dependents > 0;
                 $hasPremiumRestriction = $enrollee->enrollment && !empty($enrollee->enrollment->premium_restriction);
+                $hasPremiumComputation = $enrollee->enrollment && !empty($enrollee->enrollment->premium_computation);
                 
-                // Only add premium column if there are dependents and either max_dependents or premium_restriction exists
-                if ($hasMaxDependents || $hasPremiumRestriction) {
+                // Only add premium column if there are dependents and any of: max_dependents, premium_restriction, or premium_computation exists
+                if ($hasMaxDependents || $hasPremiumRestriction || $hasPremiumComputation) {
                     $hasPremiumFromEnrollment = $enrollee->enrollment && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0;
                     $hasPremiumFromInsurance = $enrollee->healthInsurance && isset($enrollee->healthInsurance->premium) && $enrollee->healthInsurance->premium > 0;
                     
@@ -848,6 +849,10 @@ class ExportEnrolleesController extends Controller
                 return $isPrincipal ? 'M0010165856000010P' : 'M0010165856000020D';
             case 'maxicare_card_issuance':
                 return 'Y';
+
+            case 'premium':
+                // Calculate premium based on premium_computation and premium_restriction
+                return $this->calculatePremium($entity, $isPrincipal, $principal);
 
             case 'required_document':
                 if (!$isPrincipal) {
