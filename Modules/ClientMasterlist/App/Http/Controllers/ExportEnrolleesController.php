@@ -779,6 +779,8 @@ class ExportEnrolleesController extends Controller
                         return 'SL';
                     case 'DOMESTIC PARTNER':
                         return 'O';
+                    case 'COMMON-LAW PARTNER':
+                        return 'O';
                     default:
                         return 'P'; // Other
                 }
@@ -836,6 +838,7 @@ class ExportEnrolleesController extends Controller
                 return 'R';
 
             case 'maxicare_plan_code':
+
                 // Check if entity has own plan
                 if (isset($entity->healthInsurance->plan) && !empty($entity->healthInsurance->plan)) {
                     return $this->parsePlanCode($entity->healthInsurance->plan, $isPrincipal);
@@ -845,8 +848,10 @@ class ExportEnrolleesController extends Controller
                 if (!$isPrincipal && $principal && isset($principal->healthInsurance->plan) && !empty($principal->healthInsurance->plan)) {
                     return $this->parsePlanCode($principal->healthInsurance->plan, false); // Always false for dependent
                 }
+                
                 // Fallback to default codes
                 return $isPrincipal ? 'M0010165856000010P' : 'M0010165856000020D';
+
             case 'maxicare_card_issuance':
                 return 'Y';
 
