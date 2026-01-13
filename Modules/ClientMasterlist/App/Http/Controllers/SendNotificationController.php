@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use App\Http\Traits\LogsActions;
+use App\Http\Helpers\SmsHelper;
 
 /**
  * SendNotificationController
@@ -206,6 +207,11 @@ class SendNotificationController extends Controller
                 'success' => $responseData['success'] ?? false,
                 'message' => $responseData['message'] ?? ''
             ];
+            
+            // Send SMS notification after successful email
+            if ($responseData['success'] ?? false) {
+                $this->sendSmsNotification($singleData, $notification);
+            }
         }
         return response()->json([
             'success' => true,
@@ -366,6 +372,9 @@ class SendNotificationController extends Controller
 
             // Log successful notification
             $this->logNotificationSending($notification, $data, 'SUCCESS', 'Manual');
+            
+            // Send SMS notification
+            $this->sendSmsNotification($data, $notification);
         } else {
             Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment) {
                 $message->to($to)
@@ -408,6 +417,9 @@ class SendNotificationController extends Controller
 
             // Log successful notification
             $this->logNotificationSending($notification, $data, 'SUCCESS', 'Manual');
+            
+            // Send SMS notification
+            $this->sendSmsNotification($data, $notification);
         }
         
         // Log the notification send action
@@ -502,12 +514,6 @@ class SendNotificationController extends Controller
         foreach ($dueNotifications as $notification) {
             // Only check if the cron schedule is due, ignore last_sent_at
             if (!$this->isCronDue($notification->schedule, $now)) continue;
-
-            Log::info("Processing scheduled notification", [
-                'notification_id' => $notification->id,
-                'notification_type' => $notification->notification_type,
-                'to' => $notification->to
-            ]);
 
             // Check status and get enrollee IDs or CSV generation data if applicable
             // Pass the notification object for schedule-based date calculation
@@ -641,6 +647,10 @@ class SendNotificationController extends Controller
                 return $this->getEnrolleesByStatus($enrollmentId, true, 'PENDING', $notification);
             case 'ENROLLMENT START W/OUT DEP (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, false, 'PENDING', $notification);
+            case 'WARNING NOTIFICATION: ENROLLEE EXPIRING SOON':
+                // This notification continues sending until status changes from PENDING
+                // Skip duplicate check to send repeatedly on each scheduled run
+                return $this->getEnrolleesByStatus($enrollmentId, 'NC', 'PENDING', $notification, true);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
                 // Return data for CSV generation instead of enrollee IDs
                 return [
@@ -679,7 +689,7 @@ class SendNotificationController extends Controller
     /**
      * Get all enrollees with APPROVED status updated today for the given enrollment
      */
-    private function getEnrolleesByStatus($enrollmentId = null, $withDependents, $status = null, $notification = null)
+    private function getEnrolleesByStatus($enrollmentId = null, $withDependents, $status = null, $notification = null, $skipDuplicateCheck = false)
     {
         if (!$enrollmentId) {
             return [];
@@ -690,10 +700,14 @@ class SendNotificationController extends Controller
         $enrollees = Enrollee::with(['healthInsurance'])
             ->where('enrollment_id', $enrollmentId)
             ->where('enrollment_status', $status)
-            ->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
-            ->where('updated_at', '<=', $dateRange['to'])   // Use calculated date range
             ->where('status', 'ACTIVE')
             ->whereNull('deleted_at');
+
+        // For WARNING NOTIFICATION, don't apply date range filter to continuously send
+        if (!$skipDuplicateCheck) {
+            $enrollees = $enrollees->where('updated_at', '>=', $dateRange['from']) // Use calculated date range
+                                   ->where('updated_at', '<=', $dateRange['to']);   // Use calculated date range
+        }
 
         if ($status === 'APPROVED') {
             $enrollees = $enrollees->whereHas('healthInsurance', function ($subQ) {
@@ -709,6 +723,17 @@ class SendNotificationController extends Controller
 
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
+
+            // For WARNING NOTIFICATION, skip duplicate checking - send continuously until status changes
+            if ($skipDuplicateCheck) {
+                Log::info("WARNING NOTIFICATION: Sending without duplicate check", [
+                    'notification_id' => $notification->id,
+                    'notification_type' => $notification->notification_type,
+                    'enrollee_count' => count($enrolleeIds),
+                    'status' => $status
+                ]);
+                return $enrolleeIds;
+            }
 
             // For scheduled notifications, check for duplicates in notification logs
             // All enrollees in this table are principals (cm_principal table)
@@ -922,23 +947,23 @@ class SendNotificationController extends Controller
                 }
             }
 
-            Log::info("Date range calculated based on schedule interval", [
+                /* Log::info("Date range calculated based on schedule interval", [
                 'schedule' => $notification->schedule,
                 'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s'),
                 'notification_type' => $notification->notification_type ?? 'unknown'
-            ]);
+            ]); */
 
             return [
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
-            Log::warning("Failed to parse cron schedule, using default date range", [
+            /* Log::warning("Failed to parse cron schedule, using default date range", [
                 'schedule' => $notification->schedule,
                 'error' => $e->getMessage()
-            ]);
+            ]); */
 
             // Fallback to default range
             return [
@@ -1510,5 +1535,81 @@ class SendNotificationController extends Controller
             'annual' => $annual,
             'monthly' => $monthly,
         ];
+    }
+
+    /**
+     * Send SMS notification to enrollee's mobile number
+     */
+    private function sendSmsNotification($data, $notification)
+    {
+        try {
+            // Get enrollee information to retrieve mobile number and name
+            $enrollee = null;
+            if (!empty($data['enrollee_id'])) {
+                $enrollee = Enrollee::find($data['enrollee_id']);
+            } elseif ($notification && isset($notification->enrollment_id)) {
+                $enrollee = Enrollee::where('enrollment_id', $notification->enrollment_id)
+                    ->whereNull('deleted_at')
+                    ->first();
+            }
+
+            if (!$enrollee) {
+                Log::info('SMS notification skipped: No enrollee found', [
+                    'notification_id' => $notification->id ?? null
+                ]);
+                return;
+            }
+
+            // Get mobile number (prefer phone1, fallback to phone2)
+            $mobile = $enrollee->phone1 ?? $enrollee->phone2 ?? null;
+            
+            if (empty($mobile)) {
+                Log::info('SMS notification skipped: No mobile number', [
+                    'enrollee_id' => $enrollee->id,
+                    'notification_id' => $notification->id ?? null
+                ]);
+                return;
+            }
+
+            // Get enrollee name
+            $firstName = $enrollee->first_name ?? '';
+            $lastName = $enrollee->last_name ?? '';
+            $fullName = ucwords(strtolower(trim($firstName . ' ' . $lastName)));
+            
+            if (empty($fullName)) {
+                $fullName = 'Valued Client';
+            }
+
+            // Compose SMS message
+            $message = "From: Lacson & Lacson Insurance Brokers, Inc.\n\n";
+            $message .= "Dear {$fullName},\n\n";
+            $message .= "You have received an email notification regarding your HMO online enrollment.\n\n";
+            $message .= "Please check your email immediately for important details.\n\n";
+            $message .= "This is an automated message. Please do not reply to this SMS.";
+
+            // Send SMS using SmsHelper
+            $smsResult = SmsHelper::send($mobile, $message);
+
+            // Log SMS result
+            if ($smsResult['success']) {
+                Log::info('SMS notification sent successfully', [
+                    'enrollee_id' => $enrollee->id,
+                    'mobile' => $mobile,
+                    'notification_id' => $notification->id ?? null
+                ]);
+            } else {
+                Log::warning('SMS notification failed', [
+                    'enrollee_id' => $enrollee->id,
+                    'mobile' => $mobile,
+                    'notification_id' => $notification->id ?? null,
+                    'error' => $smsResult['error'] ?? 'Unknown error'
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error('Exception in sendSmsNotification', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
     }
 }
