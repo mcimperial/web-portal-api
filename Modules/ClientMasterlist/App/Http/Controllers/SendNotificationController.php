@@ -843,20 +843,24 @@ class SendNotificationController extends Controller
                     continue; // Skip if not on a 3-day interval
                 }
                 
-                // Check if we already sent notification in the last 2 days to avoid duplicates
+                // Check if we already sent notification in this 3-day cycle
+                // Look for notifications sent in the last 2.5 days to avoid sending twice in same cycle
+                $cycleStartCheck = now()->subDays(2)->subHours(12);
+                
                 $existingLog = DB::table('cm_notification_logs')
                     ->where('notification_id', $notification->id)
                     ->where('principal_id', $enrollee->id)
                     ->where('status', 'SUCCESS')
-                    ->where('date_sent', '>=', now()->subDays(2))
+                    ->where('date_sent', '>=', $cycleStartCheck)
                     ->orderBy('date_sent', 'desc')
                     ->first();
 
                 if ($existingLog) {
-                    Log::info("Skipping enrollee - notification sent within last 2 days", [
+                    Log::info("Skipping enrollee - notification already sent in this 3-day cycle", [
                         'enrollee_id' => $enrollee->id,
                         'days_since_creation' => $daysSinceCreation,
-                        'last_sent' => $existingLog->date_sent
+                        'last_sent' => $existingLog->date_sent,
+                        'cycle_check_from' => $cycleStartCheck->format('Y-m-d H:i:s')
                     ]);
                     continue;
                 }
