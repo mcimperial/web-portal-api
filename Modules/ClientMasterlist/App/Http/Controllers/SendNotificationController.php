@@ -208,10 +208,8 @@ class SendNotificationController extends Controller
                 'message' => $responseData['message'] ?? ''
             ];
             
-            // Send SMS notification after successful email
-            if ($responseData['success'] ?? false) {
-                $this->sendSmsNotification($singleData, $notification);
-            }
+            // Note: SMS is NOT sent here to avoid duplicates when multiple emails exist
+            // SMS is sent once per enrollee in sendToEnrolleeIds() instead
         }
         return response()->json([
             'success' => true,
@@ -493,6 +491,11 @@ class SendNotificationController extends Controller
                 'success' => $responseData['success'] ?? false,
                 'message' => $responseData['message'] ?? ''
             ];
+            
+            // Send SMS notification once per enrollee (not per email address)
+            if ($responseData['success'] ?? false) {
+                $this->sendSmsNotification($singleData, $notification);
+            }
         }
         return response()->json([
             'success' => true,
