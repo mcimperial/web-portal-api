@@ -647,10 +647,11 @@ class SendNotificationController extends Controller
                 return $this->getEnrolleesByStatus($enrollmentId, true, 'PENDING', $notification);
             case 'ENROLLMENT START W/OUT DEP (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, false, 'PENDING', $notification);
-            case 'WARNING NOTIFICATION: ENROLLEE EXPIRING SOON':
-                // This notification continues sending until status changes from PENDING
+            case 'WARNING NOTIFICATION: ENROLLEE':
+                // This notification continues sending until status changes from PENDING or SUBMITTED-PERSONAL-INFORMATION
+                // Only send to enrollees who have been in PENDING or SUBMITTED-PERSONAL-INFORMATION status for 3+ days
                 // Skip duplicate check to send repeatedly on each scheduled run
-                return $this->getEnrolleesByStatus($enrollmentId, 'NC', 'PENDING', $notification, true);
+                return $this->getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId, 'NC', ['PENDING', 'SUBMITTED-PERSONAL-INFORMATION'], $notification, 3);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
                 // Return data for CSV generation instead of enrollee IDs
                 return [
@@ -784,6 +785,119 @@ class SendNotificationController extends Controller
         }
 
         Log::info("STATUS BY HMO notification: No {$status} enrollees found for enrollment {$enrollmentId} on {$dateRange['from']} to {$dateRange['to']}");
+
+        return [];
+    }
+
+    /**
+     * Get enrollees by status with a minimum days check since created_at
+     * Used for WARNING NOTIFICATION to only target enrollees who have been pending for X days
+     */
+    private function getEnrolleesByStatusWithDaysCheck($enrollmentId = null, $withDependents, $status = null, $notification = null, $minDays = 3)
+    {
+        if (!$enrollmentId) {
+            return [];
+        }
+
+        // Calculate the date threshold (minDays ago from now)
+        $dateThreshold = now()->subDays($minDays);
+
+        $enrollees = Enrollee::with(['healthInsurance'])
+            ->where('enrollment_id', $enrollmentId)
+            ->whereIn('enrollment_status', $status)
+            ->where('status', 'ACTIVE')
+            ->where('created_at', '<=', $dateThreshold) // Only enrollees created at least X days ago
+            ->whereNull('deleted_at');
+
+        if ($withDependents <> 'NC') {
+            $enrollees = $enrollees->where('with_dependents', $withDependents);
+        }
+
+        $enrollees = $enrollees->get();
+
+        if ($enrollees->count() > 0) {
+            $enrolleeIds = $enrollees->pluck('id')->toArray();
+
+            Log::info("WARNING NOTIFICATION: Found enrollees pending for {$minDays}+ days", [
+                'notification_id' => $notification->id,
+                'notification_type' => $notification->notification_type,
+                'enrollee_count' => count($enrolleeIds),
+                'status' => $status,
+                'min_days' => $minDays,
+                'date_threshold' => $dateThreshold->format('Y-m-d H:i:s')
+            ]);
+
+            return $enrolleeIds;
+        }
+
+        Log::info("WARNING NOTIFICATION: No enrollees found pending for {$minDays}+ days", [
+            'notification_id' => $notification->id,
+            'enrollment_id' => $enrollmentId,
+            'status' => $status,
+            'min_days' => $minDays,
+            'date_threshold' => $dateThreshold->format('Y-m-d H:i:s')
+        ]);
+
+        return [];
+    }
+
+    /**
+     * Get enrollees by multiple statuses with a minimum days check since created_at
+     * Used for WARNING NOTIFICATION to target enrollees in multiple statuses (PENDING or SUBMITTED-PERSONAL-INFORMATION)
+     */
+    private function getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId = null, $withDependents, $statuses = [], $notification = null, $minDays = 3)
+    {
+        if (!$enrollmentId || empty($statuses)) {
+            return [];
+        }
+
+        // Calculate the date threshold (minDays ago from now)
+        $dateThreshold = now()->subDays($minDays);
+        
+        // Calculate the stopper threshold (1 month/30 days from creation)
+        $stopperThreshold = now()->subDays(30);
+
+        $enrollees = Enrollee::with(['healthInsurance', 'enrollment'])
+            ->where('enrollment_id', $enrollmentId)
+            ->whereIn('enrollment_status', $statuses) // Check multiple statuses
+            ->where('status', 'ACTIVE')
+            ->where('created_at', '<=', $dateThreshold) // Only enrollees created at least X days ago
+            ->where('created_at', '>=', $stopperThreshold) // Stop sending after 30 days from creation
+            ->whereHas('enrollment', function($query) {
+                $query->where('status', 'ACTIVE'); // Stop sending if enrollment becomes INACTIVE
+            })
+            ->whereNull('deleted_at');
+
+        if ($withDependents <> 'NC') {
+            $enrollees = $enrollees->where('with_dependents', $withDependents);
+        }
+
+        $enrollees = $enrollees->get();
+
+        if ($enrollees->count() > 0) {
+            $enrolleeIds = $enrollees->pluck('id')->toArray();
+
+            Log::info("WARNING NOTIFICATION: Found enrollees in specified statuses for {$minDays}+ days (within 30-day limit)", [
+                'notification_id' => $notification->id,
+                'notification_type' => $notification->notification_type,
+                'enrollee_count' => count($enrolleeIds),
+                'statuses' => implode(', ', $statuses),
+                'min_days' => $minDays,
+                'date_threshold' => $dateThreshold->format('Y-m-d H:i:s'),
+                'stopper_threshold' => $stopperThreshold->format('Y-m-d H:i:s')
+            ]);
+
+            return $enrolleeIds;
+        }
+
+        Log::info("WARNING NOTIFICATION: No enrollees found in specified statuses for {$minDays}+ days (within 30-day limit)", [
+            'notification_id' => $notification->id,
+            'enrollment_id' => $enrollmentId,
+            'statuses' => implode(', ', $statuses),
+            'min_days' => $minDays,
+            'date_threshold' => $dateThreshold->format('Y-m-d H:i:s'),
+            'stopper_threshold' => $stopperThreshold->format('Y-m-d H:i:s')
+        ]);
 
         return [];
     }
