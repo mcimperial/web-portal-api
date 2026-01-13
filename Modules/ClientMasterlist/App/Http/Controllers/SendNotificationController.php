@@ -793,58 +793,6 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Get enrollees by status with a minimum days check since created_at
-     * Used for WARNING NOTIFICATION to only target enrollees who have been pending for X days
-     */
-    private function getEnrolleesByStatusWithDaysCheck($enrollmentId = null, $withDependents, $status = null, $notification = null, $minDays = 3)
-    {
-        if (!$enrollmentId) {
-            return [];
-        }
-
-        // Calculate the date threshold (minDays ago from now)
-        $dateThreshold = now()->subDays($minDays);
-
-        $enrollees = Enrollee::with(['healthInsurance'])
-            ->where('enrollment_id', $enrollmentId)
-            ->whereIn('enrollment_status', $status)
-            ->where('status', 'ACTIVE')
-            ->where('created_at', '<=', $dateThreshold) // Only enrollees created at least X days ago
-            ->whereNull('deleted_at');
-
-        if ($withDependents <> 'NC') {
-            $enrollees = $enrollees->where('with_dependents', $withDependents);
-        }
-
-        $enrollees = $enrollees->get();
-
-        if ($enrollees->count() > 0) {
-            $enrolleeIds = $enrollees->pluck('id')->toArray();
-
-            Log::info("WARNING NOTIFICATION: Found enrollees pending for {$minDays}+ days", [
-                'notification_id' => $notification->id,
-                'notification_type' => $notification->notification_type,
-                'enrollee_count' => count($enrolleeIds),
-                'status' => $status,
-                'min_days' => $minDays,
-                'date_threshold' => $dateThreshold->format('Y-m-d H:i:s')
-            ]);
-
-            return $enrolleeIds;
-        }
-
-        Log::info("WARNING NOTIFICATION: No enrollees found pending for {$minDays}+ days", [
-            'notification_id' => $notification->id,
-            'enrollment_id' => $enrollmentId,
-            'status' => $status,
-            'min_days' => $minDays,
-            'date_threshold' => $dateThreshold->format('Y-m-d H:i:s')
-        ]);
-
-        return [];
-    }
-
-    /**
      * Get enrollees by multiple statuses with a minimum days check since created_at
      * Used for WARNING NOTIFICATION to target enrollees in multiple statuses (PENDING or SUBMITTED-PERSONAL-INFORMATION)
      */
