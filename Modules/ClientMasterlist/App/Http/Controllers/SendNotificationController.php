@@ -795,6 +795,7 @@ class SendNotificationController extends Controller
     /**
      * Get enrollees by multiple statuses with a minimum days check since created_at
      * Used for WARNING NOTIFICATION to target enrollees in multiple statuses (PENDING or SUBMITTED-PERSONAL-INFORMATION)
+     * Sends notification every 3 days from created_at (3, 6, 9, 12... days after creation)
      */
     private function getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId = null, $withDependents, $statuses = [], $notification = null, $minDays = 3)
     {
@@ -826,22 +827,59 @@ class SendNotificationController extends Controller
         $enrollees = $enrollees->get();
 
         if ($enrollees->count() > 0) {
-            $enrolleeIds = $enrollees->pluck('id')->toArray();
+            $filteredIds = [];
+            
+            foreach ($enrollees as $enrollee) {
+                // Calculate days since creation
+                $daysSinceCreation = now()->diffInDays($enrollee->created_at);
+                
+                // Check if it's a multiple of 3 days (3, 6, 9, 12, etc.)
+                // Allow 1 day tolerance for cron scheduling
+                $isMultipleOf3Days = ($daysSinceCreation % 3 === 0) || 
+                                     (($daysSinceCreation - 1) % 3 === 0) || 
+                                     (($daysSinceCreation + 1) % 3 === 0);
+                
+                if (!$isMultipleOf3Days) {
+                    continue; // Skip if not on a 3-day interval
+                }
+                
+                // Check if we already sent notification in the last 2 days to avoid duplicates
+                $existingLog = DB::table('cm_notification_logs')
+                    ->where('notification_id', $notification->id)
+                    ->where('principal_id', $enrollee->id)
+                    ->where('status', 'SUCCESS')
+                    ->where('date_sent', '>=', now()->subDays(2))
+                    ->orderBy('date_sent', 'desc')
+                    ->first();
 
-            Log::info("WARNING NOTIFICATION: Found enrollees in specified statuses for {$minDays}+ days (within 30-day limit)", [
-                'notification_id' => $notification->id,
-                'notification_type' => $notification->notification_type,
-                'enrollee_count' => count($enrolleeIds),
-                'statuses' => implode(', ', $statuses),
-                'min_days' => $minDays,
-                'date_threshold' => $dateThreshold->format('Y-m-d H:i:s'),
-                'stopper_threshold' => $stopperThreshold->format('Y-m-d H:i:s')
-            ]);
+                if ($existingLog) {
+                    Log::info("Skipping enrollee - notification sent within last 2 days", [
+                        'enrollee_id' => $enrollee->id,
+                        'days_since_creation' => $daysSinceCreation,
+                        'last_sent' => $existingLog->date_sent
+                    ]);
+                    continue;
+                }
+                
+                $filteredIds[] = $enrollee->id;
+            }
 
-            return $enrolleeIds;
+            if (count($filteredIds) > 0) {
+                Log::info("WARNING NOTIFICATION: Found enrollees for 3-day interval notification", [
+                    'notification_id' => $notification->id,
+                    'notification_type' => $notification->notification_type,
+                    'enrollee_count' => count($filteredIds),
+                    'statuses' => implode(', ', $statuses),
+                    'min_days' => $minDays,
+                    'date_threshold' => $dateThreshold->format('Y-m-d H:i:s'),
+                    'stopper_threshold' => $stopperThreshold->format('Y-m-d H:i:s')
+                ]);
+
+                return $filteredIds;
+            }
         }
 
-        Log::info("WARNING NOTIFICATION: No enrollees found in specified statuses for {$minDays}+ days (within 30-day limit)", [
+        Log::info("WARNING NOTIFICATION: No enrollees found for 3-day interval notification", [
             'notification_id' => $notification->id,
             'enrollment_id' => $enrollmentId,
             'statuses' => implode(', ', $statuses),
