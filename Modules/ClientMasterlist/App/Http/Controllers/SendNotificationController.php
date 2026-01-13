@@ -813,7 +813,7 @@ class SendNotificationController extends Controller
             ->where('enrollment_id', $enrollmentId)
             ->whereIn('enrollment_status', $statuses) // Check multiple statuses
             ->where('status', 'ACTIVE')
-            ->where('created_at', '<=', $dateThreshold) // Only enrollees created at least X days ago
+            //->where('created_at', '<=', $dateThreshold) // Only enrollees created at least X days ago
             ->where('created_at', '>=', $stopperThreshold) // Stop sending after 30 days from creation
             ->whereHas('enrollment', function($query) {
                 $query->where('status', 'ACTIVE'); // Stop sending if enrollment becomes INACTIVE
