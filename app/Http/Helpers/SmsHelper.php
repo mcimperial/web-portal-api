@@ -42,6 +42,16 @@ class SmsHelper
      */
     public static function send($mobile, $message)
     {
+        // Check if SMS is enabled
+        if (!env('SMS_ENABLED', true)) {
+            Log::info('SMS notification skipped: SMS_ENABLED is false');
+            return [
+                'success' => false,
+                'error' => 'SMS notifications are disabled',
+                'response' => null
+            ];
+        }
+
         // Clean and validate mobile number
         $cleanedMobile = self::cleanMobileNumber($mobile);
 
@@ -54,10 +64,14 @@ class SmsHelper
             ];
         }
 
-        $ch = curl_init('http://192.159.66.221/goip/sendsms/');
+        $gatewayUrl = env('SMS_GATEWAY_URL', 'http://192.159.66.221/goip/sendsms/');
+        $gatewayUsername = env('SMS_GATEWAY_USERNAME', 'root');
+        $gatewayPassword = env('SMS_GATEWAY_PASSWORD', 'LACSONSMS');
+
+        $ch = curl_init($gatewayUrl);
 
         $parameters = array(
-            'auth' => array('username' => "root", 'password' => "LACSONSMS"),
+            'auth' => array('username' => $gatewayUsername, 'password' => $gatewayPassword),
             'provider' => "SIMNETWORK",
             'number' => $cleanedMobile,
             'content' => $message,
@@ -70,6 +84,8 @@ class SmsHelper
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($parameters));
         curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10); // Set timeout to 10 seconds
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5); // Set connection timeout to 5 seconds
 
         // Receive response from server
         $output = curl_exec($ch);
@@ -77,16 +93,23 @@ class SmsHelper
         $curlError = curl_error($ch);
         curl_close($ch);
 
-        Log::info('SMS Gateway Response: ' . $output);
-
         if ($curlError) {
-            Log::error('SMS Gateway Error: ' . $curlError);
+            Log::error('SMS Gateway Error: ' . $curlError, [
+                'mobile' => $cleanedMobile,
+                'http_code' => $httpCode,
+                'gateway_url' => $gatewayUrl
+            ]);
             return [
                 'success' => false,
                 'error' => $curlError,
                 'response' => null
             ];
         }
+
+        Log::info('SMS Gateway Response: ' . $output, [
+            'http_code' => $httpCode,
+            'mobile' => $cleanedMobile
+        ]);
 
         $response = json_decode($output, true);
 
