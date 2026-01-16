@@ -770,7 +770,7 @@ class ExportEnrolleesController extends Controller
             case 'maxicare_relation':
                 switch (strtoupper($entity->relation ?? 'P')) {
                     case 'SPOUSE':
-                        return 'S';
+                        return 'SP';
                     case 'CHILD':
                         return 'C';
                     case 'PARENT':
