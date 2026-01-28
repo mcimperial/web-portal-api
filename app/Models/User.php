@@ -25,6 +25,8 @@ class User extends Authenticatable
         'email',
         'password',
         'device_name',
+        'social_providers',
+        'email_verified_at',
     ];
 
     /**
@@ -35,6 +37,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'social_providers',
     ];
 
     /**
@@ -45,6 +48,7 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'social_providers' => 'array',
     ];
 
     public function roles(): BelongsToMany

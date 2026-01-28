@@ -17,7 +17,18 @@ use Modules\ClientMobileApp\App\Http\Controllers\AuthController;
 
 // Public routes (no authentication required)
 Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
+    // Traditional login
     Route::post('login', [AuthController::class, 'login'])->name('login');
+    
+    // Account creation
+    Route::post('create-account', [AuthController::class, 'createAccount'])->name('create-account');
+    Route::post('check-email', [AuthController::class, 'checkEmail'])->name('check-email');
+    
+    // Social media authentication
+    Route::post('social-login', [AuthController::class, 'socialLogin'])->name('social-login');
+    Route::post('google-signin', [AuthController::class, 'googleSignIn'])->name('google-signin');
+    Route::post('facebook-signin', [AuthController::class, 'facebookSignIn'])->name('facebook-signin');
+    Route::post('apple-signin', [AuthController::class, 'appleSignIn'])->name('apple-signin');
 });
 
 // Protected routes (authentication required)
