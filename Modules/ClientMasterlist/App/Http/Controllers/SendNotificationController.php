@@ -650,11 +650,16 @@ class SendNotificationController extends Controller
                 return $this->getEnrolleesByStatus($enrollmentId, true, 'PENDING', $notification);
             case 'ENROLLMENT START W/OUT DEP (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, false, 'PENDING', $notification);
-            case 'WARNING NOTIFICATION: ENROLLEE':
+            case 'WARNING NOTIFICATION: ENROLLEE (PENDING)':
                 // This notification continues sending until status changes from PENDING or SUBMITTED-PERSONAL-INFORMATION
                 // Only send to enrollees who have been in PENDING or SUBMITTED-PERSONAL-INFORMATION status for 3+ days
                 // Skip duplicate check to send repeatedly on each scheduled run
-                return $this->getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId, 'NC', ['PENDING', 'SUBMITTED-PERSONAL-INFORMATION'], $notification, 3);
+                return $this->getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId, 'NC', ['PENDING'], $notification, 3);
+            case 'WARNING NOTIFICATION: ENROLLEE (NOT SUBMITTED)':
+                // This notification continues sending until status changes from PENDING or SUBMITTED-PERSONAL-INFORMATION
+                // Only send to enrollees who have been in PENDING or SUBMITTED-PERSONAL-INFORMATION status for 3+ days
+                // Skip duplicate check to send repeatedly on each scheduled run
+                return $this->getEnrolleesByMultipleStatusWithDaysCheck($enrollmentId, 'NC', ['SUBMITTED-PERSONAL-INFORMATION'], $notification, 3);
             case 'REPORT: ATTACHMENT (SUBMITTED)':
                 // Return data for CSV generation instead of enrollee IDs
                 return [
