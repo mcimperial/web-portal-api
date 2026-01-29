@@ -59,12 +59,13 @@ class EnrolleeManageDependentController extends Controller
 
     public function updateGenderAndMaritalStatus(Request $request, $uuid)
     {
-        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        $enrollee = Enrollee::with('enrollment.company')->where('uuid', $uuid)->first();
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
         
         $oldValues = $enrollee->toArray();
+        $oldMaritalStatus = $enrollee->marital_status;
 
         $validated = $request->validate([
             'gender' => 'required|string|max:255',
@@ -73,17 +74,52 @@ class EnrolleeManageDependentController extends Controller
 
         $enrollee->fill($validated);
         $enrollee->save();
+
+        $deletedDependentsCount = 0;
+
+        // Check if marital status changed and delete dependents only for specific company codes
+        if ($oldMaritalStatus !== $validated['marital_status']) {
+            $companyCode = $enrollee->enrollment && $enrollee->enrollment->company 
+                ? $enrollee->enrollment->company->company_code 
+                : null;
+
+            // Array of company codes that require dependent deletion on marital status change
+            $companyCodesWithDependentDeletion = [
+                'REMOTE',
+                // Add more company codes here as needed
+            ];
+
+            if ($companyCode && in_array($companyCode, $companyCodesWithDependentDeletion)) {
+                // Get all dependents for this enrollee
+                $dependents = Dependent::where('principal_id', $enrollee->id)->get();
+                
+                foreach ($dependents as $dependent) {
+                    // Delete associated health insurance record
+                    HealthInsurance::where('dependent_id', $dependent->id)->delete();
+                    
+                    // Delete associated attachments
+                    Attachment::where('dependent_id', $dependent->id)->delete();
+                    
+                    // Soft delete the dependent
+                    $dependent->delete();
+                    $deletedDependentsCount++;
+                }
+            }
+        }
         
         // Log the update action
         $this->logUpdate($enrollee, $oldValues, [
             'action' => 'update_gender_marital_status',
-            'uuid' => $uuid
+            'uuid' => $uuid,
+            'marital_status_changed' => $oldMaritalStatus !== $validated['marital_status'],
+            'dependents_deleted' => $deletedDependentsCount
         ]);
 
         return response()->json([
             'success' => true,
             'message' => 'Enrollee updated successfully',
-            'enrollee' => $enrollee
+            'enrollee' => $enrollee,
+            'dependents_deleted' => $deletedDependentsCount
         ]);
     }
 
