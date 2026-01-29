@@ -643,6 +643,7 @@ class SendNotificationController extends Controller
 
         $columns = [];
 
+        //NC means No Check on with_dependents
         switch ($notificationType) {
             case 'APPROVED BY HMO (WELCOME EMAIL)':
                 return $this->getEnrolleesByStatus($enrollmentId, 'NC', 'APPROVED', $notification);
