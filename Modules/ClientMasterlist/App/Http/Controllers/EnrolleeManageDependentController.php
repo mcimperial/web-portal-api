@@ -97,7 +97,7 @@ class EnrolleeManageDependentController extends Controller
                 
                 foreach ($dependents as $dependent) {
                     // Soft delete associated health insurance record
-                    HealthInsurance::where('dependent_id', $dependent->id)->update(['deleted_at' => now()]);
+                    Dependent::where('id', $dependent->id)->update(['deleted_at' => now()]);
                     
                     // Soft delete associated attachments
                     //Attachment::where('dependent_id', $dependent->id)->update(['deleted_at' => now()]);
