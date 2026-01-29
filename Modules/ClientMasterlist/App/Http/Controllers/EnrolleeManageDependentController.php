@@ -90,15 +90,17 @@ class EnrolleeManageDependentController extends Controller
             ];
 
             if ($companyCode && in_array($companyCode, $companyCodesWithDependentDeletion)) {
-                // Get all dependents for this enrollee
-                $dependents = Dependent::where('principal_id', $enrollee->id)->get();
+                // Get all dependents for this enrollee that are not yet deleted
+                $dependents = Dependent::where('principal_id', $enrollee->id)
+                    ->whereNull('deleted_at')
+                    ->get();
                 
                 foreach ($dependents as $dependent) {
-                    // Delete associated health insurance record
-                    HealthInsurance::where('dependent_id', $dependent->id)->delete();
+                    // Soft delete associated health insurance record
+                    HealthInsurance::where('dependent_id', $dependent->id)->update(['deleted_at' => now()]);
                     
-                    // Delete associated attachments
-                    Attachment::where('dependent_id', $dependent->id)->delete();
+                    // Soft delete associated attachments
+                    //Attachment::where('dependent_id', $dependent->id)->update(['deleted_at' => now()]);
                     
                     // Soft delete the dependent
                     $dependent->delete();
