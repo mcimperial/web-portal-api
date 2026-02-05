@@ -27,6 +27,9 @@ class User extends Authenticatable
         'device_name',
         'social_providers',
         'email_verified_at',
+        'email_otp',
+        'email_otp_expires_at',
+        'email_otp_attempts',
     ];
 
     /**
@@ -38,6 +41,9 @@ class User extends Authenticatable
         'password',
         'remember_token',
         'social_providers',
+        'email_otp',
+        'email_otp_expires_at',
+        'email_otp_attempts',
     ];
 
     /**
@@ -47,6 +53,7 @@ class User extends Authenticatable
      */
     protected $casts = [
         'email_verified_at' => 'datetime',
+        'email_otp_expires_at' => 'datetime',
         'password' => 'hashed',
         'social_providers' => 'array',
     ];
