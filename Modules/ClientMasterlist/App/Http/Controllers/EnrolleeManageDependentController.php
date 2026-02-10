@@ -68,7 +68,7 @@ class EnrolleeManageDependentController extends Controller
         $oldMaritalStatus = $enrollee->marital_status;
 
         $validated = $request->validate([
-            'gender' => 'required|string|max:255',
+            'gender' => 'nullable|string|max:255',
             'marital_status' => 'required|string|max:255'
         ]);
 
