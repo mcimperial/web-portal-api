@@ -1373,7 +1373,7 @@ class SendNotificationController extends Controller
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
-            $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
+            $html .= '<td>' . ($row['enrollment_status'] === 'OVERAGE' ? 'OVERAGE - EXCLUDED' : htmlspecialchars($row['enrollment_status'])) . '</td>';
             $html .= '</tr>';
         }
         $html .= '</tbody></table>';
