@@ -31,6 +31,7 @@ class Enrollment extends Model
         'principal_room_and_board',
         'dependent_mbl',
         'dependent_room_and_board',
+        'export_type',
         'status',
         'deleted_by',
     ];

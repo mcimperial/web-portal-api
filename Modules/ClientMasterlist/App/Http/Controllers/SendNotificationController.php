@@ -259,6 +259,27 @@ class SendNotificationController extends Controller
 
         // Add CSV attachment if provided
         $csvAttachment = $data['csv_attachment'] ?? null;
+        
+        // Generate CSV attachment automatically for specific notification types if not already provided
+        if (!$csvAttachment && in_array($notification->notification_type, ['REPORT: ATTACHMENT (SUBMITTED)', 'REPORT: ATTACHMENT (APPROVED)'])) {
+            $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+            
+            if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                $csvAttachment = $this->generateCsvAttachment($statusResult);
+                
+                // Only proceed if CSV has actual data
+                if (!($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data'])) {
+                    // Clean up empty CSV file
+                    if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                        @unlink($csvAttachment['path']);
+                    }
+                    if ($csvAttachment && isset($csvAttachment['temp_path'])) {
+                        @unlink($csvAttachment['temp_path']);
+                    }
+                    $csvAttachment = null;
+                }
+            }
+        }
 
         $replacements = $this->getVariableReplacements($notification, $data);
         $messageBody  = $this->replaceVariables($notification->message, $replacements);
@@ -522,12 +543,6 @@ class SendNotificationController extends Controller
             // Pass the notification object for schedule-based date calculation
             $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
 
-            Log::info("Status result for notification", [
-                'notification_id' => $notification->id,
-                'status_result_type' => is_array($statusResult) ? ($statusResult['type'] ?? 'unknown') : gettype($statusResult),
-                'has_status_result' => !empty($statusResult)
-            ]);
-
             $request = new Request([
                 'notification_id' => $notification->id,
                 'to' => $notification->to,
@@ -552,12 +567,6 @@ class SendNotificationController extends Controller
                         'csv_attachment' => $csvAttachment
                     ]);
 
-                    Log::info("CSV attachment added to request - has data", [
-                        'notification_id' => $notification->id,
-                        'csv_filename' => $csvAttachment['name'],
-                        'data_rows' => $csvAttachment['data_rows']
-                    ]);
-
                     $forCount = 1; // CSV notification counts as 1 valid recipient
                 } else if ($csvAttachment) {
 
@@ -570,20 +579,9 @@ class SendNotificationController extends Controller
                         @unlink($csvAttachment['temp_path']);
                     }
 
-                    Log::info("CSV attachment skipped - no data rows", [
-                        'notification_id' => $notification->id,
-                        'data_rows' => $csvAttachment['data_rows'] ?? 0,
-                        'enrollment_id' => $statusResult['enrollment_id'],
-                        //'status' => $statusResult['status']
-                    ]);
-
                     // Skip sending this notification since there's no data
                     continue;
                 } else {
-                    Log::warning("Failed to generate CSV attachment", [
-                        'notification_id' => $notification->id,
-                        'enrollment_id' => $statusResult['enrollment_id']
-                    ]);
 
                     // Skip this notification
                     continue;
@@ -599,9 +597,6 @@ class SendNotificationController extends Controller
 
 
             if ($forCount === 0) {
-                Log::info("No recipients found for notification, skipping send", [
-                    'notification_id' => $notification->id
-                ]);
                 continue; // Skip sending if no recipients
             }
 
@@ -611,10 +606,6 @@ class SendNotificationController extends Controller
             $responseData = $response->getData(true);
             $status = $responseData['success'] ? 'SUCCESS' : 'FAILED';
             $this->logNotificationSending($notification, $request->all(), $status, 'Scheduled');
-
-            Log::info("Notification sent, updating last_sent_at", [
-                'notification_id' => $notification->id
-            ]);
 
             $notification->last_sent_at = $now;
             $notification->save();
