@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Modules\ClientMasterlist\App\Models\Enrollee;
-use Modules\ClientMasterlist\App\Models\HealthInsurance;
+use Modules\ClientMasterlist\App\Models\Enrollment;
 use App\Http\Traits\UppercaseInput;
 use App\Models\Company;
 
@@ -14,243 +14,137 @@ class ExportEnrolleesController extends Controller
 {
     use UppercaseInput;
 
-    /**
-     * Column mappings for CSV headers
-     */
-    private const COLUMN_LABELS = [
-        'remarks' => 'Remarks',
-        'reason_for_skipping' => 'Reason for Skipping',
-        'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
-        'effective_date' => 'Effective Date',
-        //'attachment' => 'Attachment for Skip Hierarchy',
-        'required_document' => 'Required Document',
-        'enrollment_status' => 'Enrollment Status',
-        'relation' => 'Relation',
-        'employee_id' => 'Employee ID',
-        'first_name' => 'First Name',
-        'last_name' => 'Last Name',
-        'middle_name' => 'Middle Name',
-        'suffix' => 'Suffix',
-        'birth_date' => 'Birth Date',
-        'gender' => 'Gender',
-        'marital_status' => 'Marital Status',
-        'email1' => 'Email 1',
-        'email2' => 'Email 2',
-        'phone1' => 'Phone 1',
-        'phone2' => 'Phone 2',
-        'address' => 'Address',
-        'department' => 'Department',
-        'position' => 'Position',
-        'employment_start_date' => 'Employment Start Date',
-        'employment_end_date' => 'Employment End Date',
-        'notes' => 'Notes',
-        'status' => 'Status',
-        // health insurance fields
-        'plan' => 'Plan',
-        'premium' => 'Premium',
-        'principal_mbl' => 'Principal MBL',
-        'principal_room_and_board' => 'Principal Room and Board',
-        'dependent_mbl' => 'Dependent MBL',
-        'dependent_room_and_board' => 'Dependent Room and Board',
-        'is_renewal' => 'Is Renewal',
-        'is_company_paid' => 'Is Company Paid',
-        'coverage_start_date' => 'Coverage Start Date',
-        'coverage_end_date' => 'Coverage End Date',
-        'certificate_number' => 'Certificate Number',
-        'certificate_date_issued' => 'Certificate Date Issued',
+    // =========================================================================
+    // EXPORT CONFIGURATION
+    // =========================================================================
+
+    private const EXPORT_CONFIGS = [
+        'DEFAULT' => [
+            'columns' => [
+                'enrollment_status', 'relation', 'premium', 'employee_id', 'first_name', 
+                'last_name', 'middle_name', 'suffix', 'birth_date', 'marital_status', 
+                'gender', 'email1', 'phone1', 'department', 'position', 'effective_date'
+            ],
+            'labels' => [
+                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
+                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+                'effective_date' => 'Effective Date', 'required_document' => 'Required Document',
+                'enrollment_status' => 'Enrollment Status', 'relation' => 'Relation',
+                'employee_id' => 'Employee ID', 'first_name' => 'First Name',
+                'last_name' => 'Last Name', 'middle_name' => 'Middle Name',
+                'suffix' => 'Suffix', 'birth_date' => 'Birth Date', 'gender' => 'Gender',
+                'marital_status' => 'Marital Status', 'email1' => 'Email 1', 'email2' => 'Email 2',
+                'phone1' => 'Phone 1', 'phone2' => 'Phone 2', 'address' => 'Address',
+                'department' => 'Department', 'position' => 'Position',
+                'employment_start_date' => 'Employment Start Date', 'employment_end_date' => 'Employment End Date',
+                'notes' => 'Notes', 'status' => 'Status', 'plan' => 'Plan', 'premium' => 'Premium',
+                'principal_mbl' => 'Principal MBL', 'principal_room_and_board' => 'Principal Room and Board',
+                'dependent_mbl' => 'Dependent MBL', 'dependent_room_and_board' => 'Dependent Room and Board',
+                'is_renewal' => 'Is Renewal', 'is_company_paid' => 'Is Company Paid',
+                'coverage_start_date' => 'Coverage Start Date', 'coverage_end_date' => 'Coverage End Date',
+                'certificate_number' => 'Certificate Number', 'certificate_date_issued' => 'Certificate Date Issued'
+            ]
+        ],
+        'MAXI-SCVP' => [
+            'columns' => [
+                'maxicare_account_code', 'maxicare_employee_id', 'maxicare_first_name',
+                'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
+                'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
+                'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
+                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
+                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
+                'maxicare_plan_code'
+            ],
+            'labels' => [
+                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
+                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+                'maxicare_account_code' => 'Account Code', 'maxicare_employee_id' => 'Employee No',
+                'maxicare_first_name' => 'First Name', 'maxicare_last_name' => 'Last Name',
+                'maxicare_middle_name' => 'Middle Name', 'maxicare_extension' => 'Extension',
+                'maxicare_gender' => 'Gender', 'maxicare_member_type' => 'Member Type',
+                'maxicare_relation' => 'Relationship', 'maxicare_address_line_1' => 'Address Line 1',
+                'maxicare_city' => 'City', 'maxicare_province' => 'Province',
+                'maxicare_civil_status' => 'Civil Status', 'maxicare_birth_date' => 'Birth Date',
+                'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
+                'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
+                'maxicare_plan_code' => 'Plan Code'
+            ]
+        ],
+        'MAXI-ACVP' => [
+            'columns' => [
+                'maxicare_employee_id', 'maxicare_last_name', 'maxicare_first_name',
+                'maxicare_middle_name', 'maxicare_extension', 'maxicare_gender',
+                'maxicare_street', 'maxicare_city', 'maxicare_province', 'maxicare_postal_code',
+                'maxicare_email', 'maxicare_mobile_no', 'maxicare_member_type',
+                'maxicare_birth_date', 'relation', 'marital_status',
+                'maxicare_effective_date', 'maxicare_date_hired', 'maxicare_date_regularization',
+                'maxicare_is_philhealth_member', 'maxicare_philhealth_conditions',
+                'maxicare_position', 'maxicare_plan_type', 'maxicare_branch_name',
+                'maxicare_philhealth_no', 'maxicare_senior_citizen_id_no',
+                'maxicare_client_remarks', 'maxicare_phic'
+            ],
+            'labels' => [
+                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
+                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+                'maxicare_employee_id' => 'EmpNo', 'maxicare_last_name' => 'LastName',
+                'maxicare_first_name' => 'FirstName', 'maxicare_middle_name' => 'MiddleName',
+                'maxicare_extension' => 'Extension', 'maxicare_gender' => 'Gender',
+                'maxicare_street' => 'Street', 'maxicare_city' => 'City',
+                'maxicare_province' => 'Province', 'maxicare_postal_code' => 'ZipCode',
+                'maxicare_email' => 'Email', 'maxicare_mobile_no' => 'MobileNo',
+                'maxicare_member_type' => 'MemberType', 'maxicare_birth_date' => 'BirthDate',
+                'relation' => 'RelationshipID', 'marital_status' => 'CivilStat',
+                'maxicare_effective_date' => 'EffectiveDate', 'maxicare_date_hired' => 'DateHired',
+                'maxicare_date_regularization' => 'RegDate',
+                'maxicare_is_philhealth_member' => 'If Enrollee is a Philhealth member',
+                'maxicare_philhealth_conditions' => 'Philhealth conditions',
+                'maxicare_position' => 'POSITION', 'maxicare_plan_type' => 'PLAN TYPE',
+                'maxicare_branch_name' => 'BRANCH NAME', 'maxicare_philhealth_no' => 'PHILHEALTH NO.',
+                'maxicare_senior_citizen_id_no' => 'SENIOR CITIZEN ID. NO.',
+                'maxicare_client_remarks' => 'Client Remarks', 'maxicare_phic' => 'PHIC'
+            ]
+        ]
     ];
 
-    /**
-     * Fields that come from the health insurance relationship
-     */
     private const INSURANCE_FIELDS = [
-        'plan',
-        'premium',
-        'principal_mbl',
-        'principal_room_and_board',
-        'dependent_mbl',
-        'dependent_room_and_board',
-        'is_renewal',
-        'is_company_paid',
-        'coverage_start_date',
-        'coverage_end_date',
-        'certificate_number',
-        'certificate_date_issued'
+        'plan', 'premium', 'principal_mbl', 'principal_room_and_board',
+        'dependent_mbl', 'dependent_room_and_board', 'is_renewal', 'is_company_paid',
+        'coverage_start_date', 'coverage_end_date', 'certificate_number', 'certificate_date_issued'
     ];
 
-    /**
-     * Maxicare specific custom columns
-     */
-    private const MAXICARE_COLUMN_LABELS = [
-        // Maxicare specific add-on columns
-        'maxicare_account_code' => 'Account Code',
-        'maxicare_employee_id' => 'Employee No',
-        'maxicare_first_name' => 'First Name',
-        'maxicare_last_name' => 'Last Name',
-        'maxicare_middle_name' => 'Middle Name',
-        'maxicare_extension' => 'Extension',
-        'maxicare_mononymous' => 'Mononymous',
-        'maxicare_gender' => 'Gender',
-        'maxicare_member_type' => 'Member Type',
-        'maxicare_relation' => 'Relationship',
-        'maxicare_address_line_1' => 'Address Line 1',
-        'maxicare_address_line_2' => 'Address Line 2',
-        'maxicare_city' => 'City',
-        'maxicare_province' => 'Province',
-        'maxicare_postal_code' => 'Postal Code',
-        'maxicare_civil_status' => 'Civil Status',
-        'maxicare_birth_date' => 'Birth Date',
-        'maxicare_mobile_no' => 'Mobile No',
-        'maxicare_email' => 'Email',
-        'maxicare_effective_date' => 'Effective Date',
-        'maxicare_date_hired' => 'Date Hired',
-        'maxicare_date_regularization' => 'Date Regularization',
-        'maxicare_philhealth' => 'PhilHealth',
-        'maxicare_plan_code' => 'Plan Code',
-        'maxicare_card_issuance' => 'Card Issuance',
-        'maxicare_remarks' => 'Remarks',
-        'maxicare_birth_certificate' => 'Birth Certificate',
-        'maxicare_employee_cenomar' => 'Employee CENOMAR',
-        'maxicare_partner_cenomar' => 'Partner CENOMAR',
-        'maxicare_employee_barangay_certification' => 'Employee Barangay Certification',
-        'maxicare_partner_barangay_certification' => 'Partner Barangay Certification',
+    private const RELATION_CODE_MAP = [
+        'SPOUSE' => 'SP', 'CHILD' => 'C', 'PARENT' => 'PR', 'SIBLING' => 'SL',
+        'DOMESTIC PARTNER' => 'O', 'COMMON-LAW PARTNER' => 'O'
     ];
 
-    /**
-     * specific custom headers for automatic export
-     */
-    private const AUTO_HEADER = [
-        'enrollment_status',
-        'relation',
-        'premium',
-        'employee_id',
-        'first_name',
-        'last_name',
-        'middle_name',
-        'suffix',
-        'birth_date',
-        'marital_status',
-        'gender',
-        'email1',
-        'phone1',
-        'department',
-        'position',
-        'effective_date',
+    private const CIVIL_STATUS_CODE_MAP = [
+        'SINGLE' => 'S', 'SINGLE PARENT' => 'SP', 'MARRIED' => 'M'
     ];
 
-    private const AUTO_MAXICARE_CUSTOM_HEADER = [
-        'maxicare_account_code',
-        'maxicare_employee_id',
-        'maxicare_first_name',
-        'maxicare_last_name',
-        'maxicare_middle_name',
-        'maxicare_extension',
-        'maxicare_mononymous',
-        'maxicare_gender',
-        'maxicare_member_type',
-        'maxicare_relation',
-        'maxicare_address_line_1',
-        'maxicare_address_line_2',
-        'maxicare_city',
-        'maxicare_province',
-        'maxicare_postal_code',
-        'maxicare_civil_status',
-        'maxicare_birth_date',
-        'maxicare_mobile_no',
-        'maxicare_email',
-        'maxicare_effective_date',
-        'maxicare_date_hired',
-        'maxicare_date_regularization',
-        'maxicare_philhealth',
-        'maxicare_plan_code',
-        'maxicare_card_issuance',
-        'maxicare_remarks',
-        'maxicare_birth_certificate',
-        'maxicare_employee_cenomar',
-        'maxicare_partner_cenomar',
-        'maxicare_employee_barangay_certification',
-        'maxicare_partner_barangay_certification',
-    ];
+    // =========================================================================
+    // MAIN EXPORT METHODS
+    // =========================================================================
 
-    /**
-     * Main export method - handles both regular and attachment exports
-     */
     public function exportEnrollees(Request $request)
     {
-        // Extract request parameters
-        $filters = [
-            'maxicare_customized_column' => $request->query('maxicare_customized_column'),
-            'enrollment_id' => $request->query('enrollment_id'),
-            'export_enrollment_type' => $request->query('export_enrollment_type'),
-            'enrollment_status' => $request->query('enrollment_status'),
-            'date_from' => $request->query('date_from'),
-            'date_to' => $request->query('date_to'),
-        ];
-
+        $filters = $this->extractFilters($request);
         $withDependents = $request->query('with_dependents', false);
         $isForAttachment = $request->query('for_attachment', false);
 
-        // Build query and get enrollees
-        $query = $this->buildBaseQuery($filters);
-
-        // Log the SQL query for debugging
-        Log::info('Export Enrollees SQL Query', [
-            'sql' => $query->toSql(),
-            'bindings' => $query->getBindings(),
-            'filters' => $filters
-        ]);
-
-        $enrollees = $query->get();
-
-        // Debug: Log the is_renewal values for REGULAR exports
-        if ($filters['export_enrollment_type'] === 'REGULAR') {
-            Log::info('DEBUG: Checking is_renewal values for REGULAR export', [
-                'total_enrollees' => $enrollees->count()
-            ]);
-
-            foreach ($enrollees as $index => $enrollee) {
-                /** @var \Modules\ClientMasterlist\App\Models\Enrollee $enrollee */
-                $healthInsurance = $enrollee->healthInsurance;
-                $isRenewal = $healthInsurance ? $healthInsurance->is_renewal : 'no_health_insurance';
-
-                Log::info("DEBUG: Enrollee #{$index}", [
-                    'enrollee_id' => $enrollee->id,
-                    'employee_id' => $enrollee->employee_id,
-                    'is_renewal' => $isRenewal,
-                    'has_health_insurance' => $healthInsurance ? 'yes' : 'no'
-                ]);
-
-                // Only log first 5 to avoid overwhelming logs
-                if ($index >= 4) {
-                    Log::info('DEBUG: Truncating debug logs after 5 records...');
-                    break;
-                }
-            }
-        }
-
-        if ($filters['maxicare_customized_column']) {
-            Log::info('Maxicare customized column is true. Adding Maxicare specific columns.');
-            // Merge Maxicare specific columns
-            $columns = self::AUTO_MAXICARE_CUSTOM_HEADER;
-        } else {
-            if ($isForAttachment) {
-                $columns = self::AUTO_HEADER;
-            } else {
-                $columns = $request->query('columns', []);
-            }
-        }
-
-        // Process columns based on enrollee data
-        $columns = $this->processColumns($columns, $enrollees, $filters['maxicare_customized_column']);
-
-        // Generate CSV data
-        $headers = $this->generateHeaders($columns, $filters['maxicare_customized_column']);
-        $rows = $this->generateAllRows($enrollees, $columns, $withDependents, $filters['maxicare_customized_column']);
-
-        // Generate CSV content
+        $enrollees = $this->buildBaseQuery($filters)->get();
+        $exportType = $this->getExportType($filters['enrollment_id']);
+        
+        $columns = $this->determineColumns($request, $exportType, $isForAttachment);
+        $columns = $this->processColumns($columns, $enrollees, $exportType);
+        
+        // Use DEFAULT labels when use_selected_columns is checked
+        $useDefaultLabels = (bool) $request->query('use_selected_columns');
+        $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
+        // Use DEFAULT column values when use_selected_columns is checked
+        $useDefaultValues = (bool) $request->query('use_selected_columns');
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues);
         $csv = $this->generateCsv($headers, $rows);
 
-        // Handle status updates for attachment exports
         if ($isForAttachment && $filters['enrollment_status'] === 'SUBMITTED') {
             $this->updateSubmittedEnrollees($enrollees);
         }
@@ -258,233 +152,259 @@ class ExportEnrolleesController extends Controller
         return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
     }
 
-    /**
-     * Legacy method for attachment exports - now redirects to main method
-     */
     public function exportEnrolleesForAttachment(Request $request)
     {
-        // Add for_attachment flag to indicate this is an attachment export
         $request->merge(['for_attachment' => true]);
-
         return $this->exportEnrollees($request);
     }
 
-    /**
-     * Build base query with common filters
-     */
-    private function buildBaseQuery($filters = [])
+    // =========================================================================
+    // HELPER METHODS
+    // =========================================================================
+
+    private function extractFilters(Request $request): array
     {
-        // Build the relationships array based on enrollment status filter
+        return [
+            'use_selected_columns' => $request->query('use_selected_columns'),
+            'enrollment_id' => $request->query('enrollment_id'),
+            'export_enrollment_type' => $request->query('export_enrollment_type'),
+            'enrollment_status' => $request->query('enrollment_status'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
+        ];
+    }
+
+    private function getExportType($enrollmentId): string
+    {
+        if (empty($enrollmentId)) return 'DEFAULT';
+        
+        $enrollment = Enrollment::find($enrollmentId);
+        return $enrollment?->export_type ? strtoupper($enrollment->export_type) : 'DEFAULT';
+    }
+
+    private function isCustomExportType(string $exportType): bool
+    {
+        return in_array($exportType, ['MAXI-SCVP', 'MAXI-ACVP']);
+    }
+
+    private function getConfig(string $exportType): array
+    {
+        return self::EXPORT_CONFIGS[$exportType] ?? self::EXPORT_CONFIGS['DEFAULT'];
+    }
+
+    private function determineColumns(Request $request, string $exportType, bool $isForAttachment): array
+    {
+        // If use_selected_columns is checked, ALWAYS use DEFAULT columns regardless of export type
+        if ($request->query('use_selected_columns')) {
+            return self::EXPORT_CONFIGS['DEFAULT']['columns'];
+        }
+
+        $config = $this->getConfig($exportType);
+        
+        if ($this->isCustomExportType($exportType) || $isForAttachment) {
+            return $config['columns'];
+        }
+
+        return $request->query('columns', []);
+    }
+
+    private function buildBaseQuery(array $filters = [])
+    {
+        $relationships = $this->buildRelationships($filters);
+        $query = Enrollee::with($relationships);
+
+        $this->applyFilters($query, $filters);
+
+        return $query;
+    }
+
+    private function buildRelationships(array $filters): array
+    {
         $relationships = ['healthInsurance', 'enrollment.insuranceProvider'];
-
-        if (isset($filters['enrollment_status']) && $filters['enrollment_status'] === 'APPROVED') {
-            // When filtering for APPROVED status, only load APPROVED dependents
-            Log::info('Applying APPROVED enrollment status filter - will only include APPROVED dependents');
-            $relationships['dependents'] = function ($query) use ($filters) {
-                $query->whereIn('enrollment_status', ['APPROVED'])
-                    ->where('status', 'ACTIVE')
-                    ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
-
-                if (isset($filters['date_from'])) {
-                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
-                        // Filter records where coverage starts on or after the date_from
-                        $subQ->where(function ($dateQ) use ($filters) {
-                            $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
-                                ->orWhereNull('coverage_start_date');
-                        });
-
-                        $subQ->where(function ($dateQ) use ($filters) {
-                            $dateQ->where('certificate_date_issued', '<=', $filters['date_from'])
-                                ->orWhereNull('certificate_date_issued');
-                        });
-                    });
-                }
-
-                if (isset($filters['date_to'])) {
-                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
-                        // Filter records where coverage ends on or before the date_to
-                        $subQ->where(function ($dateQ) use ($filters) {
-                            $dateQ->where('coverage_end_date', '>=', $filters['date_to'])
-                                ->orWhereNull('coverage_end_date');
-                        });
-                    });
-                }
-            };
+        
+        if (($filters['enrollment_status'] ?? '') === 'APPROVED') {
+            // For APPROVED status, only load approved dependents
+            $relationships['dependents'] = fn($query) => $this->applyDependentFilters($query, $filters, ['APPROVED']);
         } else {
-            // Load all active dependents (default behavior) with all their attachments
-            $relationships['dependents'] = function ($query) {
+            // For all other statuses, load ALL active dependents (including SKIPPED/OVERAGE)
+            // This is critical for detecting skip hierarchy requirements
+            $relationships['dependents'] = function($query) use ($filters) {
                 $query->where('status', 'ACTIVE')
-                    ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+                      ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+                
+                // Only apply date filters if needed, but don't filter by enrollment_status
+                if (isset($filters['date_from']) || isset($filters['date_to'])) {
+                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                        $this->applyHealthInsuranceDateFilters($subQ, $filters);
+                    });
+                }
+                
+                Log::info('Loading ALL dependents for skip detection');
             };
         }
 
-        $query = Enrollee::with($relationships);
+        return $relationships;
+    }
 
-        // Apply enrollment ID filter
+    private function applyDependentFilters($query, array $filters, ?array $statuses = null)
+    {
+        // IMPORTANT: Don't filter by enrollment_status here if we need to detect SKIPPED/OVERAGE
+        // Only filter by status for APPROVED exports to maintain data integrity
+        if ($statuses && in_array('APPROVED', $statuses)) {
+            $query->whereIn('enrollment_status', $statuses);
+        }
+        // For other cases, load ALL dependents so we can properly detect SKIPPED/OVERAGE
+        
+        $query->where('status', 'ACTIVE')
+              ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
+
+        if (isset($filters['date_from']) || isset($filters['date_to'])) {
+            $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
+                $this->applyHealthInsuranceDateFilters($subQ, $filters);
+            });
+        }
+
+        Log::info('Applied dependent filters', [
+            'statuses' => $statuses,
+            'will_filter_enrollment_status' => $statuses && in_array('APPROVED', $statuses)
+        ]);
+    }
+
+    private function applyHealthInsuranceDateFilters($query, array $filters)
+    {
+        if (isset($filters['date_from'])) {
+            $query->where(function ($dateQ) use ($filters) {
+                $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
+                      ->orWhereNull('coverage_start_date');
+            })->where(function ($dateQ) use ($filters) {
+                $dateQ->where('certificate_date_issued', '<=', $filters['date_from'])
+                      ->orWhereNull('certificate_date_issued');
+            });
+        }
+
+        if (isset($filters['date_to'])) {
+            $query->where(function ($dateQ) use ($filters) {
+                $dateQ->where('coverage_end_date', '>=', $filters['date_to'])
+                      ->orWhereNull('coverage_end_date');
+            });
+        }
+    }
+
+    private function applyFilters($query, array $filters)
+    {
         if (!empty($filters['enrollment_id'])) {
             $query->where('enrollment_id', $filters['enrollment_id']);
         }
 
-
-        if ($filters['enrollment_status'] <> 'APPROVED') {
-            $query->where('status', 'ACTIVE')
-                ->whereNull('deleted_at');
+        if (($filters['enrollment_status'] ?? '') !== 'APPROVED') {
+            $query->where('status', 'ACTIVE')->whereNull('deleted_at');
         }
 
-        // Apply enrollment status filter
         if (isset($filters['enrollment_status']) || isset($filters['export_enrollment_type'])) {
-            Log::info('Applying enrollment status filter', [
-                'enrollment_status' => $filters['enrollment_status'],
-                'export_enrollment_type' => $filters['export_enrollment_type'] ?? null
-            ]);
             $this->applyEnrollmentStatusFilter($query, $filters);
         }
 
-        // Apply date range filters
-        if (isset($filters['date_from'])) {
-            if ($filters['enrollment_status'] === 'APPROVED') {
-                $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
-                    // Filter records where coverage starts on or after the date_from
-                    $subQ->where(function ($dateQ) use ($filters) {
-                        $dateQ->where('coverage_start_date', '<=', $filters['date_from'])
-                            ->orWhereNull('coverage_start_date');
-                    });
+        $this->applyDateFilters($query, $filters);
+    }
 
-                    $subQ->where(function ($dateQ) use ($filters) {
-                        $dateQ->where('certificate_date_issued', '<=', $filters['date_from'])
-                            ->orWhereNull('certificate_date_issued');
-                    });
-                });
+    private function applyDateFilters($query, array $filters)
+    {
+        $enrollmentStatus = $filters['enrollment_status'] ?? '';
+        
+        if (isset($filters['date_from'])) {
+            if ($enrollmentStatus === 'APPROVED') {
+                $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
             } else {
                 $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
             }
         }
 
         if (isset($filters['date_to'])) {
-            if ($filters['enrollment_status'] === 'APPROVED') {
-                $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
-                    // Filter records where coverage ends on or before the date_to
-                    $subQ->where(function ($dateQ) use ($filters) {
-                        $dateQ->where('coverage_end_date', '>=', $filters['date_to'])
-                            ->orWhereNull('coverage_end_date');
-                    });
-                });
+            if ($enrollmentStatus === 'APPROVED') {
+                $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
             } else {
                 $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
             }
         }
-
-        return $query;
     }
 
-    /**
-     * Apply enrollment status filters based on export type
-     */
-    private function applyEnrollmentStatusFilter($query, $filters)
+    private function applyEnrollmentStatusFilter($query, array $filters)
     {
-        $enrollmentStatus = $filters['enrollment_status'];
-        $exportType = $filters['export_enrollment_type'];
+        $enrollmentStatus = $filters['enrollment_status'] ?? null;
+        $exportType = $filters['export_enrollment_type'] ?? null;
 
         if ($exportType === 'RENEWAL') {
-            Log::info('Applying RENEWAL export filters');
-            // For RENEWAL exports, ALWAYS ensure is_renewal is true first
-
-            $query->whereHas('healthInsurance', function ($subQ) {
-                $subQ->where('is_renewal', true);
-            });
-
+            $query->whereHas('healthInsurance', fn($subQ) => $subQ->where('is_renewal', true));
+            
             if ($enrollmentStatus === 'PENDING') {
                 $query->where('enrollment_status', 'FOR-RENEWAL');
-            } else {
-                if (isset($enrollmentStatus)) {
-                    $query->where('enrollment_status', $enrollmentStatus);
-                }
+            } elseif ($enrollmentStatus) {
+                $query->where('enrollment_status', $enrollmentStatus);
             }
         } elseif ($exportType === 'REGULAR') {
-            Log::info('Applying REGULAR export filters - filtering for is_renewal = false');
-            // For REGULAR exports, ensure is_renewal is false
-            $query->whereHas('healthInsurance', function ($subQ) {
-                $subQ->where('is_renewal', false);
-            });
-
-            if (isset($enrollmentStatus)) {
-                Log::info('REGULAR with enrollment status filter', ['status' => $enrollmentStatus]);
+            $query->whereHas('healthInsurance', fn($subQ) => $subQ->where('is_renewal', false));
+            
+            if ($enrollmentStatus) {
                 $query->where('enrollment_status', $enrollmentStatus);
             }
         } else {
-            Log::info('Applying ALL export filters (no type restriction)');
-            // For ALL exports (no specific type filter)
+            // Handle ALL export type
             if ($enrollmentStatus === 'PENDING') {
-                $query->where(function ($q) {
-                    $q->where('enrollment_status', 'FOR-RENEWAL')
-                        ->orWhere('enrollment_status', 'PENDING');
-                });
-            } else if ($enrollmentStatus === 'APPROVED') {
-                $query->where(function ($q) {
-                    $q->where('enrollment_status', 'APPROVED')
-                        ->orWhere('enrollment_status', 'RESIGNED');
-                });
-            } else {
-                if (isset($enrollmentStatus)) {
-                    Log::info('ALL export with enrollment status filter', ['status' => $enrollmentStatus]);
-                    $query->where('enrollment_status', $enrollmentStatus);
+                $query->whereIn('enrollment_status', ['FOR-RENEWAL', 'PENDING']);
+            } elseif ($enrollmentStatus === 'APPROVED') {
+                $query->whereIn('enrollment_status', ['APPROVED', 'RESIGNED']);
+            } elseif ($enrollmentStatus) {
+                $query->where('enrollment_status', $enrollmentStatus);
+            }
+        }
+    }
+
+    private function processColumns(array $columns, $enrollees, string $exportType): array
+    {
+        $columns = $this->normalizeColumns($columns);
+
+        // Always check for skip/overage conditions first for ALL export types
+        $checks = $this->analyzeEnrollees($enrollees);
+        
+        Log::info('Processing columns', [
+            'export_type' => $exportType,
+            'initial_columns' => $columns,
+            'checks' => $checks
+        ]);
+        
+        // Always add skip-related columns if there are any skipped/overage dependents
+        // This applies to ALL export types for safety
+        if ($checks['hasSkippedOrOverage']) {
+            Log::info('Adding skip-related columns for safety');
+            $skipColumns = ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'];
+            foreach ($skipColumns as $skipCol) {
+                if (!in_array($skipCol, $columns)) {
+                    array_unshift($columns, $skipCol);
+                    Log::info('Added skip column: ' . $skipCol);
                 }
             }
         }
 
-        // Log the final SQL query after applying filters
-        Log::info('Final query after applying enrollment status filter', [
-            'sql' => $query->toSql(),
-            'bindings' => $query->getBindings()
-        ]);
-    }
-
-    /**
-     * Check if this enrollment is for Maxicare insurance provider
-     */
-    private function isMaxicareEnrollment($enrollees)
-    {
-        foreach ($enrollees as $enrollee) {
-            if (
-                $enrollee->enrollment &&
-                $enrollee->enrollment->insuranceProvider &&
-                strtolower($enrollee->enrollment->insuranceProvider->title) === 'maxicare'
-            ) {
-                return true;
+        // Add other dynamic columns only for non-custom export types
+        if (!$this->isCustomExportType($exportType)) {
+            $columns = $this->addRequiredColumns($columns);
+            $columns = $this->addDynamicColumns($columns, $enrollees, $checks);
+        } else {
+            // For custom export types, still add required document column if needed
+            if ($checks['hasRequiredDocument'] && !in_array('required_document', $columns)) {
+                $columns[] = 'required_document';
             }
         }
-        return false;
+
+        Log::info('Final columns after processing', ['columns' => $columns]);
+        return $columns;
     }
 
-    /**
-     * Generate CSV headers from column names
-     */
-    private function generateHeaders($columns, $maxicareCustomizedColumn = false)
+    private function normalizeColumns($columns): array
     {
-        if ($maxicareCustomizedColumn) {
-            $headers = array_map(function ($col) {
-                return self::MAXICARE_COLUMN_LABELS[$col] ?? $col;
-            }, $columns);
-        } else {
-            $headers = array_map(function ($col) {
-                return self::COLUMN_LABELS[$col] ?? $col;
-            }, $columns);
-        }
-
-        Log::info('Generated headers', ['columns' => $columns, 'headers' => $headers]);
-        return $headers;
-    }
-
-    /**
-     * Process and validate columns, adding dynamic columns as needed
-     */
-    private function processColumns($columns, $enrollees, $maxicareCustomizedColumn = false)
-    {
-        // Normalize columns input
         if (is_string($columns)) {
             $columns = array_map('trim', explode(',', $columns));
         } elseif (is_array($columns)) {
-            // Flatten any nested arrays and ensure all values are strings
             $flatColumns = [];
             array_walk_recursive($columns, function ($value) use (&$flatColumns) {
                 if (is_string($value) || is_numeric($value)) {
@@ -493,418 +413,454 @@ class ExportEnrolleesController extends Controller
             });
             $columns = $flatColumns;
         } else {
-            // If it's neither string nor array, default to empty array
             $columns = [];
         }
 
-        // Remove empty and duplicate columns - now we're sure all values are strings
-        $columns = array_values(array_unique(array_filter($columns, function ($v) {
-            return is_string($v) && trim($v) !== '';
-        })));
+        return array_values(array_unique(array_filter($columns, fn($v) => is_string($v) && trim($v) !== '')));
+    }
 
-        Log::info('Initial columns after normalization', ['columns' => $columns]);
-
-
-        if (!$maxicareCustomizedColumn) {
-            // Always add effective_date
-            if (!in_array('effective_date', $columns)) {
-                $columns[] = 'effective_date';
-            }
-
-            // Always add enrollment_status
-            if (!in_array('enrollment_status', $columns)) {
-                $columns[] = 'enrollment_status';
-            }
-
-            // Add relation column if withDependents is true
-            if (!in_array('relation', $columns)) {
-                $columns[] = 'relation';
+    private function addRequiredColumns(array $columns): array
+    {
+        $requiredColumns = ['effective_date', 'enrollment_status', 'relation'];
+        
+        foreach ($requiredColumns as $required) {
+            if (!in_array($required, $columns)) {
+                $columns[] = $required;
             }
         }
 
-        Log::info('Columns after adding relation and enrollment_status', ['columns' => $columns]);
+        return $columns;
+    }
 
-        // Check for special cases in dependents and add columns accordingly
-        $hasSkippedOrOverage = false;
-        $hasRequiredDocument = false;
-        $hasPremium = false;
-
-        foreach ($enrollees as $enrollee) {
-            // Check if enrollee has premium data AND (max_dependents OR premium_restriction OR premium_computation)
-            if (!$hasPremium && $enrollee->dependents && count($enrollee->dependents) > 0) {
-                $hasMaxDependents = isset($enrollee->max_dependents) && $enrollee->max_dependents > 0;
-                $hasPremiumRestriction = $enrollee->enrollment && !empty($enrollee->enrollment->premium_restriction);
-                $hasPremiumComputation = $enrollee->enrollment && !empty($enrollee->enrollment->premium_computation);
-                
-                // Only add premium column if there are dependents and any of: max_dependents, premium_restriction, or premium_computation exists
-                if ($hasMaxDependents || $hasPremiumRestriction || $hasPremiumComputation) {
-                    $hasPremiumFromEnrollment = $enrollee->enrollment && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0;
-                    $hasPremiumFromInsurance = $enrollee->healthInsurance && isset($enrollee->healthInsurance->premium) && $enrollee->healthInsurance->premium > 0;
-                    
-                    if ($hasPremiumFromEnrollment || $hasPremiumFromInsurance) {
-                        $hasPremium = true;
-                    }
-                }
-            }
-
-            if ($enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
-                    if (in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                        $hasSkippedOrOverage = true;
-                    }
-
-                    // Check for required documents using the new relationship
-                    if ($dependent->requiredDocuments && $dependent->requiredDocuments->count() > 0) {
-                        $hasRequiredDocument = true;
-                    }
-
-                    // Also check legacy single attachment for backward compatibility
-                    if (
-                        method_exists($dependent, 'attachmentForRequirement') &&
-                        $dependent->attachmentForRequirement &&
-                        $dependent->attachmentForRequirement->file_path
-                    ) {
-                        $hasRequiredDocument = true;
-                    }
-
-                    if ($hasSkippedOrOverage && $hasRequiredDocument && $hasPremium) {
-                        break 2;
-                    }
-                }
-            }
+    private function addDynamicColumns(array $columns, $enrollees, ?array $checks = null): array
+    {
+        // Use existing checks if provided, otherwise analyze enrollees
+        if ($checks === null) {
+            $checks = $this->analyzeEnrollees($enrollees);
         }
 
-        // Add premium column if there's premium data and it's not already in columns
-        if ($hasPremium && !in_array('premium', $columns)) {
-            // Insert premium after relation
+        if ($checks['hasPremium'] && !in_array('premium', $columns)) {
             $relationIndex = array_search('relation', $columns);
             if ($relationIndex !== false) {
                 array_splice($columns, $relationIndex + 1, 0, 'premium');
             } else {
                 $columns[] = 'premium';
             }
-            Log::info('Added premium column because premium data exists');
         }
 
-        // Add required document column if needed
-        if ($hasRequiredDocument && !in_array('required_document', $columns)) {
+        if ($checks['hasRequiredDocument'] && !in_array('required_document', $columns)) {
             $columns[] = 'required_document';
         }
 
-        // Add skip-related columns if needed
-        if ($hasSkippedOrOverage) {
-            Log::info('Adding skip-related columns because hasSkippedOrOverage is true');
-            $skipColumns = ['remarks', 'reason_for_skipping', 'attachment_for_skip_hierarchy'];
-            foreach ($skipColumns as $skipCol) {
-                if (!in_array($skipCol, $columns)) {
-                    array_unshift($columns, $skipCol);
+        // Skip-related columns are now handled in processColumns() for all export types
+        
+        return $columns;
+    }
+
+    private function analyzeEnrollees($enrollees): array
+    {
+        $checks = [
+            'hasSkippedOrOverage' => false,
+            'hasRequiredDocument' => false,
+            'hasPremium' => false
+        ];
+
+        Log::info('Starting analyzeEnrollees', [
+            'total_enrollees' => count($enrollees)
+        ]);
+
+        foreach ($enrollees as $enrollee) {
+            Log::info('Processing enrollee', [
+                'enrollee_id' => $enrollee->id,
+                'employee_id' => $enrollee->employee_id,
+                'enrollment_status' => $enrollee->enrollment_status,
+                'dependents_count' => $enrollee->dependents ? count($enrollee->dependents) : 0,
+                'dependents_loaded' => $enrollee->relationLoaded('dependents')
+            ]);
+
+            if ($enrollee->dependents && count($enrollee->dependents) > 0) {
+                // Check for premium calculation conditions
+                if (!$checks['hasPremium']) {
+                    $checks['hasPremium'] = $this->shouldCalculatePremium($enrollee);
+                }
+
+                foreach ($enrollee->dependents as $dependent) {
+                    // Enhanced debug logging
+                    Log::info('Checking dependent details', [
+                        'enrollee_id' => $enrollee->id,
+                        'dependent_id' => $dependent->id,
+                        'dependent_name' => $dependent->first_name . ' ' . $dependent->last_name,
+                        'dependent_relation' => $dependent->relation,
+                        'enrollment_status' => $dependent->enrollment_status,
+                        'status' => $dependent->status,
+                        'is_skipped_or_overage' => in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])
+                    ]);
+
+                    if (!$checks['hasSkippedOrOverage'] && in_array($dependent->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                        $checks['hasSkippedOrOverage'] = true;
+                        Log::info('FOUND SKIPPED/OVERAGE DEPENDENT - WILL ADD SKIP COLUMNS', [
+                            'dependent_id' => $dependent->id,
+                            'enrollment_status' => $dependent->enrollment_status
+                        ]);
+                    }
+
+                    if (!$checks['hasRequiredDocument']) {
+                        $checks['hasRequiredDocument'] = $this->hasRequiredDocuments($dependent);
+                    }
+
+                    // Don't break early - continue checking all dependents for debugging
                 }
             }
         }
 
-        Log::info('Final columns array', ['columns' => $columns]);
-
-        return $columns;
+        Log::info('Final analysis results', $checks);
+        return $checks;
     }
 
-    /**
-     * Get value for a specific column and entity (enrollee or dependent)
-     */
-    private function getColumnValue($column, $entity, $withDependents, $isPrincipal, $principal = null)
+    private function shouldCalculatePremium($enrollee): bool
     {
-        switch ($column) {
-            case 'remarks':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->enrollment_status === 'SKIPPED'
-                        ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
-                        : 'DO NOT ENROLL, OVERAGE';
-                }
-                return '';
-
-            case 'reason_for_skipping':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->healthInsurance->reason_for_skipping ?? '';
-                }
-                return '';
-
-            case 'attachment_for_skip_hierarchy':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->attachmentForSkipHierarchy->file_path ?? '';
-                }
-                return '';
-
-            case 'effective_date':
-                return date('Y-m-d', strtotime('first day of next month'));
-
-            case 'enrollment_status':
-                // Synchronize dependent enrollment status based on principal
-                if (!$isPrincipal && $principal) {
-                    $principalStatus = $principal->enrollment_status;
-                    $dependentStatus = $entity->enrollment_status;
-                    
-                    // If principal is PENDING and dependent is null/empty, set to PENDING
-                    if ($principalStatus === 'PENDING' && empty($dependentStatus)) {
-                        $entity->enrollment_status = 'PENDING';
-                        $entity->save();
-                        return 'PENDING';
-                    }
-
-                    // If principal is SUBMITTED-PERSONAL-INFORMATION and dependent is null/empty, set to SUBMITTED-PERSONAL-INFORMATION
-                    if ($principalStatus === 'SUBMITTED-PERSONAL-INFORMATION' && empty($dependentStatus)) {
-                        $entity->enrollment_status = 'SUBMITTED-PERSONAL-INFORMATION';
-                        $entity->save();
-                        return 'SUBMITTED-PERSONAL-INFORMATION';
-                    }
-                    
-                    // If principal is SUBMITTED, set dependent to FOR-APPROVAL
-                    if ($principalStatus === 'SUBMITTED') {
-                        $entity->enrollment_status = 'FOR-APPROVAL';
-                        $entity->save();
-                        return 'FOR-APPROVAL';
-                    }
-                }
-                return $entity->enrollment_status ?? '';
-
-            case 'relation':
-                return $withDependents ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? 'PRINCIPAL')) : 'PRINCIPAL';
-
-            case 'department':
-                return !$isPrincipal && $principal ? ($principal->department ?? '') : ($entity->department ?? '');
-
-            case 'position':
-                return !$isPrincipal && $principal ? ($principal->position ?? '') : ($entity->position ?? '');
-
-            case 'is_renewal':
-                return !$isPrincipal && $principal ? ($principal->healthInsurance->is_renewal ? 'YES' : 'NO') : ($entity->healthInsurance->is_renewal ? 'YES' : 'NO');
-
-            case 'is_company_paid':
-                return !$isPrincipal && $principal ? ($principal->healthInsurance->is_company_paid ? 'YES' : 'NO') : ($entity->healthInsurance->is_company_paid ? 'YES' : 'NO');
-
-            case 'premium':
-                // Calculate premium based on premium_computation and premium_restriction
-                return $this->calculatePremium($entity, $isPrincipal, $principal);
-
-            case 'required_document':
-                if (!$isPrincipal) {
-                    // First check if there are multiple required documents using the new relationship
-                    if ($entity->requiredDocuments && $entity->requiredDocuments->count() > 0) {
-                        $filePaths = $entity->requiredDocuments->pluck('file_path')->toArray();
-                        return implode('; ', $filePaths);
-                    }
-
-                    // Fallback to legacy single attachment for backward compatibility
-                    if (
-                        method_exists($entity, 'attachmentForRequirement') &&
-                        $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
-                    ) {
-                        return $entity->attachmentForRequirement->file_path;
-                    }
-                }
-                return '';
-
-            default:
-                if (in_array($column, self::INSURANCE_FIELDS)) {
-                    return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
-                }
-                return $entity->$column ?? '';
+        $hasMaxDependents = isset($enrollee->max_dependents) && $enrollee->max_dependents > 0;
+        $hasPremiumRestriction = $enrollee->enrollment && !empty($enrollee->enrollment->premium_restriction);
+        $hasPremiumComputation = $enrollee->enrollment && !empty($enrollee->enrollment->premium_computation);
+        
+        if (!($hasMaxDependents || $hasPremiumRestriction || $hasPremiumComputation)) {
+            return false;
         }
+
+        $hasPremiumFromEnrollment = $enrollee->enrollment && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0;
+        $hasPremiumFromInsurance = $enrollee->healthInsurance && isset($enrollee->healthInsurance->premium) && $enrollee->healthInsurance->premium > 0;
+        
+        return $hasPremiumFromEnrollment || $hasPremiumFromInsurance;
     }
 
-    /**
-     * Get value for a specific column and entity (enrollee or dependent)
-     */
-    private function getColumnValueForMaxicareCustomFields($column, $entity, $isPrincipal, $principal = null)
+    private function hasRequiredDocuments($dependent): bool
     {
-        switch ($column) {
-            case 'remarks':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->enrollment_status === 'SKIPPED'
-                        ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
-                        : 'DO NOT ENROLL, OVERAGE';
-                }
-                return '';
-
-            case 'reason_for_skipping':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->healthInsurance->reason_for_skipping ?? '';
-                }
-                return '';
-
-            case 'attachment_for_skip_hierarchy':
-                if (!$isPrincipal && in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    return $entity->attachmentForSkipHierarchy->file_path ?? '';
-                }
-                return '';
-
-            case 'maxicare_account_code':
-                // For dependents, use principal's enrollment account code
-                $enrollment = $isPrincipal ? $entity->enrollment : ($principal ? $principal->enrollment : null);
-                return $enrollment && $enrollment->account_code
-                    ? ($enrollment->account_code ?? '')
-                    : '';
-
-            case 'maxicare_employee_id':
-                return $isPrincipal ? ($entity->employee_id ?? '') : ($principal ? ($principal->employee_id ?? '') : '');
-
-            case 'maxicare_first_name':
-                return $entity->first_name ?? '';
-
-            case 'maxicare_last_name':
-                return $entity->last_name ?? '';
-
-            case 'maxicare_middle_name':
-                return $entity->middle_name ?? '';
-
-            case 'maxicare_extension':
-                return $entity->suffix ?? '';
-
-            case 'maxicare_member_type':
-                return $isPrincipal ? 'P' : 'D';
-
-            case 'maxicare_gender':
-                return $entity->gender === 'MALE' ? 'M' : 'F';
-
-            case 'maxicare_member_type':
-                return $isPrincipal ? 'P' : 'D';
-
-            case 'maxicare_relation':
-                switch (strtoupper($entity->relation ?? 'P')) {
-                    case 'SPOUSE':
-                        return 'SP';
-                    case 'CHILD':
-                        return 'C';
-                    case 'PARENT':
-                        return 'PR';
-                    case 'SIBLING':
-                        return 'SL';
-                    case 'DOMESTIC PARTNER':
-                        return 'O';
-                    case 'COMMON-LAW PARTNER':
-                        return 'O';
-                    default:
-                        return 'P'; // Other
-                }
-
-            case 'maxicare_address_line_1':
-                // Parse comma-separated address: address_line_1, address_line_2, city, province, postal_code
-                $addressParts = $this->parseAddress($entity->address ?? '');
-                return $addressParts['address_line_1'];
-
-            case 'maxicare_address_line_2':
-                $addressParts = $this->parseAddress($entity->address ?? '');
-                return $addressParts['address_line_2'];
-
-            case 'maxicare_city':
-                $addressParts = $this->parseAddress($entity->address ?? '');
-                return $addressParts['city'];
-
-            case 'maxicare_province':
-                $addressParts = $this->parseAddress($entity->address ?? '');
-                return $addressParts['province'];
-
-            case 'maxicare_postal_code':
-                $addressParts = $this->parseAddress($entity->address ?? '');
-                return $addressParts['postal_code'];
-
-
-            case 'maxicare_civil_status':
-                // Use the marital_status from the entity, or default value
-                $maritalStatus = $entity->marital_status ?? '';
-
-                switch (strtoupper($maritalStatus)) {
-                    case 'SINGLE':
-                        return 'S';
-                    case 'SINGLE PARENT':
-                        return 'SP';
-                    case 'MARRIED':
-                        return 'M';
-                    default:
-                        return 'S';
-                }
-
-            case 'maxicare_birth_date':
-                return $entity->birth_date;
-
-            case 'maxicare_effective_date':
-                return date('Y-m-d', strtotime('first day of next month'));
-
-            case 'maxicare_date_hired':
-                return $entity->employment_start_date;
-
-            case 'maxicare_date_regularization':
-                return $entity->employment_start_date;
-
-            case 'maxicare_philhealth':
-                return 'R';
-
-            case 'maxicare_plan_code':
-                // Get enrollment from principal or dependent
-                $enrollment = $isPrincipal ? $entity->enrollment : ($principal ? $principal->enrollment : null);
-                
-                // Use enrollment's plan_code if available
-                if ($enrollment && !empty($enrollment->plan_code)) {
-                    return $this->parsePlanCode($enrollment->plan_code, $isPrincipal);
-                }
-
-                // Fallback: Check if entity has own plan in health insurance
-                if (isset($entity->healthInsurance->plan) && !empty($entity->healthInsurance->plan)) {
-                    return $this->parsePlanCode($entity->healthInsurance->plan, $isPrincipal);
-                }
-
-                // If dependent has no plan, copy from principal
-                if (!$isPrincipal && $principal && isset($principal->healthInsurance->plan) && !empty($principal->healthInsurance->plan)) {
-                    return $this->parsePlanCode($principal->healthInsurance->plan, false); // Always false for dependent
-                }
-                
-                // Fallback to default codes
-                return '';
-
-            case 'maxicare_card_issuance':
-                return 'Y';
-
-            case 'premium':
-                // Calculate premium based on premium_computation and premium_restriction
-                return $this->calculatePremium($entity, $isPrincipal, $principal);
-
-            case 'required_document':
-                if (!$isPrincipal) {
-                    // First check if there are multiple required documents using the new relationship
-                    if ($entity->requiredDocuments && $entity->requiredDocuments->count() > 0) {
-                        $filePaths = $entity->requiredDocuments->pluck('file_path')->toArray();
-                        return implode('; ', $filePaths);
-                    }
-
-                    // Fallback to legacy single attachment for backward compatibility
-                    if (
-                        method_exists($entity, 'attachmentForRequirement') &&
-                        $entity->attachmentForRequirement && $entity->attachmentForRequirement->file_path
-                    ) {
-                        return $entity->attachmentForRequirement->file_path;
-                    }
-                }
-                return '';
-
-            default:
-                if (in_array($column, self::INSURANCE_FIELDS)) {
-                    return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
-                }
-                return $entity->$column ?? '';
+        if ($dependent->requiredDocuments && $dependent->requiredDocuments->count() > 0) {
+            return true;
         }
+
+        return method_exists($dependent, 'attachmentForRequirement') 
+               && $dependent->attachmentForRequirement 
+               && $dependent->attachmentForRequirement->file_path;
     }
 
-    /**
-     * Generate CSV content from data
-     */
-    private function generateCsv($headers, $rows)
+    private function generateHeaders(array $columns, string $exportType, bool $useDefaultLabels = false): array
     {
-        $sanitize = function ($value) {
-            $value = mb_convert_encoding($value, 'UTF-8', 'UTF-8');
-            $value = str_replace(["\r", "\n", "\t"], ' ', $value);
-            return '"' . str_replace('"', '""', $value) . '"';
+        // Use DEFAULT labels if specifically requested (when use_selected_columns is checked)
+        $config = $useDefaultLabels ? self::EXPORT_CONFIGS['DEFAULT'] : $this->getConfig($exportType);
+        return array_map(fn($col) => $config['labels'][$col] ?? $col, $columns);
+    }
+
+    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false): array
+    {
+        $rows = [];
+        $colCount = count($columns);
+        // Force use of DEFAULT values when use_selected_columns is checked
+        $isCustom = $useDefaultValues ? false : $this->isCustomExportType($exportType);
+
+        foreach ($enrollees as $enrollee) {
+            // Add principal row
+            $row = $this->generateEntityRow($enrollee, $columns, $withDependents, true, null, $isCustom);
+            $rows[] = $this->normalizeRowLength($row, $colCount);
+
+            // Add dependent rows if needed
+            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
+                foreach ($enrollee->dependents as $dependent) {
+                    $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom);
+                    $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                }
+            }
+        }
+
+        return $rows;
+    }
+
+    private function generateEntityRow($entity, array $columns, bool $withDependents, bool $isPrincipal, $principal, bool $isCustom): array
+    {
+        return array_map(function ($col) use ($entity, $withDependents, $isPrincipal, $principal, $isCustom) {
+            return $isCustom 
+                ? $this->getMaxicareColumnValue($col, $entity, $isPrincipal, $principal)
+                : $this->getColumnValue($col, $entity, $withDependents, $isPrincipal, $principal);
+        }, $columns);
+    }
+
+    private function normalizeRowLength(array $row, int $expectedLength): array
+    {
+        if (count($row) < $expectedLength) {
+            return array_pad($row, $expectedLength, '');
+        } elseif (count($row) > $expectedLength) {
+            return array_slice($row, 0, $expectedLength);
+        }
+        return $row;
+    }
+
+    // =========================================================================
+    // COLUMN VALUE METHODS
+    // =========================================================================
+
+    private function getColumnValue(string $column, $entity, bool $withDependents, bool $isPrincipal, $principal): string
+    {
+        return match ($column) {
+            'remarks' => $this->getSkipRemarks($entity, $isPrincipal),
+            'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
+            'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
+            'effective_date' => $this->getEffectiveDate(),
+            'enrollment_status' => $this->getEnrollmentStatus($entity, $isPrincipal, $principal),
+            'relation' => $this->getRelation($entity, $withDependents, $isPrincipal),
+            'department', 'position' => $this->getFromPrincipalOrEntity($entity, $principal, $isPrincipal, $column),
+            'is_renewal', 'is_company_paid' => $this->getBooleanFromHealthInsurance($entity, $principal, $isPrincipal, $column),
+            'premium' => $this->calculatePremium($entity, $isPrincipal, $principal),
+            'required_document' => $this->getRequiredDocuments($entity, $isPrincipal),
+            default => $this->getDefaultColumnValue($column, $entity)
         };
+    }
 
-        // Start with UTF-8 BOM
-        $csv = "\xEF\xBB\xBF";
+    private function getMaxicareColumnValue(string $column, $entity, bool $isPrincipal, $principal): string
+    {
+        // Handle common columns first (including skip-related columns)
+        $commonValue = $this->getCommonColumnValue($column, $entity, $isPrincipal, $principal);
+        if ($commonValue !== null) return $commonValue;
+
+        $enrollment = $this->getEnrollmentReference($entity, $isPrincipal, $principal);
+
+        return match ($column) {
+            'maxicare_account_code' => $enrollment->account_code ?? '',
+            'maxicare_employee_id' => $isPrincipal ? ($entity->employee_id ?? '') : ($principal->employee_id ?? ''),
+            'maxicare_first_name' => $entity->first_name ?? '',
+            'maxicare_last_name' => $entity->last_name ?? '',
+            'maxicare_middle_name' => $entity->middle_name ?? '',
+            'maxicare_extension' => $entity->suffix ?? '',
+            'maxicare_member_type' => $isPrincipal ? 'P' : 'D',
+            'maxicare_gender' => $entity->gender === 'MALE' ? 'M' : 'F',
+            'maxicare_relation' => $this->getRelationCode($entity->relation ?? ''),
+            'maxicare_address_line_1', 'maxicare_address_line_2', 'maxicare_city', 'maxicare_province', 'maxicare_postal_code', 'maxicare_street' => $this->getAddressPart($column, $entity->address ?? ''),
+            'maxicare_civil_status' => $this->getCivilStatusCode($entity->marital_status ?? ''),
+            'maxicare_birth_date' => $entity->birth_date ?? '',
+            'maxicare_mobile_no' => $entity->phone1 ?? '',
+            'maxicare_email' => $entity->email1 ?? '',
+            'maxicare_effective_date' => $this->getEffectiveDate(),
+            'maxicare_date_hired', 'maxicare_date_regularization' => $entity->employment_start_date ?? '',
+            'maxicare_philhealth' => 'R',
+            'maxicare_plan_code' => $this->getPlanCode($entity, $isPrincipal, $principal, $enrollment),
+            'maxicare_card_issuance' => 'Y',
+            'maxicare_is_philhealth_member' => 'YES',
+            'maxicare_philhealth_conditions' => '',
+            'maxicare_position' => $this->getPrincipalPosition($entity, $isPrincipal, $principal),
+            'maxicare_plan_type' => $this->getPlanType($entity, $isPrincipal, $principal, $enrollment),
+            'maxicare_branch_name' => $this->getBranchName($entity, $isPrincipal, $principal, $enrollment),
+            'maxicare_philhealth_no' => '',
+            'maxicare_senior_citizen_id_no' => '',
+            'maxicare_client_remarks' => '',
+            'maxicare_phic' => '',
+            'premium' => $this->calculatePremium($entity, $isPrincipal, $principal),
+            'required_document' => $this->getRequiredDocuments($entity, $isPrincipal),
+            default => $this->getDefaultColumnValue($column, $entity)
+        };
+    }
+
+    private function getCommonColumnValue(string $column, $entity, bool $isPrincipal, $principal): ?string
+    {
+        return match ($column) {
+            'remarks' => $this->getSkipRemarks($entity, $isPrincipal),
+            'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
+            'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
+            default => null
+        };
+    }
+
+    // =========================================================================
+    // HELPER METHODS FOR COLUMN VALUES
+    // =========================================================================
+
+    private function getSkipRemarks($entity, bool $isPrincipal): string
+    {
+        if (!$isPrincipal && $this->isSkippedOrOverage($entity)) {
+            return $entity->enrollment_status === 'SKIPPED'
+                ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
+                : 'DO NOT ENROLL, OVERAGE';
+        }
+        return '';
+    }
+
+    private function getReasonForSkipping($entity, bool $isPrincipal): string
+    {
+        return (!$isPrincipal && $this->isSkippedOrOverage($entity)) 
+            ? ($entity->healthInsurance->reason_for_skipping ?? '') 
+            : '';
+    }
+
+    private function getSkipAttachment($entity, bool $isPrincipal): string
+    {
+        return (!$isPrincipal && $this->isSkippedOrOverage($entity)) 
+            ? ($entity->attachmentForSkipHierarchy->file_path ?? '') 
+            : '';
+    }
+
+    private function isSkippedOrOverage($entity): bool
+    {
+        return in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE']);
+    }
+
+    private function getEffectiveDate(): string
+    {
+        return date('Y-m-d', strtotime('first day of next month'));
+    }
+
+    private function getRelation($entity, bool $withDependents, bool $isPrincipal): string
+    {
+        return $withDependents 
+            ? ($isPrincipal ? 'PRINCIPAL' : ($entity->relation ?? 'PRINCIPAL')) 
+            : 'PRINCIPAL';
+    }
+
+    private function getEnrollmentStatus($entity, bool $isPrincipal, $principal): string
+    {
+        if (!$isPrincipal && $principal) {
+            $principalStatus = $principal->enrollment_status;
+            $dependentStatus = $entity->enrollment_status;
+            
+            // CRITICAL: Never change SKIPPED or OVERAGE statuses - they must remain as-is for safety
+            if (in_array($dependentStatus, ['SKIPPED', 'OVERAGE'])) {
+                return $dependentStatus;
+            }
+            
+            $statusMap = [
+                'PENDING' => ['condition' => empty($dependentStatus), 'newStatus' => 'PENDING'],
+                'SUBMITTED-PERSONAL-INFORMATION' => ['condition' => empty($dependentStatus), 'newStatus' => 'SUBMITTED-PERSONAL-INFORMATION'],
+                'SUBMITTED' => ['condition' => true, 'newStatus' => 'FOR-APPROVAL'],
+            ];
+
+            if (isset($statusMap[$principalStatus]) && $statusMap[$principalStatus]['condition']) {
+                $newStatus = $statusMap[$principalStatus]['newStatus'];
+                $entity->enrollment_status = $newStatus;
+                $entity->save();
+                return $newStatus;
+            }
+        }
+        return $entity->enrollment_status ?? '';
+    }
+
+    private function getFromPrincipalOrEntity($entity, $principal, bool $isPrincipal, string $field): string
+    {
+        return (!$isPrincipal && $principal) ? ($principal->$field ?? '') : ($entity->$field ?? '');
+    }
+
+    private function getBooleanFromHealthInsurance($entity, $principal, bool $isPrincipal, string $field): string
+    {
+        $source = (!$isPrincipal && $principal) ? $principal : $entity;
+        return ($source->healthInsurance->$field ?? false) ? 'YES' : 'NO';
+    }
+
+    private function getRequiredDocuments($entity, bool $isPrincipal): string
+    {
+        if ($isPrincipal) return '';
+
+        if ($entity->requiredDocuments && $entity->requiredDocuments->count() > 0) {
+            return implode('; ', $entity->requiredDocuments->pluck('file_path')->toArray());
+        }
+
+        if (method_exists($entity, 'attachmentForRequirement') &&
+            $entity->attachmentForRequirement && 
+            $entity->attachmentForRequirement->file_path
+        ) {
+            return $entity->attachmentForRequirement->file_path;
+        }
+
+        return '';
+    }
+
+    private function getDefaultColumnValue(string $column, $entity): string
+    {
+        if (in_array($column, self::INSURANCE_FIELDS)) {
+            return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
+        }
+        return $entity->$column ?? '';
+    }
+
+    private function getEnrollmentReference($entity, bool $isPrincipal, $principal)
+    {
+        return $isPrincipal ? $entity->enrollment : ($principal->enrollment ?? null);
+    }
+
+    private function getRelationCode(string $relation): string
+    {
+        return self::RELATION_CODE_MAP[strtoupper($relation)] ?? 'P';
+    }
+
+    private function getCivilStatusCode(string $maritalStatus): string
+    {
+        return self::CIVIL_STATUS_CODE_MAP[strtoupper($maritalStatus)] ?? 'S';
+    }
+
+    private function getAddressPart(string $column, string $address): string
+    {
+        if (empty($address)) return '';
+
+        $addressParts = array_map('trim', explode(',', $address));
+        
+        $fieldMap = [
+            'maxicare_address_line_1' => 0,
+            'maxicare_address_line_2' => 1,
+            'maxicare_street' => 0,
+            'maxicare_city' => 2,
+            'maxicare_province' => 3,
+            'maxicare_postal_code' => 4,
+        ];
+
+        $index = $fieldMap[$column] ?? 0;
+        return $addressParts[$index] ?? '';
+    }
+
+    private function getPlanCode($entity, bool $isPrincipal, $principal, $enrollment): string
+    {
+        if ($enrollment && !empty($enrollment->plan_code)) {
+            return $this->parsePlanCode($enrollment->plan_code, $isPrincipal);
+        }
+
+        if (!empty($entity->healthInsurance->plan)) {
+            return $this->parsePlanCode($entity->healthInsurance->plan, $isPrincipal);
+        }
+
+        if (!$isPrincipal && $principal && !empty($principal->healthInsurance->plan)) {
+            return $this->parsePlanCode($principal->healthInsurance->plan, false);
+        }
+
+        return '';
+    }
+
+    private function parsePlanCode(string $plan, bool $isPrincipal): string
+    {
+        $plan = trim($plan);
+
+        if (!str_contains($plan, ',')) {
+            return $plan;
+        }
+
+        $planParts = array_map('trim', explode(',', $plan));
+        $partCount = count($planParts);
+
+        if ($partCount == 2) {
+            return $isPrincipal ? $planParts[0] : $planParts[1];
+        } elseif ($partCount == 3) {
+            return $isPrincipal ? $planParts[1] : $planParts[2];
+        }
+
+        return $planParts[0];
+    }
+
+    // =========================================================================
+    // CSV GENERATION AND RESPONSE METHODS
+    // =========================================================================
+
+    private function generateCsv(array $headers, array $rows): string
+    {
+        $sanitize = fn($value) => '"' . str_replace('"', '""', 
+            str_replace(["\r", "\n", "\t"], ' ', 
+                mb_convert_encoding($value, 'UTF-8', 'UTF-8')
+            )
+        ) . '"';
+
+        $csv = "\xEF\xBB\xBF"; // UTF-8 BOM
         $csv .= implode(',', array_map($sanitize, $headers)) . "\r\n";
 
         foreach ($rows as $row) {
@@ -914,19 +870,14 @@ class ExportEnrolleesController extends Controller
         return $csv;
     }
 
-    /**
-     * Create CSV response with proper headers
-     */
-    private function createCsvResponse($csv, $enrollmentStatus, $enrollees = null)
+    private function createCsvResponse(string $csv, ?string $enrollmentStatus, $enrollees = null)
     {
-        // Get company and provider information from the first enrollee
         $company = 'UNKNOWN';
         $provider = 'UNKNOWN';
 
         if ($enrollees && count($enrollees) > 0) {
             $firstEnrollee = $enrollees->first();
 
-            // Get company code through enrollment relationship
             if ($firstEnrollee->enrollment && $firstEnrollee->enrollment->company_id) {
                 $companyRecord = Company::find($firstEnrollee->enrollment->company_id);
                 if ($companyRecord && $companyRecord->company_code) {
@@ -934,7 +885,6 @@ class ExportEnrolleesController extends Controller
                 }
             }
 
-            // Get insurance provider title through enrollment relationship  
             if ($firstEnrollee->enrollment && $firstEnrollee->enrollment->insuranceProvider) {
                 $provider = $firstEnrollee->enrollment->insuranceProvider->title ?? 'UNKNOWN';
             }
@@ -947,80 +897,7 @@ class ExportEnrolleesController extends Controller
             ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 
-    /**
-     * Generate all rows (principals and dependents)
-     */
-    private function generateAllRows($enrollees, $columns, $withDependents, $maxicareCustomizedColumn = false)
-    {
-        $rows = [];
-        $colCount = count($columns);
-
-        foreach ($enrollees as $enrollee) {
-            // Add principal row
-            $row = $this->generatePrincipalRow($enrollee, $columns, $withDependents, $maxicareCustomizedColumn);
-            $rows[] = $this->normalizeRowLength($row, $colCount);
-
-            // Add dependent rows if needed
-            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
-                    $depRow = $this->generateDependentRow($dependent, $columns, $withDependents, $enrollee, $maxicareCustomizedColumn);
-                    $rows[] = $this->normalizeRowLength($depRow, $colCount);
-                }
-            }
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Generate row data for principal enrollee
-     */
-    private function generatePrincipalRow($enrollee, $columns, $withDependents, $maxicareCustomizedColumn = false)
-    {
-        if ($maxicareCustomizedColumn) {
-            return array_map(function ($col) use ($enrollee) {
-                return $this->getColumnValueForMaxicareCustomFields($col, $enrollee, true, null);
-            }, $columns);
-        } else {
-            return array_map(function ($col) use ($enrollee, $withDependents) {
-                return $this->getColumnValue($col, $enrollee, $withDependents, true, null);
-            }, $columns);
-        }
-    }
-
-    /**
-     * Generate row data for dependent
-     */
-    private function generateDependentRow($dependent, $columns, $withDependents, $principal = null, $maxicareCustomizedColumn = false)
-    {
-        if ($maxicareCustomizedColumn) {
-            return array_map(function ($col) use ($dependent, $principal) {
-                return $this->getColumnValueForMaxicareCustomFields($col, $dependent, false, $principal);
-            }, $columns);
-        } else {
-            return array_map(function ($col) use ($dependent, $withDependents, $principal) {
-                return $this->getColumnValue($col, $dependent, $withDependents, false, $principal);
-            }, $columns);
-        }
-    }
-
-    /**
-     * Ensure row has correct length
-     */
-    private function normalizeRowLength($row, $expectedLength)
-    {
-        if (count($row) < $expectedLength) {
-            return array_pad($row, $expectedLength, '');
-        } elseif (count($row) > $expectedLength) {
-            return array_slice($row, 0, $expectedLength);
-        }
-        return $row;
-    }
-
-    /**
-     * Update SUBMITTED enrollees to FOR-APPROVAL status
-     */
-    private function updateSubmittedEnrollees($enrollees)
+    private function updateSubmittedEnrollees($enrollees): void
     {
         foreach ($enrollees as $enrollee) {
             if ($enrollee->enrollment_status === 'SUBMITTED') {
@@ -1030,94 +907,17 @@ class ExportEnrolleesController extends Controller
         }
     }
 
-    /**
-     * Parse comma-separated address into categorized components
-     * Expected format: address_line_1, address_line_2, city, province, postal_code
-     *
-     * @param string $address
-     * @return array
-     */
-    private function parseAddress($address)
+    // =========================================================================
+    // PREMIUM CALCULATION METHOD
+    // =========================================================================
+
+    private function calculatePremium($entity, bool $isPrincipal, $principal = null): string
     {
-        // Initialize default values
-        $addressParts = [
-            'address_line_1' => '',
-            'address_line_2' => '',
-            'city' => '',
-            'province' => '',
-            'postal_code' => ''
-        ];
+        // For principals, don't show premium
+        if ($isPrincipal) return '0.00';
+        if (!$principal) return '0.00';
 
-        if (empty($address)) {
-            return $addressParts;
-        }
-
-        // Split by comma and trim whitespace
-        $parts = array_map('trim', explode(',', $address));
-
-        // Map parts to their respective fields (handle cases where there might be fewer than 5 parts)
-        if (isset($parts[0])) $addressParts['address_line_1'] = $parts[0];
-        if (isset($parts[1])) $addressParts['address_line_2'] = $parts[1];
-        if (isset($parts[2])) $addressParts['city'] = $parts[2];
-        if (isset($parts[3])) $addressParts['province'] = $parts[3];
-        if (isset($parts[4])) $addressParts['postal_code'] = $parts[4];
-
-        return $addressParts;
-    }
-
-    /**
-     * Parse plan code based on comma-separated format
-     *
-     * @param string $plan
-     * @param bool $isPrincipal
-     * @return string
-     */
-    private function parsePlanCode($plan, $isPrincipal)
-    {
-        $plan = trim($plan);
-
-        if (strpos($plan, ',') === false) {
-            // Single value: return as is
-            return $plan;
-        }
-
-        $planParts = array_map('trim', explode(',', $plan));
-        $partCount = count($planParts);
-
-        if ($partCount == 2) {
-            // Format: plan_code_principal,plan_code_dependent
-            return $isPrincipal ? $planParts[0] : $planParts[1];
-        } elseif ($partCount == 3) {
-            // Format: plan_name,plan_code_principal,plan_code_dependent
-            return $isPrincipal ? $planParts[1] : $planParts[2];
-        } else {
-            // Fallback: use first part
-            return $planParts[0];
-        }
-    }
-
-    /**
-     * Calculate premium based on premium_computation and premium_restriction
-     * Similar logic to SendNotificationController's PremiumComputation
-     *
-     * @param object $entity The enrollee or dependent entity
-     * @param bool $isPrincipal Whether this is a principal enrollee
-     * @param object|null $principal The principal enrollee (if entity is a dependent)
-     * @return string The calculated premium amount
-     */
-    private function calculatePremium($entity, $isPrincipal, $principal = null)
-    {
-        // For principals, don't show premium (only show for dependents)
-        if ($isPrincipal) {
-            return 0.00;
-        }
-
-        // For dependents, calculate based on premium_computation and premium_restriction
-        if (!$principal) {
-            return 0.00;
-        }
-
-        // Get base premium from principal
+        // Get base premium
         $basePremium = 0;
         if ($principal->enrollment && !empty($principal->enrollment->premium)) {
             $basePremium = floatval($principal->enrollment->premium);
@@ -1125,128 +925,185 @@ class ExportEnrolleesController extends Controller
             $basePremium = floatval($principal->healthInsurance->premium);
         }
 
-        if ($basePremium == 0) {
-            return 0;
-        }
+        if ($basePremium == 0) return '0.00';
 
         // Check if company paid
         if ($principal->healthInsurance && $principal->healthInsurance->is_company_paid) {
-            return 0;
+            return '0.00';
         }
 
-        // Get premium_computation and premium_restriction from enrollment
         $premiumComputation = $principal->enrollment->premium_computation ?? null;
         $premiumRestriction = $principal->enrollment->premium_restriction ?? null;
 
-        // Parse premium_computation into a map
-        $percentMap = [];
-        if (is_string($premiumComputation) && trim($premiumComputation) !== '') {
-            $parts = array_map('trim', explode(',', $premiumComputation));
-            foreach ($parts as $part) {
-                $split = explode(':', $part);
-                if (count($split) === 2 && is_numeric($split[1])) {
-                    $label = trim($split[0]);
-                    $normalizedLabel = strtoupper($label) === 'REST' ? 'REST' : $label;
-                    $percentMap[$normalizedLabel] = floatval($split[1]);
-                }
-            }
-        }
+        // Parse premium computation
+        $percentMap = $this->parsePremiumComputation($premiumComputation);
 
         // Calculate age
-        $age = null;
-        if ($entity->birth_date) {
-            $birthDate = new \DateTime($entity->birth_date);
-            $today = new \DateTime();
-            $age = $today->diff($birthDate)->y;
-        }
+        $age = $this->calculateAge($entity->birth_date);
 
         // Get premium based on age restrictions
-        $adjustedPremium = $basePremium;
-        if ($premiumRestriction && $age !== null) {
-            $restrictions = array_map('trim', explode(',', $premiumRestriction));
-            $ageThresholds = [];
-            
-            foreach ($restrictions as $restriction) {
-                $split = explode(':', $restriction);
-                if (count($split) === 2 && is_numeric($split[0]) && is_numeric($split[1])) {
-                    $ageThresholds[] = [
-                        'age' => intval(trim($split[0])),
-                        'premium' => floatval(trim($split[1]))
-                    ];
-                }
-            }
-            
-            // Sort by age descending
-            usort($ageThresholds, function($a, $b) {
-                return $b['age'] - $a['age'];
-            });
-            
-            // Find applicable premium based on age
-            foreach ($ageThresholds as $threshold) {
-                if ($age >= $threshold['age']) {
-                    $adjustedPremium = $threshold['premium'];
-                    break;
-                }
-            }
+        $adjustedPremium = $this->getAgeAdjustedPremium($basePremium, $premiumRestriction, $age);
 
-            // If age > 65, return the full adjusted premium (100%)
-            if ($age > 65) {
-                return $adjustedPremium;
+        // For age > 65, return full adjusted premium
+        if ($age > 65) return (string)$adjustedPremium;
+
+        // Calculate based on dependent position
+        $dependentPosition = $this->getDependentPosition($entity, $principal);
+        $percent = $this->getDependentPercentage($dependentPosition, $principal->max_dependents, $percentMap);
+
+        return (string)($adjustedPremium * ($percent / 100));
+    }
+
+    private function parsePremiumComputation(?string $premiumComputation): array
+    {
+        $percentMap = [];
+        if (!$premiumComputation || trim($premiumComputation) === '') {
+            return $percentMap;
+        }
+
+        $parts = array_map('trim', explode(',', $premiumComputation));
+        foreach ($parts as $part) {
+            $split = explode(':', $part);
+            if (count($split) === 2 && is_numeric($split[1])) {
+                $label = trim($split[0]);
+                $normalizedLabel = strtoupper($label) === 'REST' ? 'REST' : $label;
+                $percentMap[$normalizedLabel] = floatval($split[1]);
             }
         }
 
-        // For age <= 65 or no age restriction: calculate based on dependent position
-        // Need to count non-skipped dependents up to this one
+        return $percentMap;
+    }
+
+    private function calculateAge(?string $birthDate): int
+    {
+        if (!$birthDate) return 0;
+
+        $birth = new \DateTime($birthDate);
+        $today = new \DateTime();
+        return $today->diff($birth)->y;
+    }
+
+    private function getAgeAdjustedPremium(float $basePremium, ?string $premiumRestriction, int $age): float
+    {
+        if (!$premiumRestriction || $age === 0) {
+            return $basePremium;
+        }
+
+        $restrictions = array_map('trim', explode(',', $premiumRestriction));
+        $ageThresholds = [];
+        
+        foreach ($restrictions as $restriction) {
+            $split = explode(':', $restriction);
+            if (count($split) === 2 && is_numeric($split[0]) && is_numeric($split[1])) {
+                $ageThresholds[] = [
+                    'age' => intval(trim($split[0])),
+                    'premium' => floatval(trim($split[1]))
+                ];
+            }
+        }
+        
+        // Sort by age descending
+        usort($ageThresholds, fn($a, $b) => $b['age'] - $a['age']);
+        
+        // Find applicable premium based on age
+        foreach ($ageThresholds as $threshold) {
+            if ($age >= $threshold['age']) {
+                return $threshold['premium'];
+            }
+        }
+
+        return $basePremium;
+    }
+
+    private function getDependentPosition($entity, $principal): int
+    {
         $dependentPosition = 0;
-        if ($principal->dependents) {
-            foreach ($principal->dependents as $dep) {
-                // Skip if this dependent is marked as skipping
-                if (in_array($dep->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
-                    continue;
-                }
-                
-                $dependentPosition++;
-                
-                // Stop counting when we reach the current entity
-                if ($dep->id === $entity->id) {
-                    break;
-                }
+        if (!$principal->dependents) return $dependentPosition;
+
+        foreach ($principal->dependents as $dep) {
+            if (in_array($dep->enrollment_status, ['SKIPPED', 'OVERAGE'])) {
+                continue;
+            }
+            
+            $dependentPosition++;
+            
+            if ($dep->id === $entity->id) {
+                break;
             }
         }
 
-        // Get percentage based on dependent position
-        $percent = 0;
-        $maxDependents = $principal->max_dependents ?? null;
+        return $dependentPosition;
+    }
 
+    private function getDependentPercentage(int $dependentPosition, ?int $maxDependents, array $percentMap): float
+    {
         if ($maxDependents !== null && $maxDependents > 0) {
             if ($dependentPosition <= $maxDependents) {
-                if (isset($percentMap[(string)$dependentPosition])) {
-                    $percent = $percentMap[(string)$dependentPosition];
-                } elseif (isset($percentMap['1'])) {
-                    $percent = $percentMap['1'];
-                }
+                return $percentMap[(string)$dependentPosition] ?? $percentMap['1'] ?? 0;
             } else {
-                // Over max dependents, use REST
-                if (isset($percentMap['REST'])) {
-                    $percent = $percentMap['REST'];
-                } elseif (isset($percentMap['1'])) {
-                    $percent = $percentMap['1'];
-                }
-            }
-        } else {
-            // No max dependents limit
-            if (isset($percentMap[(string)$dependentPosition])) {
-                $percent = $percentMap[(string)$dependentPosition];
-            } elseif (isset($percentMap['REST'])) {
-                $percent = $percentMap['REST'];
-            } elseif (isset($percentMap['1'])) {
-                $percent = $percentMap['1'];
+                return $percentMap['REST'] ?? $percentMap['1'] ?? 0;
             }
         }
 
-        // Calculate final premium
-        $calculatedPremium = $adjustedPremium * ($percent / 100);
+        return $percentMap[(string)$dependentPosition] ?? $percentMap['REST'] ?? $percentMap['1'] ?? 0;
+    }
+
+    // =========================================================================
+    // ACVP SPECIFIC HELPER METHODS
+    // =========================================================================
+
+    private function getPlanType($entity, bool $isPrincipal, $principal, $enrollment): string
+    {
+        // Get plan from enrollment or health insurance
+        if ($enrollment && !empty($enrollment->plan_code)) {
+            return $this->extractPlanType($enrollment->plan_code);
+        }
+
+        if (!empty($entity->healthInsurance->plan)) {
+            return $this->extractPlanType($entity->healthInsurance->plan);
+        }
+
+        if (!$isPrincipal && $principal && !empty($principal->healthInsurance->plan)) {
+            return $this->extractPlanType($principal->healthInsurance->plan);
+        }
+
+        return '';
+    }
+
+    private function extractPlanType(string $planData): string
+    {
+        // If plan data contains comma, extract the plan name (first part)
+        if (str_contains($planData, ',')) {
+            $planParts = array_map('trim', explode(',', $planData));
+            return $planParts[0] ?? '';
+        }
         
-        return $calculatedPremium;
+        return $planData;
+    }
+
+    private function getBranchName($entity, bool $isPrincipal, $principal, $enrollment): string
+    {
+        // Get branch name from enrollment or company
+        if ($enrollment && !empty($enrollment->branch_name)) {
+            return $enrollment->branch_name;
+        }
+
+        // Try to get from company if available
+        if ($enrollment && $enrollment->company_id) {
+            $company = Company::find($enrollment->company_id);
+            return $company->company_name ?? '';
+        }
+
+        return '';
+    }
+
+    private function getPrincipalPosition($entity, bool $isPrincipal, $principal): string
+    {
+        // Always return the principal's position for both principal and dependents
+        if ($isPrincipal) {
+            return $entity->position ?? '';
+        } else {
+            return $principal->position ?? '';
+        }
     }
 }

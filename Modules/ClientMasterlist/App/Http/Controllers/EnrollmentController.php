@@ -54,6 +54,7 @@ class EnrollmentController extends Controller
             'dependent_room_and_board' => 'nullable|string',
             'with_address' => 'nullable|boolean',
             'with_skip_hierarchy' => 'nullable|boolean',
+            'export_type' => 'nullable|string',
             'status' => 'nullable|string',
         ]);
         // Only uppercase string fields, keep ids as is
@@ -166,6 +167,7 @@ class EnrollmentController extends Controller
             'dependent_room_and_board' => 'nullable|string',
             'with_address' => 'nullable|boolean',
             'with_skip_hierarchy' => 'nullable|boolean',
+            'export_type' => 'nullable|string',
             'status' => 'nullable|string',
         ]);
         // Only uppercase string fields, keep ids as is
