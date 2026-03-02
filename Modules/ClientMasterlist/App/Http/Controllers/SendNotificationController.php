@@ -1180,14 +1180,14 @@ class SendNotificationController extends Controller
         // Determine which enrollee to use: prefer enrollee_id from $data, else from notification->enrollment_id
         $enrollee = null;
         if (!empty($data['enrollee_id'])) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'dependents.healthInsurance'])
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'enrollment.company', 'dependents.healthInsurance'])
                 ->where('id', $data['enrollee_id'])
                 ->whereNull('deleted_at')
                 ->first();
         }
 
         if (!$enrollee && $notification && isset($notification->enrollment_id)) {
-            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'dependents.healthInsurance'])
+            $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::with(['healthInsurance', 'enrollment.insuranceProvider', 'enrollment.company', 'dependents.healthInsurance'])
                 ->where('enrollment_id', $notification->enrollment_id)
                 ->whereNull('deleted_at')
                 ->first();
@@ -1326,17 +1326,25 @@ class SendNotificationController extends Controller
         // Dependents
         $dependentsArr = [];
         if (method_exists($enrollee, 'dependents')) {
+            $companyCode = $enrollee->enrollment->company->company_code ?? null;
+            $isRemote = strtoupper($companyCode ?? '') === 'REMOTE';
+
             foreach ($enrollee->dependents as $dep) {
                 // Determine if dependent should be skipped
                 $isSkipping = ($dep->enrollment_status === 'SKIPPED' || $dep->enrollment_status === 'OVERAGE');
-                
+
+                // For REMOTE company, hide SKIPPED and OVERAGE dependents entirely
+                if ($isRemote && $isSkipping) {
+                    continue;
+                }
+
                 $rows[] = [
                     'relation' => 'DEPENDENT',
                     'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
                     'certificate_number' => $dep->certificate_number ?? 'N/A',
                     'enrollment_status' => $isSkipping ? $dep->enrollment_status : '--',
                 ];
-                
+
                 // For premium computation, only include non-skipped dependents
                 if (!$isSkipping) {
                     // Convert Eloquent model to array properly using toArray() method

@@ -57,19 +57,79 @@ class EnrolleeManageDependentController extends Controller
         return response()->json($enrolleeArr);
     }
 
-    public function updateGenderAndMaritalStatus(Request $request, $uuid)
+    public function updateName(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $oldValues = $enrollee->toArray();
+
+        $validated = $request->validate([
+            'first_name' => 'required|string|max:255',
+            'last_name'  => 'required|string|max:255',
+        ]);
+
+        $validated = $this->uppercaseStrings($validated);
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'update_name',
+            'uuid'   => $uuid,
+        ]);
+
+        return response()->json([
+            'success'  => true,
+            'message'  => 'Name updated successfully',
+            'enrollee' => $enrollee,
+        ]);
+    }
+
+    public function updateGender(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $oldValues = $enrollee->toArray();
+
+        $validated = $request->validate([
+            'gender' => 'required|string|max:255',
+        ]);
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'update_gender',
+            'uuid' => $uuid,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Gender updated successfully',
+            'enrollee' => $enrollee,
+        ]);
+    }
+
+    public function updateMaritalStatus(Request $request, $uuid)
     {
         $enrollee = Enrollee::with('enrollment.company')->where('uuid', $uuid)->first();
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
-        
+
         $oldValues = $enrollee->toArray();
         $oldMaritalStatus = $enrollee->marital_status;
 
         $validated = $request->validate([
-            'gender' => 'nullable|string|max:255',
-            'marital_status' => 'required|string|max:255'
+            'marital_status' => 'required|string|max:255',
         ]);
 
         $enrollee->fill($validated);
@@ -79,8 +139,8 @@ class EnrolleeManageDependentController extends Controller
 
         // Check if marital status changed and delete dependents only for specific company codes
         if ($oldMaritalStatus !== $validated['marital_status']) {
-            $companyCode = $enrollee->enrollment && $enrollee->enrollment->company 
-                ? $enrollee->enrollment->company->company_code 
+            $companyCode = $enrollee->enrollment && $enrollee->enrollment->company
+                ? $enrollee->enrollment->company->company_code
                 : null;
 
             // Array of company codes that require dependent deletion on marital status change
@@ -94,34 +154,34 @@ class EnrolleeManageDependentController extends Controller
                 $dependents = Dependent::where('principal_id', $enrollee->id)
                     ->whereNull('deleted_at')
                     ->get();
-                
+
                 foreach ($dependents as $dependent) {
                     // Soft delete associated health insurance record
                     Dependent::where('id', $dependent->id)->update(['deleted_at' => now()]);
-                    
+
                     // Soft delete associated attachments
                     //Attachment::where('dependent_id', $dependent->id)->update(['deleted_at' => now()]);
-                    
+
                     // Soft delete the dependent
                     $dependent->delete();
                     $deletedDependentsCount++;
                 }
             }
         }
-        
+
         // Log the update action
         $this->logUpdate($enrollee, $oldValues, [
-            'action' => 'update_gender_marital_status',
+            'action' => 'update_marital_status',
             'uuid' => $uuid,
             'marital_status_changed' => $oldMaritalStatus !== $validated['marital_status'],
-            'dependents_deleted' => $deletedDependentsCount
+            'dependents_deleted' => $deletedDependentsCount,
         ]);
 
         return response()->json([
             'success' => true,
-            'message' => 'Enrollee updated successfully',
+            'message' => 'Marital status updated successfully',
             'enrollee' => $enrollee,
-            'dependents_deleted' => $deletedDependentsCount
+            'dependents_deleted' => $deletedDependentsCount,
         ]);
     }
 
