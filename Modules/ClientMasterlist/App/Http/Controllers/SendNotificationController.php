@@ -48,11 +48,6 @@ class SendNotificationController extends Controller
      */
     public function send(Request $request)
     {
-        Log::info("Send method called", [
-            'request_data' => $request->all(),
-            'has_csv_attachment' => $request->has('csv_attachment')
-        ]);
-
         $enrollmentType = $request->input('enrollment_type');
         $enrolleeStatus = $request->input('enrollee_status');
 
@@ -163,12 +158,6 @@ class SendNotificationController extends Controller
             // Otherwise, send as a single email (default)
             return $this->sendSingleEmail($data, $notification);
         } catch (\Exception $e) {
-            Log::error("Exception in send method", [
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString()
-            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send email: ' . $e->getMessage(),
@@ -291,14 +280,6 @@ class SendNotificationController extends Controller
             $tempFiles = [];
             $infobipAttachments = [];
 
-            // Log CSV attachment status
-            Log::info("Email sending - CSV attachment status", [
-                'has_csv_attachment' => !empty($csvAttachment),
-                'csv_path' => $csvAttachment['path'] ?? null,
-                'csv_name' => $csvAttachment['name'] ?? null,
-                'csv_file_exists' => $csvAttachment ? file_exists($csvAttachment['path']) : false
-            ]);
-
             // Handle CSV attachment first
             if ($csvAttachment) {
                 $tempFiles[] = $csvAttachment['path'];
@@ -338,19 +319,6 @@ class SendNotificationController extends Controller
                 }
             }
 
-            // Log email sending attempt
-            Log::info("Sending email via Infobip", [
-                'to' => $to,
-                'subject' => $subjectBody,
-                'attachments_count' => count($infobipAttachments),
-                'attachments' => array_map(function ($att) {
-                    return [
-                        'name' => $att['name'],
-                        'file_exists' => file_exists($att['path'])
-                    ];
-                }, $infobipAttachments)
-            ]);
-
             $emailService = new EmailSender(
                 $to, // pass as array
                 $notification->is_html ? $messageBody : nl2br($messageBody),
@@ -363,12 +331,6 @@ class SendNotificationController extends Controller
             );
 
             $result = $emailService->send();
-
-            // Log email sending result
-            Log::info("Email sending result", [
-                'success' => $result,
-                'provider' => 'infobip'
-            ]);
 
             foreach ($tempFiles as $tmp) {
                 @unlink($tmp);
