@@ -555,6 +555,16 @@ class SendNotificationController extends Controller
                 ]);
 
                 $forCount = count($statusResult);
+            } else if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'close_enrollment') {
+                // CLOSE ENROLLMENT: enrollment already set to INACTIVE, notify all enrollees
+                $enrolleeIds = $statusResult['enrollee_ids'] ?? [];
+                if (empty($enrolleeIds)) {
+                    continue; // No enrollees to notify
+                }
+                $request->merge([
+                    'to' => implode(',', $enrolleeIds)
+                ]);
+                $forCount = count($enrolleeIds);
             }
 
 
@@ -574,6 +584,32 @@ class SendNotificationController extends Controller
         }
 
         return response()->json(['success' => true, 'message' => 'Scheduled notifications processed.']);
+    }
+
+    /**
+     * Get all active enrollee IDs for a given enrollment (used for CLOSE ENROLLMENT notification)
+     */
+    private function getAllEnrolleeIds($enrollmentId = null)
+    {
+        if (!$enrollmentId) {
+            return [];
+        }
+
+        $enrollees = Enrollee::where('enrollment_id', $enrollmentId)
+            ->whereNull('deleted_at')
+            ->get();
+
+        $ids = $enrollees->pluck('id')->toArray();
+
+        Log::info('CLOSE ENROLLMENT: Fetched all enrollee IDs', [
+            'enrollment_id' => $enrollmentId,
+            'count' => count($ids),
+        ]);
+
+        return [
+            'type' => 'close_enrollment',
+            'enrollee_ids' => $ids,
+        ];
     }
 
     private function checkNotificationStatus($notificationType, $enrollmentId = null, $notification = null)
@@ -645,6 +681,21 @@ class SendNotificationController extends Controller
                     'date_to' => $dateRange['to'],
                     'columns' => $columns
                 ];
+
+            case 'CLOSE ENROLLMENT':
+                // Set the enrollment status to INACTIVE
+                if ($enrollmentId) {
+                    $enrollment = \Modules\ClientMasterlist\App\Models\Enrollment::find($enrollmentId);
+                    if ($enrollment && $enrollment->status !== 'INACTIVE') {
+                        $enrollment->status = 'INACTIVE';
+                        $enrollment->save();
+                        Log::info('CLOSE ENROLLMENT: Enrollment set to INACTIVE', [
+                            'enrollment_id' => $enrollmentId,
+                        ]);
+                    }
+                }
+                // Return all active enrollees from this enrollment to notify them
+                return $this->getAllEnrolleeIds($enrollmentId);
             default:
                 // No action needed for other types
                 return null;
