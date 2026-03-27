@@ -1230,6 +1230,19 @@ class SendNotificationController extends Controller
 
         $firstDayOfNextMonth = date('F j, Y', strtotime('+1 month', strtotime(date('Y-m-01'))));
 
+        // Determine benefit guide link based on enrollee's health insurance plan
+        $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+        $benefitGuideMap = [
+            '300E' => 'https://remote.com/benefits-guide/philippineslocalhealthemployeeonly',
+            '300F' => 'https://remote.com/benefits-guide/philippineslocalhealthfamily',
+            '150E' => 'https://remote.com/benefits-guide/philippineslocalhealth-150k-employeeonly',
+            '150F' => 'https://remote.com/benefits-guide/philippineslocalhealth-150k-family',
+        ];
+        $benefitGuideUrl = $benefitGuideMap[$plan] ?? null;
+        $benefitGuide = $benefitGuideUrl
+            ? '<a href="' . $benefitGuideUrl . '">Benefit Guide</a>'
+            : '';
+
         $replacements = [
             'enrollment_link' => $data['enrollment_link'] ?? $link,
             'coverage_start_date' => $data['coverage_start_date'] ?? $coverageStartDate,
@@ -1237,6 +1250,7 @@ class SendNotificationController extends Controller
             'date_today' => date('F j, Y'),
             'certification_table' => $this->certificationTable($enrollee),
             'submission_table' => $this->submissionTable($enrollee),  // Only include if enrollee has dependents
+            'benefit_guide' => $data['benefit_guide'] ?? $benefitGuide,
 
             // Add uppercase versions for backward compatibility
             'ENROLLMENT_LINK' => $data['enrollment_link'] ?? $link,
@@ -1245,6 +1259,7 @@ class SendNotificationController extends Controller
             'DATE_TODAY' => date('F j, Y'),
             'CERTIFICATION_TABLE' => $this->certificationTable($enrollee),
             'SUBMISSION_TABLE' => $this->submissionTable($enrollee),
+            'BENEFIT_GUIDE' => $data['benefit_guide'] ?? $benefitGuide,
         ];
         return $replacements;
     }

@@ -25,6 +25,9 @@ Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
     Route::post('create-account', [AuthController::class, 'createAccount'])->name('create-account');
     Route::post('check-email', [AuthController::class, 'checkEmail'])->name('check-email');
     
+    // Member activation
+    Route::post('activate', [AuthController::class, 'activateMember'])->name('activate');
+
     // Email OTP verification
     Route::post('send-otp', [AuthController::class, 'sendOtp'])->name('send-otp');
     Route::post('verify-otp', [AuthController::class, 'verifyOtp'])->name('verify-otp');
