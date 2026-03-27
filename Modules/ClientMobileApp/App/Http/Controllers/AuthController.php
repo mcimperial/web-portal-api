@@ -400,6 +400,46 @@ class AuthController extends Controller
     }
 
     /**
+     * Activate member account by validating member_id and birth_date against the masterlist.
+     */
+    public function activateMember(Request $request)
+    {
+        $request->validate([
+            'member_id' => ['required', 'string'],
+            'birth_date' => ['required', 'date_format:Y-m-d'],
+        ]);
+
+        $memberId = trim($request->member_id);
+        $birthDate = $request->birth_date;
+
+        // Query the sync (masterlist) database
+        $member = \Illuminate\Support\Facades\DB::connection('mysql_sync')
+            ->table('masterlist')
+            ->where('member_id', $memberId)
+            ->whereDate('birth_date', $birthDate)
+            ->select([
+                'id', 'member_id', 'company_code', 'cost_code', 'company_name',
+                'last_name', 'first_name', 'middle_name', 'relation',
+                'birth_date', 'email', 'incepfrom', 'incepto', 'empcode',
+                'noofconsult', 'plantype', 'rb', 'rbdep', 'ismbl', 'mbl',
+                'layer', 'preexist', 'pemonth', 'philhealth', 'currency',
+                'rb2', 'rb3',
+            ])
+            ->first();
+
+        if (!$member) {
+            throw ValidationException::withMessages([
+                'member_id' => ['No member found with the provided Member ID and Birth Date. Please check your details and try again.'],
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Member activated successfully.',
+            'member' => $member,
+        ]);
+    }
+
+    /**
      * Resend OTP code.
      */
     public function resendOtp(Request $request)
