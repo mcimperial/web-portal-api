@@ -1727,6 +1727,7 @@ class SendNotificationController extends Controller
             $message .= "Dear {$fullName},\n\n";
             $message .= "You have received an email notification regarding your HMO online enrollment.\n\n";
             $message .= "Please check your email immediately for important details.\n\n";
+            $message .= "If you already completed the enrollment process, please disregard this message.\n\n";
             $message .= "This is an automated message. Please do not reply to this SMS.";
 
             // Send SMS using SmsHelper
