@@ -194,9 +194,9 @@ class ExportEnrolleesController extends Controller
 
     private function determineColumns(Request $request, string $exportType, bool $isForAttachment): array
     {
-        // If use_selected_columns is checked, ALWAYS use DEFAULT columns regardless of export type
+        // If use_selected_columns is checked, use the user's checked columns (with DEFAULT labels/values)
         if ($request->query('use_selected_columns')) {
-            return self::EXPORT_CONFIGS['DEFAULT']['columns'];
+            return $request->query('columns', []);
         }
 
         $config = $this->getConfig($exportType);
