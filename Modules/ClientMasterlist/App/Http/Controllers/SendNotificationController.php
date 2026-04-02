@@ -1358,6 +1358,12 @@ class SendNotificationController extends Controller
             $isRemote = strtoupper($companyCode ?? '') === 'REMOTE';
 
             foreach ($enrollee->dependents as $dep) {
+                // Skip INACTIVE dependents (employee-only plan: 150E / 300E)
+                $depStatus = strtoupper($dep->status ?? '');
+                if ($depStatus === 'INACTIVE') {
+                    continue;
+                }
+
                 // Determine if dependent should be skipped
                 $isSkipping = ($dep->enrollment_status === 'SKIPPED' || $dep->enrollment_status === 'OVERAGE');
 
@@ -1411,6 +1417,10 @@ class SendNotificationController extends Controller
         $premiumRestriction = $enrollee->enrollment->premium_restriction ?? null;
         $maxDependents = $enrollee->max_dependents ?? null;
 
+        // No premium computation for employee-only plans (150E / 300E)
+        $enrolleePlan = strtoupper(trim($enrollee->healthInsurance->plan ?? ''));
+        $isEmployeeOnlyPlan = in_array($enrolleePlan, ['150E', '300E']);
+
         // Prefer enrollment premium if present, else healthInsurance
         if (!empty($enrollee->enrollment) && isset($enrollee->enrollment->premium) && $enrollee->enrollment->premium > 0) {
             $premium = $enrollee->enrollment->premium;
@@ -1424,7 +1434,7 @@ class SendNotificationController extends Controller
             $premium = 0; // Default if not set
         }
 
-        if ($premium > 0 && count($dependentsArr) > 0) {
+        if ($premium > 0 && count($dependentsArr) > 0 && !$isEmployeeOnlyPlan) {
             $result = self::PremiumComputation($dependentsArr, $premium, $premiumComputation, $maxDependents, $premiumRestriction);
             $html .= '<div style="margin-top:18px; margin-bottom:18px; padding:12px; background:#ebf8ff; border-radius:8px;">';
             $html .= '<div style="font-weight:bold; color:#2b6cb0; margin-bottom:8px; font-size:16px;">Premium Computation</div>';
