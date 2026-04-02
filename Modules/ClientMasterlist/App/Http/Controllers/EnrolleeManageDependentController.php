@@ -204,16 +204,16 @@ class EnrolleeManageDependentController extends Controller
         // Parse age restriction format: CH:15D-25,AD:25-75
         $parsedRestriction = $this->parseAgeRestriction($ageRestriction);
 
-        // Check if plan is 300E (employee-only plan — no dependents)
+        // Check if plan is an employee-only plan (150E / 300E — no dependents)
         $plan = $enrollee->healthInsurance ? strtoupper(trim($enrollee->healthInsurance->plan ?? '')) : '';
-        $is300EPlan = $plan === '300E';
+        $isEmployeeOnlyPlan = in_array($plan, ['150E', '300E']);
 
         // Update overage dependents' enrollment_status to OVERAGE
         $dependents = Dependent::where('principal_id', $enrollee->id)->get();
 
         foreach ($dependents as $dep) {
-            // If plan is 300E, mark all dependents as INACTIVE
-            if ($is300EPlan) {
+            // If employee-only plan (150E / 300E), mark all dependents as INACTIVE
+            if ($isEmployeeOnlyPlan) {
                 $dep->status = 'INACTIVE';
                 $dep->save();
                 continue;
@@ -253,7 +253,7 @@ class EnrolleeManageDependentController extends Controller
             'uuid' => $uuid,
             'overage_dependents_updated' => true,
             'age_restriction_used' => $ageRestriction,
-            'dependents_inactivated_300e' => $is300EPlan,
+            'dependents_inactivated_employee_only_plan' => $isEmployeeOnlyPlan,
         ]);
 
         return response()->json([
