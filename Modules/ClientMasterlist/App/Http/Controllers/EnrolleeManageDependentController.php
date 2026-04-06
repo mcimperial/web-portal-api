@@ -211,23 +211,11 @@ class EnrolleeManageDependentController extends Controller
         // Update overage dependents' enrollment_status to OVERAGE
         $dependents = Dependent::where('principal_id', $enrollee->id)->get();
 
-        // ROLLOVER (SUBMITTED) + employee-only plan (150E / 300E): soft-delete all dependents
-        $isRollover = $validated['enrollment_status'] === 'SUBMITTED';
-        $dependentsSoftDeleted = 0;
-
         foreach ($dependents as $dep) {
+            // If employee-only plan (150E / 300E), mark all dependents as INACTIVE
             if ($isEmployeeOnlyPlan) {
-                if ($isRollover) {
-                    // Soft-delete the dependent so they are removed from the record
-                    $dep->deleted_by = 'system:rollover-employee-only-plan';
-                    $dep->save();
-                    $dep->delete(); // SoftDeletes trait
-                    $dependentsSoftDeleted++;
-                } else {
-                    // For other statuses (e.g. DECLINED), just mark INACTIVE
-                    $dep->status = 'INACTIVE';
-                    $dep->save();
-                }
+                $dep->status = 'INACTIVE';
+                $dep->save();
                 continue;
             }
 
@@ -252,7 +240,7 @@ class EnrolleeManageDependentController extends Controller
             }
         }
 
-        if ($isRollover) {
+        if ($validated['enrollment_status'] === 'SUBMITTED') {
             $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
         }
 
@@ -266,7 +254,6 @@ class EnrolleeManageDependentController extends Controller
             'overage_dependents_updated' => true,
             'age_restriction_used' => $ageRestriction,
             'dependents_inactivated_employee_only_plan' => $isEmployeeOnlyPlan,
-            'dependents_soft_deleted' => $dependentsSoftDeleted,
         ]);
 
         return response()->json([
