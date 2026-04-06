@@ -187,7 +187,7 @@ class EnrolleeManageDependentController extends Controller
 
     public function updateOnRenewal(Request $request, $uuid)
     {
-        $enrollee = Enrollee::with(['enrollment', 'healthInsurance'])->where('uuid', $uuid)->first();
+        $enrollee = Enrollee::with('enrollment')->where('uuid', $uuid)->first();
         if (!$enrollee) {
             return response()->json(['message' => 'Enrollee not found'], 404);
         }
@@ -204,33 +204,10 @@ class EnrolleeManageDependentController extends Controller
         // Parse age restriction format: CH:15D-25,AD:25-75
         $parsedRestriction = $this->parseAgeRestriction($ageRestriction);
 
-        // Check if plan is an employee-only plan (150E / 300E — no dependents)
-        $plan = $enrollee->healthInsurance ? strtoupper(trim($enrollee->healthInsurance->plan ?? '')) : '';
-        $isEmployeeOnlyPlan = in_array($plan, ['150E', '300E']);
-
         // Update overage dependents' enrollment_status to OVERAGE
         $dependents = Dependent::where('principal_id', $enrollee->id)->get();
 
-        // ROLLOVER (SUBMITTED) + employee-only plan (150E / 300E): soft-delete all dependents
-        $isRollover = $validated['enrollment_status'] === 'SUBMITTED';
-        $dependentsSoftDeleted = 0;
-
         foreach ($dependents as $dep) {
-            if ($isEmployeeOnlyPlan) {
-                if ($isRollover) {
-                    // Soft-delete the dependent so they are removed from the record
-                    $dep->deleted_by = 'system:rollover-employee-only-plan';
-                    $dep->save();
-                    $dep->delete(); // SoftDeletes trait
-                    $dependentsSoftDeleted++;
-                } else {
-                    // For other statuses (e.g. DECLINED), just mark INACTIVE
-                    $dep->status = 'INACTIVE';
-                    $dep->save();
-                }
-                continue;
-            }
-
             $birthDate = $dep->birth_date;
             $relation = strtoupper($dep->relation);
             $isOverage = false;
@@ -252,7 +229,7 @@ class EnrolleeManageDependentController extends Controller
             }
         }
 
-        if ($isRollover) {
+        if ($validated['enrollment_status'] === 'SUBMITTED') {
             $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
         }
 
@@ -264,9 +241,7 @@ class EnrolleeManageDependentController extends Controller
             'action' => 'update_on_renewal',
             'uuid' => $uuid,
             'overage_dependents_updated' => true,
-            'age_restriction_used' => $ageRestriction,
-            'dependents_inactivated_employee_only_plan' => $isEmployeeOnlyPlan,
-            'dependents_soft_deleted' => $dependentsSoftDeleted,
+            'age_restriction_used' => $ageRestriction
         ]);
 
         return response()->json([
