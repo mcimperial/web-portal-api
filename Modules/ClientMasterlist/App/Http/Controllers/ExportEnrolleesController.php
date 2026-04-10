@@ -815,7 +815,7 @@ class ExportEnrolleesController extends Controller
         $principalCreatedAt = \Carbon\Carbon::parse($principal->created_at);
         $dependentCreatedAt = \Carbon\Carbon::parse($entity->created_at);
 
-        return $dependentCreatedAt->gt($principalCreatedAt->addMinutes(10)) ? 'NEWLY ADDED' : '';
+        return $dependentCreatedAt->gt($principalCreatedAt->addMinutes(2)) ? 'NEWLY ADDED' : '';
     }
 
     private function getDefaultColumnValue(string $column, $entity): string
