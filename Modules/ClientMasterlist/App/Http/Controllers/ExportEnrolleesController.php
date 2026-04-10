@@ -572,14 +572,16 @@ class ExportEnrolleesController extends Controller
 
             // Add dependent rows if needed
             if ($withDependents) {
-                // Active dependents
+                // Active dependents — same behaviour as before for ALL and REGULAR
                 $activeDependents = $enrollee->dependents ?? collect();
-                foreach ($activeDependents as $dependent) {
-                    $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, false);
-                    $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                if (count($activeDependents) > 0) {
+                    foreach ($activeDependents as $dependent) {
+                        $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, false);
+                        $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                    }
                 }
 
-                // For renewals, also include soft-deleted dependents (marked as DELETED)
+                // RENEWAL ONLY: append soft-deleted dependents as DELETED rows
                 if ($isRenewal) {
                     $deletedDependents = \Modules\ClientMasterlist\App\Models\Dependent::onlyTrashed()
                         ->where('principal_id', $enrollee->id)
@@ -698,13 +700,12 @@ class ExportEnrolleesController extends Controller
 
     private function getSkipRemarks($entity, bool $isPrincipal, bool $isDeletedDependent = false): string
     {
-        if ($isPrincipal) return '';
-
-        if ($isDeletedDependent) {
+        // RENEWAL ONLY: deleted dependents get a special remark
+        if (!$isPrincipal && $isDeletedDependent) {
             return 'DELETED - DO NOT ENROLL';
         }
 
-        if ($this->isSkippedOrOverage($entity)) {
+        if (!$isPrincipal && $this->isSkippedOrOverage($entity)) {
             return $entity->enrollment_status === 'SKIPPED'
                 ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
                 : 'DO NOT ENROLL, OVERAGE';
