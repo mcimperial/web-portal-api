@@ -136,14 +136,14 @@ class ExportEnrolleesController extends Controller
         $exportType = $this->getExportType($filters['enrollment_id']);
         
         $columns = $this->determineColumns($request, $exportType, $isForAttachment);
-        $columns = $this->processColumns($columns, $enrollees, $exportType);
+        [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType);
         
         // Use DEFAULT labels when use_selected_columns is checked
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
         $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
         // Use DEFAULT column values when use_selected_columns is checked
         $useDefaultValues = (bool) $request->query('use_selected_columns');
-        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues);
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal);
         $csv = $this->generateCsv($headers, $rows);
 
         if ($isForAttachment && $filters['enrollment_status'] === 'SUBMITTED') {
@@ -403,7 +403,7 @@ class ExportEnrolleesController extends Controller
         }
 
         Log::info('Final columns after processing', ['columns' => $columns]);
-        return $columns;
+        return [$columns, $checks['isRenewal']];
     }
 
     private function normalizeColumns($columns): array
@@ -563,7 +563,7 @@ class ExportEnrolleesController extends Controller
         return array_map(fn($col) => $config['labels'][$col] ?? $col, $columns);
     }
 
-    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false): array
+    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false): array
     {
         $rows = [];
         $colCount = count($columns);
@@ -576,10 +576,26 @@ class ExportEnrolleesController extends Controller
             $rows[] = $this->normalizeRowLength($row, $colCount);
 
             // Add dependent rows if needed
-            if ($withDependents && $enrollee->dependents && count($enrollee->dependents) > 0) {
-                foreach ($enrollee->dependents as $dependent) {
+            if ($withDependents) {
+                // Active dependents
+                $activeDependents = $enrollee->dependents ?? collect();
+                foreach ($activeDependents as $dependent) {
                     $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom);
                     $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                }
+
+                // For renewals, also include soft-deleted dependents (marked as DELETED)
+                if ($isRenewal) {
+                    $deletedDependents = \Modules\ClientMasterlist\App\Models\Dependent::onlyTrashed()
+                        ->where('principal_id', $enrollee->id)
+                        ->with(['healthInsurance'])
+                        ->get();
+
+                    foreach ($deletedDependents as $dependent) {
+                        $dependent->_is_deleted = true;
+                        $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom);
+                        $rows[] = $this->normalizeRowLength($depRow, $colCount);
+                    }
                 }
             }
         }
@@ -688,11 +704,18 @@ class ExportEnrolleesController extends Controller
 
     private function getSkipRemarks($entity, bool $isPrincipal): string
     {
-        if (!$isPrincipal && $this->isSkippedOrOverage($entity)) {
+        if ($isPrincipal) return '';
+
+        if (!empty($entity->_is_deleted)) {
+            return 'DELETED - DO NOT ENROLL';
+        }
+
+        if ($this->isSkippedOrOverage($entity)) {
             return $entity->enrollment_status === 'SKIPPED'
                 ? 'DO NOT ENROLL, SKIPPED HIERARCHY'
                 : 'DO NOT ENROLL, OVERAGE';
         }
+
         return '';
     }
 
@@ -785,8 +808,12 @@ class ExportEnrolleesController extends Controller
 
     private function getIsNewlyAdded($entity, bool $isPrincipal, $principal = null): string
     {
-        if ($isPrincipal) return 'NO';
-        if (!$principal || !$principal->created_at || !$entity->created_at) return 'NO';
+        if ($isPrincipal) return '--';
+
+        // Soft-deleted dependent = removed from this enrollment
+        if (!empty($entity->_is_deleted)) return 'DELETED';
+
+        if (!$principal || !$principal->created_at || !$entity->created_at) return '';
 
         // Dependents imported together with the principal may not have the exact same timestamp.
         // A 10-minute grace window treats them as imported at the same time.
@@ -794,7 +821,7 @@ class ExportEnrolleesController extends Controller
         $principalCreatedAt = \Carbon\Carbon::parse($principal->created_at);
         $dependentCreatedAt = \Carbon\Carbon::parse($entity->created_at);
 
-        return $dependentCreatedAt->gt($principalCreatedAt->addMinutes(10)) ? 'YES' : 'NO';
+        return $dependentCreatedAt->gt($principalCreatedAt->addMinutes(10)) ? 'NEWLY ADDED' : '';
     }
 
     private function getDefaultColumnValue(string $column, $entity): string
