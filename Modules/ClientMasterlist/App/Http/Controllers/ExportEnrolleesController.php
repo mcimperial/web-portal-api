@@ -30,7 +30,7 @@ class ExportEnrolleesController extends Controller
                 'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
                 'effective_date' => 'Effective Date', 'required_document' => 'Required Document',
                 'enrollment_status' => 'Enrollment Status', 'relation' => 'Relation',
-                'is_newly_added' => 'Newly Added',
+                'is_newly_added' => 'Renewal Status',
                 'employee_id' => 'Employee ID', 'first_name' => 'First Name',
                 'last_name' => 'Last Name', 'middle_name' => 'Middle Name',
                 'suffix' => 'Suffix', 'birth_date' => 'Birth Date', 'gender' => 'Gender',
@@ -136,7 +136,7 @@ class ExportEnrolleesController extends Controller
         $exportType = $this->getExportType($filters['enrollment_id']);
         
         $columns = $this->determineColumns($request, $exportType, $isForAttachment);
-        [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType);
+        [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
         
         // Use DEFAULT labels when use_selected_columns is checked
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
@@ -360,12 +360,12 @@ class ExportEnrolleesController extends Controller
         }
     }
 
-    private function processColumns(array $columns, $enrollees, string $exportType): array
+    private function processColumns(array $columns, $enrollees, string $exportType, ?string $exportEnrollmentType = null): array
     {
         $columns = $this->normalizeColumns($columns);
 
         // Always check for skip/overage conditions first for ALL export types
-        $checks = $this->analyzeEnrollees($enrollees);
+        $checks = $this->analyzeEnrollees($enrollees, $exportEnrollmentType);
         
         Log::info('Processing columns', [
             'export_type' => $exportType,
@@ -463,13 +463,13 @@ class ExportEnrolleesController extends Controller
         return $columns;
     }
 
-    private function analyzeEnrollees($enrollees): array
+    private function analyzeEnrollees($enrollees, ?string $exportEnrollmentType = null): array
     {
         $checks = [
             'hasSkippedOrOverage' => false,
             'hasRequiredDocument' => false,
             'hasPremium' => false,
-            'isRenewal' => false,
+            'isRenewal' => $exportEnrollmentType === 'RENEWAL',
         ];
 
         Log::info('Starting analyzeEnrollees', [
@@ -484,11 +484,6 @@ class ExportEnrolleesController extends Controller
                 'dependents_count' => $enrollee->dependents ? count($enrollee->dependents) : 0,
                 'dependents_loaded' => $enrollee->relationLoaded('dependents')
             ]);
-
-            // Detect renewal from principal's health insurance
-            if (!$checks['isRenewal'] && $enrollee->healthInsurance && $enrollee->healthInsurance->is_renewal) {
-                $checks['isRenewal'] = true;
-            }
 
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
                 // Check for premium calculation conditions
