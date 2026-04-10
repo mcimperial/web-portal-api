@@ -788,10 +788,13 @@ class ExportEnrolleesController extends Controller
         if ($isPrincipal) return 'NO';
         if (!$principal || !$principal->created_at || !$entity->created_at) return 'NO';
 
-        // A dependent is newly added if they were created after the principal.
-        // Principals are imported first; dependents added later by the principal during enrollment
-        // will have a created_at strictly after the principal's created_at.
-        return ($entity->created_at > $principal->created_at) ? 'YES' : 'NO';
+        // Dependents imported together with the principal may not have the exact same timestamp.
+        // A 10-minute grace window treats them as imported at the same time.
+        // Any dependent created more than 10 minutes after the principal is considered newly added.
+        $principalCreatedAt = \Carbon\Carbon::parse($principal->created_at);
+        $dependentCreatedAt = \Carbon\Carbon::parse($entity->created_at);
+
+        return $dependentCreatedAt->gt($principalCreatedAt->addMinutes(10)) ? 'YES' : 'NO';
     }
 
     private function getDefaultColumnValue(string $column, $entity): string
