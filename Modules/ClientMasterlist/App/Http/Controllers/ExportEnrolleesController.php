@@ -572,7 +572,7 @@ class ExportEnrolleesController extends Controller
 
         foreach ($enrollees as $enrollee) {
             // Add principal row
-            $row = $this->generateEntityRow($enrollee, $columns, $withDependents, true, null, $isCustom);
+            $row = $this->generateEntityRow($enrollee, $columns, $withDependents, true, null, $isCustom, false);
             $rows[] = $this->normalizeRowLength($row, $colCount);
 
             // Add dependent rows if needed
@@ -580,7 +580,7 @@ class ExportEnrolleesController extends Controller
                 // Active dependents
                 $activeDependents = $enrollee->dependents ?? collect();
                 foreach ($activeDependents as $dependent) {
-                    $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom);
+                    $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, false);
                     $rows[] = $this->normalizeRowLength($depRow, $colCount);
                 }
 
@@ -592,8 +592,7 @@ class ExportEnrolleesController extends Controller
                         ->get();
 
                     foreach ($deletedDependents as $dependent) {
-                        $dependent->_is_deleted = true;
-                        $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom);
+                        $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, true);
                         $rows[] = $this->normalizeRowLength($depRow, $colCount);
                     }
                 }
@@ -603,12 +602,12 @@ class ExportEnrolleesController extends Controller
         return $rows;
     }
 
-    private function generateEntityRow($entity, array $columns, bool $withDependents, bool $isPrincipal, $principal, bool $isCustom): array
+    private function generateEntityRow($entity, array $columns, bool $withDependents, bool $isPrincipal, $principal, bool $isCustom, bool $isDeletedDependent = false): array
     {
-        return array_map(function ($col) use ($entity, $withDependents, $isPrincipal, $principal, $isCustom) {
-            return $isCustom 
-                ? $this->getMaxicareColumnValue($col, $entity, $isPrincipal, $principal)
-                : $this->getColumnValue($col, $entity, $withDependents, $isPrincipal, $principal);
+        return array_map(function ($col) use ($entity, $withDependents, $isPrincipal, $principal, $isCustom, $isDeletedDependent) {
+            return $isCustom
+                ? $this->getMaxicareColumnValue($col, $entity, $isPrincipal, $principal, $isDeletedDependent)
+                : $this->getColumnValue($col, $entity, $withDependents, $isPrincipal, $principal, $isDeletedDependent);
         }, $columns);
     }
 
@@ -626,10 +625,10 @@ class ExportEnrolleesController extends Controller
     // COLUMN VALUE METHODS
     // =========================================================================
 
-    private function getColumnValue(string $column, $entity, bool $withDependents, bool $isPrincipal, $principal): string
+    private function getColumnValue(string $column, $entity, bool $withDependents, bool $isPrincipal, $principal, bool $isDeletedDependent = false): string
     {
         return match ($column) {
-            'remarks' => $this->getSkipRemarks($entity, $isPrincipal),
+            'remarks' => $this->getSkipRemarks($entity, $isPrincipal, $isDeletedDependent),
             'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
             'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
             'effective_date' => $this->getEffectiveDate(),
@@ -637,17 +636,17 @@ class ExportEnrolleesController extends Controller
             'relation' => $this->getRelation($entity, $withDependents, $isPrincipal),
             'department', 'position' => $this->getFromPrincipalOrEntity($entity, $principal, $isPrincipal, $column),
             'is_renewal', 'is_company_paid' => $this->getBooleanFromHealthInsurance($entity, $principal, $isPrincipal, $column),
-            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal),
+            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal, $isDeletedDependent),
             'premium' => $this->calculatePremium($entity, $isPrincipal, $principal),
             'required_document' => $this->getRequiredDocuments($entity, $isPrincipal),
             default => $this->getDefaultColumnValue($column, $entity)
         };
     }
 
-    private function getMaxicareColumnValue(string $column, $entity, bool $isPrincipal, $principal): string
+    private function getMaxicareColumnValue(string $column, $entity, bool $isPrincipal, $principal, bool $isDeletedDependent = false): string
     {
         // Handle common columns first (including skip-related columns)
-        $commonValue = $this->getCommonColumnValue($column, $entity, $isPrincipal, $principal);
+        $commonValue = $this->getCommonColumnValue($column, $entity, $isPrincipal, $principal, $isDeletedDependent);
         if ($commonValue !== null) return $commonValue;
 
         $enrollment = $this->getEnrollmentReference($entity, $isPrincipal, $principal);
@@ -687,13 +686,13 @@ class ExportEnrolleesController extends Controller
         };
     }
 
-    private function getCommonColumnValue(string $column, $entity, bool $isPrincipal, $principal): ?string
+    private function getCommonColumnValue(string $column, $entity, bool $isPrincipal, $principal, bool $isDeletedDependent = false): ?string
     {
         return match ($column) {
-            'remarks' => $this->getSkipRemarks($entity, $isPrincipal),
+            'remarks' => $this->getSkipRemarks($entity, $isPrincipal, $isDeletedDependent),
             'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
             'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
-            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal),
+            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal, $isDeletedDependent),
             default => null
         };
     }
@@ -702,11 +701,11 @@ class ExportEnrolleesController extends Controller
     // HELPER METHODS FOR COLUMN VALUES
     // =========================================================================
 
-    private function getSkipRemarks($entity, bool $isPrincipal): string
+    private function getSkipRemarks($entity, bool $isPrincipal, bool $isDeletedDependent = false): string
     {
         if ($isPrincipal) return '';
 
-        if (!empty($entity->_is_deleted)) {
+        if ($isDeletedDependent) {
             return 'DELETED - DO NOT ENROLL';
         }
 
@@ -806,12 +805,12 @@ class ExportEnrolleesController extends Controller
         return '';
     }
 
-    private function getIsNewlyAdded($entity, bool $isPrincipal, $principal = null): string
+    private function getIsNewlyAdded($entity, bool $isPrincipal, $principal = null, bool $isDeletedDependent = false): string
     {
         if ($isPrincipal) return '--';
 
         // Soft-deleted dependent = removed from this enrollment
-        if (!empty($entity->_is_deleted)) return 'DELETED';
+        if ($isDeletedDependent) return 'DELETED';
 
         if (!$principal || !$principal->created_at || !$entity->created_at) return '';
 
