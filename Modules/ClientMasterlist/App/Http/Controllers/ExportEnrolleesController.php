@@ -917,20 +917,20 @@ class ExportEnrolleesController extends Controller
         if ($isPrincipal) return '0.00';
         if (!$principal) return '0.00';
 
-        // Get base premium
-        $basePremium = 0;
-        if ($principal->enrollment && !empty($principal->enrollment->premium)) {
-            $basePremium = floatval($principal->enrollment->premium);
-        } elseif ($principal->healthInsurance && !empty($principal->healthInsurance->premium)) {
-            $basePremium = floatval($principal->healthInsurance->premium);
-        }
-
-        if ($basePremium == 0) return '0.00';
-
-        // Check if company paid
+        // Check if company paid first — always return 0.00 regardless of premium value
         if ($principal->healthInsurance && $principal->healthInsurance->is_company_paid) {
             return '0.00';
         }
+
+        // Get base premium: principal's healthInsurance premium takes priority over enrollment premium
+        $basePremium = 0;
+        if ($principal->healthInsurance && !empty($principal->healthInsurance->premium)) {
+            $basePremium = floatval($principal->healthInsurance->premium);
+        } elseif ($principal->enrollment && !empty($principal->enrollment->premium)) {
+            $basePremium = floatval($principal->enrollment->premium);
+        }
+
+        if ($basePremium == 0) return '0.00';
 
         $premiumComputation = $principal->enrollment->premium_computation ?? null;
         $premiumRestriction = $principal->enrollment->premium_restriction ?? null;
