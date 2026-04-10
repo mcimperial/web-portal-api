@@ -30,6 +30,7 @@ class ExportEnrolleesController extends Controller
                 'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
                 'effective_date' => 'Effective Date', 'required_document' => 'Required Document',
                 'enrollment_status' => 'Enrollment Status', 'relation' => 'Relation',
+                'is_newly_added' => 'Newly Added',
                 'employee_id' => 'Employee ID', 'first_name' => 'First Name',
                 'last_name' => 'Last Name', 'middle_name' => 'Middle Name',
                 'suffix' => 'Suffix', 'birth_date' => 'Birth Date', 'gender' => 'Gender',
@@ -372,6 +373,11 @@ class ExportEnrolleesController extends Controller
             'checks' => $checks
         ]);
         
+        // Prepend is_newly_added column at the very front only for renewal exports
+        if ($checks['isRenewal'] && !in_array('is_newly_added', $columns)) {
+            array_unshift($columns, 'is_newly_added');
+        }
+
         // Always add skip-related columns if there are any skipped/overage dependents
         // This applies to ALL export types for safety
         if ($checks['hasSkippedOrOverage']) {
@@ -462,7 +468,8 @@ class ExportEnrolleesController extends Controller
         $checks = [
             'hasSkippedOrOverage' => false,
             'hasRequiredDocument' => false,
-            'hasPremium' => false
+            'hasPremium' => false,
+            'isRenewal' => false,
         ];
 
         Log::info('Starting analyzeEnrollees', [
@@ -477,6 +484,11 @@ class ExportEnrolleesController extends Controller
                 'dependents_count' => $enrollee->dependents ? count($enrollee->dependents) : 0,
                 'dependents_loaded' => $enrollee->relationLoaded('dependents')
             ]);
+
+            // Detect renewal from principal's health insurance
+            if (!$checks['isRenewal'] && $enrollee->healthInsurance && $enrollee->healthInsurance->is_renewal) {
+                $checks['isRenewal'] = true;
+            }
 
             if ($enrollee->dependents && count($enrollee->dependents) > 0) {
                 // Check for premium calculation conditions
@@ -609,6 +621,7 @@ class ExportEnrolleesController extends Controller
             'relation' => $this->getRelation($entity, $withDependents, $isPrincipal),
             'department', 'position' => $this->getFromPrincipalOrEntity($entity, $principal, $isPrincipal, $column),
             'is_renewal', 'is_company_paid' => $this->getBooleanFromHealthInsurance($entity, $principal, $isPrincipal, $column),
+            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal),
             'premium' => $this->calculatePremium($entity, $isPrincipal, $principal),
             'required_document' => $this->getRequiredDocuments($entity, $isPrincipal),
             default => $this->getDefaultColumnValue($column, $entity)
@@ -664,6 +677,7 @@ class ExportEnrolleesController extends Controller
             'remarks' => $this->getSkipRemarks($entity, $isPrincipal),
             'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
             'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
+            'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal),
             default => null
         };
     }
@@ -767,6 +781,17 @@ class ExportEnrolleesController extends Controller
         }
 
         return '';
+    }
+
+    private function getIsNewlyAdded($entity, bool $isPrincipal, $principal = null): string
+    {
+        if ($isPrincipal) return 'NO';
+        if (!$principal || !$principal->created_at || !$entity->created_at) return 'NO';
+
+        // A dependent is newly added if they were created after the principal.
+        // Principals are imported first; dependents added later by the principal during enrollment
+        // will have a created_at strictly after the principal's created_at.
+        return ($entity->created_at > $principal->created_at) ? 'YES' : 'NO';
     }
 
     private function getDefaultColumnValue(string $column, $entity): string
