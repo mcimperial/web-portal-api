@@ -4,6 +4,8 @@ namespace Modules\ClientThirdParty\App\Providers;
 
 use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Routing\Router;
+use Modules\ClientThirdParty\App\Http\Middleware\ValidateApiKey;
 
 class ClientThirdPartyServiceProvider extends ServiceProvider
 {
@@ -22,6 +24,11 @@ class ClientThirdPartyServiceProvider extends ServiceProvider
         $this->registerConfig();
         $this->registerViews();
         $this->loadMigrationsFrom(module_path($this->moduleName, 'Database/migrations'));
+
+        // Register the api.key middleware alias
+        /** @var Router $router */
+        $router = $this->app->make(Router::class);
+        $router->aliasMiddleware('api.key', ValidateApiKey::class);
     }
 
     /**
