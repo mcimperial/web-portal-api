@@ -9,13 +9,41 @@ use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use Modules\ClientMasterlist\App\Models\Dependent;
 
+/**
+ * @group Third-Party Enrollment API
+ *
+ * Endpoints for third-party integrations to read enrollment data,
+ * principals (employees), dependents, and summaries.
+ *
+ * All routes are prefixed with `/api/v1/third-party` and require
+ * Bearer token authentication with the `enrollment:read` permission
+ * unless otherwise noted.
+ */
 class EnrollmentApiController extends Controller
 {
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/enrollments
-    // List enrollments (optionally filter by status, company_id)
-    // Required permission: enrollment:read
-    // -----------------------------------------------------------------------
+    /**
+     * List Enrollments
+     *
+     * Returns a paginated list of enrollments. Optionally filter by
+     * `company_id` and/or `status`.
+     *
+     * @authenticated
+     *
+     * @queryParam company_id  integer  Filter by company ID. Example: 5
+     * @queryParam status      string   Filter by enrollment status (e.g. `active`, `inactive`). Example: active
+     * @queryParam per_page    integer  Number of results per page (max 100, default 15). Example: 15
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": [{ "id": 1, "company_id": 5, "status": "active", "..." : "..." }],
+     *   "meta": {
+     *     "current_page": 1,
+     *     "last_page": 3,
+     *     "per_page": 15,
+     *     "total": 42
+     *   }
+     * }
+     */
     public function indexEnrollments(Request $request): JsonResponse
     {
         $query = Enrollment::with(['insuranceProvider', 'company'])
@@ -37,10 +65,22 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/enrollments/{id}
-    // Show a single enrollment
-    // -----------------------------------------------------------------------
+    /**
+     * Show Enrollment
+     *
+     * Returns the details of a single enrollment, including its
+     * insurance provider and company relationships.
+     *
+     * @authenticated
+     *
+     * @urlParam id integer required The enrollment ID. Example: 1
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": { "id": 1, "company_id": 5, "status": "active", "...": "..." }
+     * }
+     * @response 404 { "message": "No query results for model [Enrollment] 999" }
+     */
     public function showEnrollment(int $id): JsonResponse
     {
         $enrollment = Enrollment::with(['insuranceProvider', 'company'])->findOrFail($id);
@@ -51,10 +91,31 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/enrollments/{id}/principals
-    // List enrolled principals (employees) for an enrollment
-    // -----------------------------------------------------------------------
+    /**
+     * List Principals
+     *
+     * Returns a paginated list of enrolled principals (employees)
+     * belonging to the given enrollment. Optionally filter by
+     * `enrollment_status` or `employee_id`.
+     *
+     * @authenticated
+     *
+     * @urlParam id             integer required The enrollment ID. Example: 1
+     * @queryParam enrollment_status string  Filter by the principal's enrollment status. Example: active
+     * @queryParam employee_id        string  Filter by employee ID. Example: EMP-0042
+     * @queryParam per_page           integer Number of results per page (max 100, default 20). Example: 20
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": [{ "id": 10, "enrollment_id": 1, "employee_id": "EMP-0042", "...": "..." }],
+     *   "meta": {
+     *     "current_page": 1,
+     *     "last_page": 2,
+     *     "per_page": 20,
+     *     "total": 35
+     *   }
+     * }
+     */
     public function principals(Request $request, int $enrollmentId): JsonResponse
     {
         $query = Enrollee::where('enrollment_id', $enrollmentId)
@@ -76,10 +137,23 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/enrollments/{id}/principals/{principalId}/dependents
-    // List dependents for a principal
-    // -----------------------------------------------------------------------
+    /**
+     * List Dependents
+     *
+     * Returns all dependents registered under a specific principal
+     * within the given enrollment.
+     *
+     * @authenticated
+     *
+     * @urlParam id          integer required The enrollment ID. Example: 1
+     * @urlParam principalId integer required The principal (enrollee) ID. Example: 10
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": [{ "id": 20, "principal_id": 10, "first_name": "Jane", "...": "..." }],
+     *   "total": 2
+     * }
+     */
     public function dependents(Request $request, int $enrollmentId, int $principalId): JsonResponse
     {
         $dependents = Dependent::where('enrollment_id', $enrollmentId)
@@ -93,10 +167,28 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/enrollments/{id}/summary
-    // Quick stats summary for an enrollment
-    // -----------------------------------------------------------------------
+    /**
+     * Enrollment Summary
+     *
+     * Returns quick statistics for an enrollment: total principals,
+     * total dependents, and a breakdown of principals grouped by
+     * their `enrollment_status`.
+     *
+     * @authenticated
+     *
+     * @urlParam id integer required The enrollment ID. Example: 1
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": {
+     *     "enrollment": { "id": 1, "status": "active", "...": "..." },
+     *     "total_principals": 35,
+     *     "total_dependents": 12,
+     *     "by_status": { "active": 30, "pending": 5 }
+     *   }
+     * }
+     * @response 404 { "message": "No query results for model [Enrollment] 999" }
+     */
     public function summary(int $id): JsonResponse
     {
         $enrollment = Enrollment::findOrFail($id);
@@ -118,17 +210,42 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    // -----------------------------------------------------------------------
-    // GET /api/v1/third-party/principals/search
-    // Search principals across all enrollments by employee_id, name, or birth_date.
-    //
-    // Query params (at least one required):
-    //   employee_id  – exact match
-    //   name         – searches first_name, last_name, middle_name (LIKE)
-    //   birth_date   – exact date match (YYYY-MM-DD)
-    //   enrollment_id – optional scope to a single enrollment
-    //   per_page     – default 20, max 100
-    // -----------------------------------------------------------------------
+    /**
+     * Search Principals
+     *
+     * Searches principals (employees) across all enrollments.
+     * At least one of `employee_id`, `name`, or `birth_date` must be provided.
+     * Results include each principal's dependents.
+     *
+     * @authenticated
+     *
+     * @queryParam employee_id   string  Exact match on employee ID. Example: EMP-0042
+     * @queryParam name          string  Partial match on first, last, or middle name (min 2 chars). Example: John
+     * @queryParam birth_date    string  Exact date match in `YYYY-MM-DD` format. Example: 1990-05-14
+     * @queryParam enrollment_id integer Narrow search to a specific enrollment. Example: 1
+     * @queryParam per_page      integer Number of results per page (max 100, default 20). Example: 20
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": [{
+     *     "id": 10,
+     *     "employee_id": "EMP-0042",
+     *     "first_name": "John",
+     *     "last_name": "Doe",
+     *     "dependents": []
+     *   }],
+     *   "meta": {
+     *     "current_page": 1,
+     *     "last_page": 1,
+     *     "per_page": 20,
+     *     "total": 1
+     *   }
+     * }
+     * @response 422 {
+     *   "success": false,
+     *   "message": "Provide at least one search parameter: employee_id, name, or birth_date."
+     * }
+     */
     public function searchPrincipals(Request $request): JsonResponse
     {
         $request->validate([

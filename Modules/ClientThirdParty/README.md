@@ -1,6 +1,6 @@
 # ClientThirdParty Module
 
-This module provides functionality to sync data between the main application database and a third-party sync database.
+This module provides functionality to sync data between the main application database and a third-party sync database, and exposes read-only enrollment data to third-party integrations.
 
 ## Features
 
@@ -9,6 +9,30 @@ This module provides functionality to sync data between the main application dat
 - Query data from sync tables
 - Sync data from third-party database to main database
 - Get member information from sync database
+- **[Enrollment API](#enrollment-api)** — read enrollments, principals, dependents, and summaries
+
+---
+
+## Table of Contents
+
+- [Configuration](#configuration)
+- [Sync API Endpoints](#api-endpoints)
+  - [1. Test Connection](#1-test-connection)
+  - [2. Get Tables](#2-get-tables)
+  - [3. Get Table Data](#3-get-table-data)
+  - [4. Sync Table Data](#4-sync-table-data)
+  - [5. Full Sync](#5-full-sync)
+  - [6. Get Sync Status](#6-get-sync-status)
+  - [7. Get Member Data](#7-get-member-data)
+- [Enrollment API](#enrollment-api)
+  - [1. List Enrollments](#1-list-enrollments)
+  - [2. Show Enrollment](#2-show-enrollment)
+  - [3. List Principals](#3-list-principals)
+  - [4. List Dependents](#4-list-dependents)
+  - [5. Enrollment Summary](#5-enrollment-summary)
+  - [6. Search Principals](#6-search-principals)
+- [Error Handling](#error-handling)
+- [Security](#security)
 
 ## Configuration
 
@@ -229,3 +253,264 @@ All endpoints return error responses in the following format:
 - Table names are validated to prevent SQL injection
 - All database operations are wrapped in try-catch blocks
 - Errors are logged for debugging
+
+---
+
+## Enrollment API
+
+Read-only endpoints for third-party integrations to access enrollment data.
+
+**Base URL:** `/api/v1/third-party`  
+**Authentication:** Bearer token with `enrollment:read` permission required on all routes.
+
+```http
+Authorization: Bearer <your-token>
+```
+
+---
+
+### 1. List Enrollments
+
+```
+GET /api/v1/third-party/enrollments
+```
+
+Returns a paginated list of enrollments with their associated insurance provider and company.
+
+**Query Parameters**
+
+| Parameter    | Type    | Required | Description                                        | Example  |
+|--------------|---------|----------|----------------------------------------------------|----------|
+| `company_id` | integer | No       | Filter by company ID                               | `5`      |
+| `status`     | string  | No       | Filter by enrollment status (`active`, `inactive`) | `active` |
+| `per_page`   | integer | No       | Results per page — max `100`, default `15`         | `15`     |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "id": 1, "company_id": 5, "status": "active" }
+  ],
+  "meta": {
+    "current_page": 1,
+    "last_page": 3,
+    "per_page": 15,
+    "total": 42
+  }
+}
+```
+
+---
+
+### 2. Show Enrollment
+
+```
+GET /api/v1/third-party/enrollments/{id}
+```
+
+Returns the details of a single enrollment including its insurance provider and company relationships.
+
+**URL Parameters**
+
+| Parameter | Type    | Required | Description       | Example |
+|-----------|---------|----------|-------------------|---------|
+| `id`      | integer | Yes      | The enrollment ID | `1`     |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": { "id": 1, "company_id": 5, "status": "active" }
+}
+```
+
+**Error Response `404`**
+
+```json
+{ "message": "No query results for model [Enrollment] 999" }
+```
+
+---
+
+### 3. List Principals
+
+```
+GET /api/v1/third-party/enrollments/{id}/principals
+```
+
+Returns a paginated list of enrolled principals (employees) belonging to the given enrollment.
+
+**URL Parameters**
+
+| Parameter | Type    | Required | Description       | Example |
+|-----------|---------|----------|-------------------|---------|
+| `id`      | integer | Yes      | The enrollment ID | `1`     |
+
+**Query Parameters**
+
+| Parameter           | Type    | Required | Description                                | Example    |
+|---------------------|---------|----------|--------------------------------------------|------------|
+| `enrollment_status` | string  | No       | Filter by principal's enrollment status    | `active`   |
+| `employee_id`       | string  | No       | Filter by employee ID                      | `EMP-0042` |
+| `per_page`          | integer | No       | Results per page — max `100`, default `20` | `20`       |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 10,
+      "enrollment_id": 1,
+      "employee_id": "EMP-0042",
+      "first_name": "John",
+      "last_name": "Doe"
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "last_page": 2,
+    "per_page": 20,
+    "total": 35
+  }
+}
+```
+
+---
+
+### 4. List Dependents
+
+```
+GET /api/v1/third-party/enrollments/{id}/principals/{principalId}/dependents
+```
+
+Returns all dependents registered under a specific principal within the given enrollment.
+
+**URL Parameters**
+
+| Parameter     | Type    | Required | Description                 | Example |
+|---------------|---------|----------|-----------------------------|---------|
+| `id`          | integer | Yes      | The enrollment ID           | `1`     |
+| `principalId` | integer | Yes      | The principal (enrollee) ID | `10`    |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "id": 20, "principal_id": 10, "first_name": "Jane", "last_name": "Doe" }
+  ],
+  "total": 2
+}
+```
+
+---
+
+### 5. Enrollment Summary
+
+```
+GET /api/v1/third-party/enrollments/{id}/summary
+```
+
+Returns quick statistics for an enrollment: total principals, total dependents, and a breakdown of principals grouped by `enrollment_status`.
+
+**URL Parameters**
+
+| Parameter | Type    | Required | Description       | Example |
+|-----------|---------|----------|-------------------|---------|
+| `id`      | integer | Yes      | The enrollment ID | `1`     |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": {
+    "enrollment": { "id": 1, "status": "active" },
+    "total_principals": 35,
+    "total_dependents": 12,
+    "by_status": {
+      "active": 30,
+      "pending": 5
+    }
+  }
+}
+```
+
+**Error Response `404`**
+
+```json
+{ "message": "No query results for model [Enrollment] 999" }
+```
+
+---
+
+### 6. Search Principals
+
+```
+GET /api/v1/third-party/principals/search
+```
+
+Searches principals (employees) across all enrollments. Results include each principal's dependents.
+
+> **At least one** of `employee_id`, `name`, or `birth_date` must be provided.
+
+**Query Parameters**
+
+| Parameter       | Type    | Required               | Description                                                | Example      |
+|-----------------|---------|------------------------|------------------------------------------------------------|--------------|
+| `employee_id`   | string  | Conditional (see note) | Exact match on employee ID                                 | `EMP-0042`   |
+| `name`          | string  | Conditional (see note) | Partial match on first, last, or middle name (min 2 chars) | `John`       |
+| `birth_date`    | string  | Conditional (see note) | Exact date match — format `YYYY-MM-DD`                     | `1990-05-14` |
+| `enrollment_id` | integer | No                     | Narrow search to a specific enrollment                     | `1`          |
+| `per_page`      | integer | No                     | Results per page — max `100`, default `20`                 | `20`         |
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 10,
+      "employee_id": "EMP-0042",
+      "first_name": "John",
+      "last_name": "Doe",
+      "dependents": []
+    }
+  ],
+  "meta": {
+    "current_page": 1,
+    "last_page": 1,
+    "per_page": 20,
+    "total": 1
+  }
+}
+```
+
+**Error Response `422`**
+
+```json
+{
+  "success": false,
+  "message": "Provide at least one search parameter: employee_id, name, or birth_date."
+}
+```
+
+---
+
+### Enrollment API — Error Reference
+
+| HTTP Status | Meaning                                              |
+|-------------|------------------------------------------------------|
+| `401`       | Unauthenticated — missing or invalid Bearer token    |
+| `403`       | Forbidden — token lacks `enrollment:read` permission |
+| `404`       | Record not found                                     |
+| `422`       | Validation failed — see `message` for details        |
+| `500`       | Internal server error                                |
+
