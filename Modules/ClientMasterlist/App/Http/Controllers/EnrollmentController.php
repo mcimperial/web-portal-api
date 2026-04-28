@@ -55,6 +55,7 @@ class EnrollmentController extends Controller
             'with_address' => 'nullable|boolean',
             'with_skip_hierarchy' => 'nullable|boolean',
             'export_type' => 'nullable|string',
+            'with_optout' => 'nullable|boolean',
             'status' => 'nullable|string',
         ]);
         // Only uppercase string fields, keep ids as is
@@ -168,6 +169,7 @@ class EnrollmentController extends Controller
             'with_address' => 'nullable|boolean',
             'with_skip_hierarchy' => 'nullable|boolean',
             'export_type' => 'nullable|string',
+            'with_optout' => 'nullable|boolean',
             'status' => 'nullable|string',
         ]);
         // Only uppercase string fields, keep ids as is

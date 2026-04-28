@@ -32,6 +32,7 @@ class Enrollment extends Model
         'dependent_mbl',
         'dependent_room_and_board',
         'export_type',
+        'with_optout',
         'status',
         'deleted_by',
     ];
