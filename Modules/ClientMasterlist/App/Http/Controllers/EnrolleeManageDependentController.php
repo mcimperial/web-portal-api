@@ -304,6 +304,7 @@ class EnrolleeManageDependentController extends Controller
         $errors = [];
 
         $dependents = $request->input('dependents', []);
+        $isDraft = (bool) $request->input('is_draft', false);
         // Get the employee_id of the principal enrollee
         $principal = Enrollee::with('healthInsurance')->find($enrolleeId);
         $employeeId = $principal ? $principal->employee_id : false;
@@ -322,7 +323,18 @@ class EnrolleeManageDependentController extends Controller
 
         foreach ($dependents as $i => $dep) {
             try {
-                $validated = validator($dep, [
+                // Use relaxed validation rules for draft saves
+                $validationRules = $isDraft ? [
+                    'employee_id' => 'sometimes|string|nullable',
+                    'first_name' => 'nullable|string',
+                    'last_name' => 'nullable|string',
+                    'middle_name' => 'nullable|string',
+                    'suffix' => 'nullable|string',
+                    'relation' => 'nullable|string',
+                    'birth_date' => 'nullable|date',
+                    'gender' => 'nullable|string',
+                    'marital_status' => 'nullable|string',
+                ] : [
                     'employee_id' => 'sometimes|string|nullable',
                     'first_name' => 'required|string',
                     'last_name' => 'required|string',
@@ -332,7 +344,9 @@ class EnrolleeManageDependentController extends Controller
                     'birth_date' => 'required|date',
                     'gender' => 'required|string',
                     'marital_status' => 'required|string',
-                ])->validate();
+                ];
+
+                $validated = validator($dep, $validationRules)->validate();
 
                 $validated['principal_id'] = $enrolleeId;
 
@@ -434,31 +448,48 @@ class EnrolleeManageDependentController extends Controller
             }
         }
 
-        // If all dependents processed successfully, update principal's enrollment_status to SUBMITTED
-        $oldStatus = $principal->enrollment_status;
-        $principal->enrollment_status = 'SUBMITTED';
-        $principal->save();
+        // Only update principal enrollment_status to SUBMITTED when not a draft save
+        if (!$isDraft) {
+            $oldStatus = $principal->enrollment_status;
+            $principal->enrollment_status = 'SUBMITTED';
+            $principal->save();
 
-        // Log the status change to SUBMITTED
-        $this->logAction(
-            'UPDATE',
-            $principal,
-            ['enrollment_status' => $oldStatus],
-            ['enrollment_status' => 'SUBMITTED'],
-            "Enrollment submitted by {$principal->first_name} {$principal->last_name}",
-            [
-                'enrollment_id' => $principal->enrollment_id,
-                'action' => 'enrollment_submitted',
-                'dependents_count' => count($dependents)
-            ]
-        );
+            // Log the status change to SUBMITTED
+            $this->logAction(
+                'UPDATE',
+                $principal,
+                ['enrollment_status' => $oldStatus],
+                ['enrollment_status' => 'SUBMITTED'],
+                "Enrollment submitted by {$principal->first_name} {$principal->last_name}",
+                [
+                    'enrollment_id' => $principal->enrollment_id,
+                    'action' => 'enrollment_submitted',
+                    'dependents_count' => count($dependents)
+                ]
+            );
 
-        $this->sendEmailNotification($principal->enrollment_id, $enrolleeId, $principal->email1);
+            $this->sendEmailNotification($principal->enrollment_id, $enrolleeId, $principal->email1);
+        } else {
+            // Log the draft save action
+            $this->logAction(
+                'UPDATE',
+                $principal,
+                [],
+                ['dependents_count' => count($dependents)],
+                "Draft dependents saved by {$principal->first_name} {$principal->last_name}",
+                [
+                    'enrollment_id' => $principal->enrollment_id,
+                    'action' => 'enrollment_draft_saved',
+                    'dependents_count' => count($dependents)
+                ]
+            );
+        }
 
         return response()->json([
-            'message' => 'Batch dependents processed',
+            'message' => $isDraft ? 'Draft dependents saved' : 'Batch dependents processed',
             'created' => $results,
-            'errors' => $errors
+            'errors' => $errors,
+            'is_draft' => $isDraft,
         ], count($errors) ? 207 : 201);
     }
 
