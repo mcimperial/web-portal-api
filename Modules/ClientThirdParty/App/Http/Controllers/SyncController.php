@@ -287,27 +287,30 @@ class SyncController extends Controller
                 'USD' => '$',
             ];
 
-            // Query the sync database for member data
+            // Query the sync database for member data (joined with companies for coverage guide)
             $memberData = DB::connection('mysql_sync')
                 ->table('masterlist')
-                ->where('member_id', strtoupper($memberId))
+                ->leftJoin('companies', 'masterlist.company_name', '=', 'companies.name')
+                ->where('masterlist.member_id', strtoupper($memberId))
                 ->get([
-                    'member_id as memberId',
-                    DB::raw("CONCAT(first_name, ' ', IFNULL(CONCAT(middle_name, '. '), ''), last_name) as name"),
-                    'company_name as company',
-                    'rb',
-                    'rbdep',
-                    'ismbl',
-                    'mbl',
-                    'preexist',
-                    'pemonth',
-                    'philhealth',
-                    'incepfrom',
-                    'incepto',
-                    'layer',
-                    'currency',
-                    'rb2',
-                    'rb3',
+                    'masterlist.member_id as memberId',
+                    DB::raw("CONCAT(masterlist.first_name, ' ', IFNULL(CONCAT(masterlist.middle_name, '. '), ''), masterlist.last_name) as name"),
+                    'masterlist.company_name as company',
+                    'masterlist.rb',
+                    'masterlist.rbdep',
+                    'masterlist.ismbl',
+                    'masterlist.mbl',
+                    'masterlist.preexist',
+                    'masterlist.pemonth',
+                    'masterlist.philhealth',
+                    'masterlist.incepfrom',
+                    'masterlist.incepto',
+                    'masterlist.layer',
+                    'masterlist.currency',
+                    'masterlist.rb2',
+                    'masterlist.rb3',
+                    'companies.has_coverage_guide',
+                    'companies.name as company_match_name',
                 ])
                 ->toArray();
 
@@ -378,6 +381,10 @@ class SyncController extends Controller
                     'philHealth' => ($data['philhealth'] ?? 0) ? 'Required' : 'Not Required',
                     'status' => ($data['incepto'] ?? '') < date('Y-m-d') ? 'Inactive' : 'Active',
                     'layer' => $data['layer'] ?? 0,
+                    'hasCoverageGuide' => $this->resolveCoverageGuide(
+                        $data['company_match_name'] ?? '',
+                        $data['has_coverage_guide'] ?? 0
+                    ),
                     'dateOfInquiry' => date('d-M-Y h:i A')
                 ];
             }
@@ -395,5 +402,17 @@ class SyncController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    private function resolveCoverageGuide(string $companyName, $hasCoverageGuide): bool
+    {
+        if (!(bool) $hasCoverageGuide) {
+            return false;
+        }
+
+        $isTest = strtoupper(trim($companyName)) === 'TEST';
+        $isTesting = filter_var(env('HEALTHCARE_PORTAL_TESTING', false), FILTER_VALIDATE_BOOLEAN);
+
+        return $isTesting ? $isTest : !$isTest;
     }
 }
