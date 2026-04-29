@@ -1293,14 +1293,26 @@ class SendNotificationController extends Controller
             return $person->certificate_number ?? '';
         };
 
+        // Helper to format name as Last Name, First Name, Middle Name
+        $formatName = function ($person) {
+            $lastName  = trim($person->last_name ?? '');
+            $firstName = trim($person->first_name ?? '');
+            $middleName = trim($person->middle_name ?? '');
+            $name = $lastName . ', ' . $firstName;
+            if ($middleName !== '') {
+                $name .= ' ' . $middleName;
+            }
+            return trim($name, ', ');
+        };
+
         // Prepare rows: principal first, then dependents
         $rows = [];
         // Principal
+        $certNum = $getCertificateNumber($enrollee);
         $rows[] = [
-            'relation' => 'PRINCIPAL',
-            'name' => trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
-            'certificate_number' => $getCertificateNumber($enrollee) ?? 'N/A',
-            'enrollment_status' => $enrollee->enrollment_status ?? '',
+            'member_type' => 'PRINCIPAL',
+            'name' => $formatName($enrollee),
+            'certificate_number' => !empty($certNum) ? $certNum : 'FOR-APPROVAL',
         ];
 
         // Dependents
@@ -1311,24 +1323,23 @@ class SendNotificationController extends Controller
                 if ($enrollmentStatus === 'SKIPPED' || $status === 'INACTIVE') {
                     continue;
                 }
+                $depCertNum = $getCertificateNumber($dep);
                 $rows[] = [
-                    'relation' => 'DEPENDENT',
-                    'name' => trim(($dep->first_name ?? '') . ' ' . ($dep->last_name ?? '')),
-                    'certificate_number' => $getCertificateNumber($dep) ?? 'N/A',
-                    'enrollment_status' => $dep->enrollment_status ?? 'N/A',
+                    'member_type' => 'DEPENDENT',
+                    'name' => $formatName($dep),
+                    'certificate_number' => !empty($depCertNum) ? $depCertNum : 'FOR-APPROVAL',
                 ];
             }
         }
 
         // Build HTML table
         $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
-        $html .= '<thead><tr style="background:#f3f3f3;"><th>Relation</th><th>Name</th><th>' . htmlspecialchars($certificateColumnHeader) . '</th><th>Status</th></tr></thead><tbody>';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Member Type</th><th>Name</th><th>' . htmlspecialchars($certificateColumnHeader) . '</th></tr></thead><tbody>';
         foreach ($rows as $row) {
             $html .= '<tr>';
-            $html .= '<td>' . htmlspecialchars($row['relation']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['member_type']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['certificate_number']) . '</td>';
-            $html .= '<td>' . htmlspecialchars($row['enrollment_status']) . '</td>';
             $html .= '</tr>';
         }
         $html .= '</tbody></table>';
