@@ -411,7 +411,7 @@ class SyncController extends Controller
         }
 
         $isTest = strtoupper(trim($companyName)) === 'TEST';
-        $isTesting = filter_var(env('HEALTHCARE_PORTAL_TESTING', false), FILTER_VALIDATE_BOOLEAN);
+        $isTesting = filter_var(config('app.healthcare_portal_testing', false), FILTER_VALIDATE_BOOLEAN);
 
         return $isTesting ? $isTest : !$isTest;
     }
