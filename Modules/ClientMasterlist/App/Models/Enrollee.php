@@ -48,6 +48,10 @@ class Enrollee extends Model
         'status',
     ];
 
+    protected $casts = [
+        'with_dependents' => 'boolean',
+    ];
+
     protected static function boot()
     {
         parent::boot();
