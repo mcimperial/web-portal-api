@@ -1293,25 +1293,15 @@ class SendNotificationController extends Controller
             return $person->certificate_number ?? '';
         };
 
-        // Helper to format name as Last Name, First Name, Middle Name
-        $formatName = function ($person) {
-            $lastName  = trim($person->last_name ?? '');
-            $firstName = trim($person->first_name ?? '');
-            $middleName = trim($person->middle_name ?? '');
-            $name = $lastName . ', ' . $firstName;
-            if ($middleName !== '') {
-                $name .= ' ' . $middleName;
-            }
-            return trim($name, ', ');
-        };
-
         // Prepare rows: principal first, then dependents
         $rows = [];
         // Principal
         $certNum = $getCertificateNumber($enrollee);
         $rows[] = [
-            'member_type' => 'PRINCIPAL',
-            'name' => $formatName($enrollee),
+            'member_type'        => 'PRINCIPAL',
+            'last_name'          => trim($enrollee->last_name ?? ''),
+            'first_name'         => trim($enrollee->first_name ?? ''),
+            'middle_name'        => trim($enrollee->middle_name ?? ''),
             'certificate_number' => !empty($certNum) ? $certNum : 'FOR-APPROVAL',
         ];
 
@@ -1325,8 +1315,10 @@ class SendNotificationController extends Controller
                 }
                 $depCertNum = $getCertificateNumber($dep);
                 $rows[] = [
-                    'member_type' => 'DEPENDENT',
-                    'name' => $formatName($dep),
+                    'member_type'        => 'DEPENDENT',
+                    'last_name'          => trim($dep->last_name ?? ''),
+                    'first_name'         => trim($dep->first_name ?? ''),
+                    'middle_name'        => trim($dep->middle_name ?? ''),
                     'certificate_number' => !empty($depCertNum) ? $depCertNum : 'FOR-APPROVAL',
                 ];
             }
@@ -1334,11 +1326,13 @@ class SendNotificationController extends Controller
 
         // Build HTML table
         $html = '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">';
-        $html .= '<thead><tr style="background:#f3f3f3;"><th>Member Type</th><th>Name</th><th>' . htmlspecialchars($certificateColumnHeader) . '</th></tr></thead><tbody>';
+        $html .= '<thead><tr style="background:#f3f3f3;"><th>Member Type</th><th>Last Name</th><th>First Name</th><th>Middle Name</th><th>' . htmlspecialchars($certificateColumnHeader) . '</th></tr></thead><tbody>';
         foreach ($rows as $row) {
             $html .= '<tr>';
             $html .= '<td>' . htmlspecialchars($row['member_type']) . '</td>';
-            $html .= '<td>' . htmlspecialchars($row['name']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['last_name']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['first_name']) . '</td>';
+            $html .= '<td>' . htmlspecialchars($row['middle_name']) . '</td>';
             $html .= '<td>' . htmlspecialchars($row['certificate_number']) . '</td>';
             $html .= '</tr>';
         }
