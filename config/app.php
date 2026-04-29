@@ -59,6 +59,8 @@ return [
 
     'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
 
+    'healthcare_portal_testing' => env('HEALTHCARE_PORTAL_TESTING', false),
+
     'asset_url' => env('ASSET_URL'),
 
     /*
