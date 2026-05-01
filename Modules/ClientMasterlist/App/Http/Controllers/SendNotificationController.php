@@ -1302,7 +1302,7 @@ class SendNotificationController extends Controller
             'last_name'          => trim($enrollee->last_name ?? ''),
             'first_name'         => trim($enrollee->first_name ?? ''),
             'middle_name'        => trim($enrollee->middle_name ?? ''),
-            'certificate_number' => !empty($certNum) ? $certNum : 'FOR-APPROVAL',
+            'certificate_number' => !empty($certNum) ? $certNum : 'PENDING',
         ];
 
         // Dependents
@@ -1319,7 +1319,7 @@ class SendNotificationController extends Controller
                     'last_name'          => trim($dep->last_name ?? ''),
                     'first_name'         => trim($dep->first_name ?? ''),
                     'middle_name'        => trim($dep->middle_name ?? ''),
-                    'certificate_number' => !empty($depCertNum) ? $depCertNum : 'FOR-APPROVAL',
+                    'certificate_number' => !empty($depCertNum) ? $depCertNum : 'PENDING',
                 ];
             }
         }
