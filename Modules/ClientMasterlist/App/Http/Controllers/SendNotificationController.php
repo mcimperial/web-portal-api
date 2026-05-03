@@ -636,6 +636,8 @@ class SendNotificationController extends Controller
         switch ($notificationType) {
             case 'APPROVED BY HMO (WELCOME EMAIL)':
                 return $this->getEnrolleesByStatus($enrollmentId, 'NC', 'APPROVED', $notification);
+            case 'APPROVED BY HMO W/ PENDING DEPS (WELCOME EMAIL)':
+                return $this->getEnrolleesApprovedWithPendingDepsNoCert($enrollmentId, $notification);
             case 'ENROLLMENT START (PENDING)':
                 return $this->getEnrolleesByStatus($enrollmentId, true, 'PENDING', $notification);
             case 'ENROLLMENT START W/OUT DEP (PENDING)':
@@ -805,6 +807,76 @@ class SendNotificationController extends Controller
     }
 
     /**
+     * Get enrollees that are APPROVED, have pending dependents (with_dependents = true),
+     * and do NOT yet have a certificate number assigned.
+     * Used for: APPROVED BY HMO W/ PENDING DEPS (WELCOME EMAIL)
+     */
+    private function getEnrolleesApprovedWithPendingDepsNoCert($enrollmentId = null, $notification = null)
+    {
+        if (!$enrollmentId) {
+            return [];
+        }
+
+        $dateRange = $this->calculateDateRangeFromSchedule($notification);
+
+        $enrollees = Enrollee::with(['healthInsurance'])
+            ->where('enrollment_id', $enrollmentId)
+            ->where('enrollment_status', 'APPROVED')
+            ->where('with_dependents', true)
+            ->where('status', 'ACTIVE')
+            ->whereNull('deleted_at')
+            ->where('updated_at', '>=', $dateRange['from'])
+            ->where('updated_at', '<=', $dateRange['to'])
+            ->whereHas('healthInsurance', function ($subQ) {
+                $subQ->where(function ($q) {
+                    $q->whereNull('certificate_number')
+                      ->orWhere('certificate_number', '');
+                });
+            })
+            ->get();
+
+        if ($enrollees->count() === 0) {
+            Log::info("APPROVED BY HMO W/ PENDING DEPS: No matching enrollees found for enrollment {$enrollmentId}");
+            return [];
+        }
+
+        $enrolleeIds = $enrollees->pluck('id')->toArray();
+
+        // Deduplicate: skip enrollees already notified with same type
+        $filteredIds = [];
+        foreach ($enrolleeIds as $enrolleeId) {
+            $existingLog = DB::table('cm_notification_logs')
+                ->where('notification_id', $notification->id)
+                ->where('principal_id', $enrolleeId)
+                ->where('status', 'SUCCESS')
+                ->where(function ($query) {
+                    $query->where('details', 'like', '%"enrollment_status":"APPROVED"%')
+                          ->orWhere('details', 'like', '%"enrollment_status":null%');
+                })
+                ->orderBy('date_sent', 'desc')
+                ->first();
+
+            if ($existingLog) {
+                Log::info("Skipping duplicate APPROVED W/ PENDING DEPS notification", [
+                    'principal_id' => $enrolleeId,
+                    'notification_id' => $notification->id,
+                ]);
+                continue;
+            }
+
+            $filteredIds[] = $enrolleeId;
+        }
+
+        Log::info("APPROVED BY HMO W/ PENDING DEPS: Found enrollees", [
+            'enrollment_id' => $enrollmentId,
+            'total' => count($enrolleeIds),
+            'after_dedup' => count($filteredIds),
+        ]);
+
+        return $filteredIds;
+    }
+
+    /**
      * Get enrollees by multiple statuses with a minimum days check since created_at
      * Used for WARNING NOTIFICATION to target enrollees in multiple statuses (PENDING or SUBMITTED-PERSONAL-INFORMATION)
      * Sends notification every 3 days from created_at (3, 6, 9, 12... days after creation)
@@ -939,6 +1011,7 @@ class SendNotificationController extends Controller
             // If no specific enrollee_id, check if notification type typically targets principals
             if (!$sentToPrincipal && $notification && in_array($notification->notification_type, [
                 'APPROVED BY HMO (WELCOME EMAIL)',
+                'APPROVED BY HMO W/ PENDING DEPS (WELCOME EMAIL)',
                 'ENROLLMENT START (PENDING)',
                 'ENROLLMENT START W/OUT DEP (PENDING)'
             ])) {
