@@ -86,6 +86,17 @@ class SendNotificationController extends Controller
 
                 $enrollees = $enrolleeQuery->get();
 
+                // For APPROVED BY HMO W/ PENDING DEPS, additionally filter out principals
+                // whose ALL non-skipped dependents are already completed (no PENDING deps)
+                if ($notification->notification_type === 'APPROVED BY HMO W/ PENDING DEPS (WELCOME EMAIL)') {
+                    $enrollees = $enrollees->filter(function ($enrollee) {
+                        return $enrollee->dependents()
+                            ->whereNull('deleted_at')
+                            ->whereIn('enrollment_status', ['PENDING', 'FOR-APPROVAL'])
+                            ->exists();
+                    });
+                }
+
                 if ($enrollees->count() > 0) {
                     // Collect their IDs
                     $enrolleeIds = $enrollees->pluck('id')->toArray();
