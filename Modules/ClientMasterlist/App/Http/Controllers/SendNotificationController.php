@@ -819,7 +819,7 @@ class SendNotificationController extends Controller
 
         $dateRange = $this->calculateDateRangeFromSchedule($notification);
 
-        $enrollees = Enrollee::with(['healthInsurance'])
+        $enrollees = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
             ->where('enrollment_id', $enrollmentId)
             ->where('enrollment_status', 'APPROVED')
             ->where('with_dependents', true)
@@ -827,11 +827,21 @@ class SendNotificationController extends Controller
             ->whereNull('deleted_at')
             ->where('updated_at', '>=', $dateRange['from'])
             ->where('updated_at', '<=', $dateRange['to'])
-            ->whereHas('healthInsurance', function ($subQ) {
-                $subQ->where(function ($q) {
-                    $q->whereNull('certificate_number')
-                      ->orWhere('certificate_number', '');
-                });
+            ->whereHas('dependents', function ($subQ) {
+                // Only non-skipped, non-deleted dependents
+                $subQ->whereNull('deleted_at')
+                     ->where('enrollment_status', '!=', 'SKIPPED')
+                     ->where(function ($q) {
+                         // Dependent has no health insurance record at all
+                         $q->whereDoesntHave('healthInsurance')
+                           // OR has a health insurance record but no certificate number
+                           ->orWhereHas('healthInsurance', function ($hiQ) {
+                               $hiQ->where(function ($q2) {
+                                   $q2->whereNull('certificate_number')
+                                      ->orWhere('certificate_number', '');
+                               });
+                           });
+                     });
             })
             ->get();
 
