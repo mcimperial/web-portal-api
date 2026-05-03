@@ -828,12 +828,19 @@ class SendNotificationController extends Controller
             ->where('updated_at', '>=', $dateRange['from'])
             ->where('updated_at', '<=', $dateRange['to'])
             ->whereHas('dependents', function ($subQ) {
+                // Only non-skipped, non-deleted dependents
                 $subQ->whereNull('deleted_at')
-                     ->whereHas('healthInsurance', function ($hiQ) {
-                         $hiQ->where(function ($q) {
-                             $q->whereNull('certificate_number')
-                               ->orWhere('certificate_number', '');
-                         });
+                     ->where('enrollment_status', '!=', 'SKIPPED')
+                     ->where(function ($q) {
+                         // Dependent has no health insurance record at all
+                         $q->whereDoesntHave('healthInsurance')
+                           // OR has a health insurance record but no certificate number
+                           ->orWhereHas('healthInsurance', function ($hiQ) {
+                               $hiQ->where(function ($q2) {
+                                   $q2->whereNull('certificate_number')
+                                      ->orWhere('certificate_number', '');
+                               });
+                           });
                      });
             })
             ->get();
