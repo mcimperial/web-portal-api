@@ -279,20 +279,36 @@ class ImportEnrolleeController extends Controller
             // Process dependents
             foreach ($dependentsByPrincipal as $employeeId => $dependents) {
                 $principal = $principalMap[$employeeId] ?? null;
-                if (!$principal) {
-                    Log::warning('Principal not found for dependents', ['employee_id' => $employeeId]);
-                    continue;
-                }
 
-                // Double-check that the principal still exists in the database
-                $principalExists = Enrollee::withTrashed()->find($principal->id);
-                if (!$principalExists) {
-                    Log::error('Principal exists in map but not in database', [
-                        'employee_id' => $employeeId,
-                        'principal_id' => $principal->id,
-                        'principal_object' => $principal->toArray()
-                    ]);
-                    continue;
+                // If principal was not in this import batch, try to find them in the database
+                if (!$principal) {
+                    $principal = Enrollee::withTrashed()
+                        ->where('employee_id', $employeeId)
+                        ->where('enrollment_id', $enrollmentId)
+                        ->first();
+
+                    if ($principal) {
+                        Log::info('Principal not in import batch but found in database', [
+                            'employee_id' => $employeeId,
+                            'principal_id' => $principal->id
+                        ]);
+                    } else {
+                        Log::warning('Principal not found in import batch or database, skipping dependents', [
+                            'employee_id' => $employeeId
+                        ]);
+                        continue;
+                    }
+                } else {
+                    // Double-check that the principal still exists in the database
+                    $principalExists = Enrollee::withTrashed()->find($principal->id);
+                    if (!$principalExists) {
+                        Log::error('Principal exists in map but not in database', [
+                            'employee_id' => $employeeId,
+                            'principal_id' => $principal->id,
+                            'principal_object' => $principal->toArray()
+                        ]);
+                        continue;
+                    }
                 }
 
                 $dependentsData = [];
