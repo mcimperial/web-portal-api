@@ -54,7 +54,7 @@ class ExportEnrolleesController extends Controller
                 'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
                 'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
                 'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
-                'maxicare_plan_code'
+                'maxicare_plan_code', 'maxicare_plan_description', 'maxicare_plan_type'
             ],
             'labels' => [
                 'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
@@ -68,7 +68,9 @@ class ExportEnrolleesController extends Controller
                 'maxicare_civil_status' => 'Civil Status', 'maxicare_birth_date' => 'Birth Date',
                 'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
                 'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
-                'maxicare_plan_code' => 'Plan Code'
+                'maxicare_plan_code' => 'Plan Code',
+                'maxicare_plan_description' => 'Plan Description',
+                'maxicare_plan_type' => 'Plan Type'
             ]
         ],
         'MAXI-ACVP' => [
@@ -667,6 +669,8 @@ class ExportEnrolleesController extends Controller
             'maxicare_date_hired', 'maxicare_date_regularization' => $entity->employment_start_date ?? '',
             'maxicare_philhealth' => 'R',
             'maxicare_plan_code' => $this->getPlanCode($entity, $isPrincipal, $principal, $enrollment),
+            'maxicare_plan_description' => $this->getMblDescription($entity, $isPrincipal, $principal),
+            'maxicare_plan_type' => $isPrincipal ? 'Principal' : 'Dependent',
             'maxicare_card_issuance' => 'Y',
             'maxicare_is_philhealth_member' => 'YES',
             'maxicare_philhealth_conditions' => '',
@@ -1096,6 +1100,32 @@ class ExportEnrolleesController extends Controller
         }
 
         return $percentMap[(string)$dependentPosition] ?? $percentMap['REST'] ?? $percentMap['1'] ?? 0;
+    }
+
+    // =========================================================================
+    // SCVP SPECIFIC HELPER METHODS
+    // =========================================================================
+
+    private function getMblDescription($entity, bool $isPrincipal, $principal): string
+    {
+        // Always read from the principal's health insurance
+        $source = $isPrincipal ? $entity : $principal;
+        $mbl = $source->healthInsurance->principal_mbl ?? null;
+
+        // Default to 300,000 if no value is set
+        if (empty($mbl)) {
+            $mbl = 300000;
+        }
+
+        $mblInt = intval($mbl);
+
+        // Express as "Xk" (e.g. 300000 → "300k", 150000 → "150k")
+        if ($mblInt >= 1000 && $mblInt % 1000 === 0) {
+            return ($mblInt / 1000) . 'k';
+        }
+
+        // Fallback: return the raw value for non-round-thousands amounts
+        return (string) $mblInt;
     }
 
     // =========================================================================
