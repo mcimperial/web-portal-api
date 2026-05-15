@@ -669,7 +669,7 @@ class ExportEnrolleesController extends Controller
             'maxicare_date_hired', 'maxicare_date_regularization' => $entity->employment_start_date ?? '',
             'maxicare_philhealth' => 'R',
             'maxicare_plan_code' => $this->getPlanCode($entity, $isPrincipal, $principal, $enrollment),
-            'maxicare_plan_description' => $this->getMblDescription($entity, $isPrincipal, $principal),
+            'maxicare_plan_description' => $this->getMblDescription($entity, $isPrincipal, $principal, $enrollment),
             'maxicare_plan_type' => $isPrincipal ? 'Principal' : 'Dependent',
             'maxicare_card_issuance' => 'Y',
             'maxicare_is_philhealth_member' => 'YES',
@@ -1106,15 +1106,15 @@ class ExportEnrolleesController extends Controller
     // SCVP SPECIFIC HELPER METHODS
     // =========================================================================
 
-    private function getMblDescription($entity, bool $isPrincipal, $principal): string
+    private function getMblDescription($entity, bool $isPrincipal, $principal, $enrollment = null): string
     {
         // Always read from the principal's health insurance
         $source = $isPrincipal ? $entity : $principal;
         $mbl = $source->healthInsurance->principal_mbl ?? null;
 
-        // Default to 300,000 if no value is set
+        // Fall back to the enrollment-level default MBL if not set on the individual record
         if (empty($mbl)) {
-            $mbl = 300000;
+            $mbl = $enrollment->principal_mbl ?? null;
         }
 
         $mblInt = intval($mbl);
