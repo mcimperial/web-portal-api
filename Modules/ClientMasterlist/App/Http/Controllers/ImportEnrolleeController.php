@@ -835,24 +835,13 @@ class ImportEnrolleeController extends Controller
                 $createdDependents[] = $dependent;
             }
 
-            // Only update the principal's updated_at timestamp if there were actual changes
-            if ($hasChanges) {
-                $enrollee->touch();
-                Log::info("Updated principal timestamp due to dependent changes", [
-                    'principal_id' => $enrolleeId,
-                    'dependents_processed' => count($createdDependents),
-                    'actual_changes' => true,
-                    'changes_count' => array_sum(array_map(function ($dep) {
-                        return isset($dep['has_changes']) ? ($dep['has_changes'] ? 1 : 0) : 1;
-                    }, $createdDependents))
-                ]);
-            } else {
-                Log::info("No dependent changes detected, principal timestamp not updated", [
-                    'principal_id' => $enrolleeId,
-                    'dependents_processed' => count($createdDependents),
-                    'all_dependents_unchanged' => true
-                ]);
-            }
+            // Always update the principal's updated_at timestamp when importing dependents
+            $enrollee->touch();
+            Log::info("Updated principal timestamp due to dependent import", [
+                'principal_id' => $enrolleeId,
+                'dependents_processed' => count($createdDependents),
+                'had_changes' => $hasChanges
+            ]);
 
             DB::commit();
             return response()->json(['message' => 'Dependents attached successfully', 'dependents' => $createdDependents], 200);
@@ -975,6 +964,24 @@ class ImportEnrolleeController extends Controller
                 }
 
                 $filtered['dependent_id'] = $dependentId;
+
+                // If certificate_number is present, set enrollment_status to APPROVED
+                // and populate coverage_start_date and certificate_date_issued if empty
+                if (!empty($filtered['certificate_number'])) {
+                    if (empty($filtered['coverage_start_date'])) {
+                        $filtered['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
+                    }
+                    if (empty($filtered['certificate_date_issued'])) {
+                        $filtered['certificate_date_issued'] = $filtered['coverage_start_date'];
+                    }
+                    $dependent->update(['enrollment_status' => 'APPROVED']);
+                    Log::info("Set dependent enrollment_status to APPROVED due to certificate_number", [
+                        'dependent_id' => $dependentId,
+                        'certificate_number' => $filtered['certificate_number'],
+                        'coverage_start_date' => $filtered['coverage_start_date'],
+                        'certificate_date_issued' => $filtered['certificate_date_issued']
+                    ]);
+                }
             }
 
             // Check for existing insurance by principal_id or dependent_id
