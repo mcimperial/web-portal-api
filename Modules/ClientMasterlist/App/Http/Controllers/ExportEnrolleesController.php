@@ -54,7 +54,7 @@ class ExportEnrolleesController extends Controller
                 'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
                 'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
                 'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
-                'maxicare_plan_code', 'maxicare_plan_description', 'maxicare_plan_type'
+                'maxicare_plan_code', //'maxicare_plan_description', 'maxicare_plan_type'
             ],
             'labels' => [
                 'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
@@ -69,8 +69,8 @@ class ExportEnrolleesController extends Controller
                 'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
                 'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
                 'maxicare_plan_code' => 'Plan Code',
-                'maxicare_plan_description' => 'Plan Description',
-                'maxicare_plan_type' => 'Plan Type'
+                //'maxicare_plan_description' => 'Plan Description',
+                //'maxicare_plan_type' => 'Plan Type'
             ]
         ],
         'MAXI-ACVP' => [
