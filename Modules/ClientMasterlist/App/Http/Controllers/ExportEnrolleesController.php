@@ -244,8 +244,7 @@ class ExportEnrolleesController extends Controller
                 
                 Log::info('Loading ALL dependents for skip detection');
             };
-        }
-
+        }  
         return $relationships;
     }
 

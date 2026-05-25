@@ -118,6 +118,35 @@ class EnrolleeManageDependentController extends Controller
         ]);
     }
 
+    public function updateAddress(Request $request, $uuid)
+    {
+        $enrollee = Enrollee::where('uuid', $uuid)->first();
+        if (!$enrollee) {
+            return response()->json(['message' => 'Enrollee not found'], 404);
+        }
+
+        $oldValues = $enrollee->toArray();
+
+        $validated = $request->validate([
+            'address' => 'nullable|string|max:1000',
+        ]);
+
+        $enrollee->fill($validated);
+        $enrollee->save();
+
+        // Log the update action
+        $this->logUpdate($enrollee, $oldValues, [
+            'action' => 'update_address',
+            'uuid'   => $uuid,
+        ]);
+
+        return response()->json([
+            'success'  => true,
+            'message'  => 'Address updated successfully',
+            'enrollee' => $enrollee,
+        ]);
+    }
+
     public function updateMaritalStatus(Request $request, $uuid)
     {
         $enrollee = Enrollee::with('enrollment.company')->where('uuid', $uuid)->first();
