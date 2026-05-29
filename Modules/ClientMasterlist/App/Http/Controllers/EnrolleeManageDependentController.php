@@ -400,10 +400,12 @@ class EnrolleeManageDependentController extends Controller
 
                     if ($dependentModel) {
 
-                        if ($isRenewal && !empty($dependentModel->healthInsurance->certificate_number)) {
-                            $validated['enrollment_status'] = 'FOR-APPROVAL';
-                        } else if (!$isRenewal) {
-                            $validated['enrollment_status'] = 'FOR-APPROVAL';
+                        if (empty($dep['is_skipping'])) {
+                            if ($isRenewal && !empty($dependentModel->healthInsurance->certificate_number)) {
+                                $validated['enrollment_status'] = 'FOR-APPROVAL';
+                            } else if (!$isRenewal) {
+                                $validated['enrollment_status'] = 'FOR-APPROVAL';
+                            }
                         }
 
                         $dependentModel->update($validated);
