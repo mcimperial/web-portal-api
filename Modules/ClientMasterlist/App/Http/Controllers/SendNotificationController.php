@@ -86,6 +86,20 @@ class SendNotificationController extends Controller
 
                 $enrollees = $enrolleeQuery->get();
 
+                // Apply plan_check filter: GOLD or PLATINUM checks the plan field in health_insurance
+                $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
+                if ($planCheck === 'GOLD') {
+                    $enrollees = $enrollees->filter(function ($enrollee) {
+                        $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                        return str_contains($plan, 'GOLD');
+                    });
+                } elseif ($planCheck === 'PLATINUM') {
+                    $enrollees = $enrollees->filter(function ($enrollee) {
+                        $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                        return str_contains($plan, 'PLATINUM');
+                    });
+                }
+
                 // For APPROVED BY HMO W/ PENDING DEPS, additionally filter out principals
                 // whose ALL non-skipped dependents are already completed (no PENDING deps)
                 if ($notification->notification_type === 'APPROVED BY HMO W/ PENDING DEPS (WELCOME EMAIL)') {

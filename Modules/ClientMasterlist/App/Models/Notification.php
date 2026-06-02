@@ -15,6 +15,7 @@ class Notification extends Model
     protected $fillable = [
         'enrollment_id',
         'notification_type',
+        'plan_check',
         'to',
         'cc',
         'bcc',
