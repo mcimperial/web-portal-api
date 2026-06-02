@@ -43,6 +43,7 @@ class NotificationController extends Controller
         $data = $request->validate([
             'enrollment_id' => 'required',
             'notification_type' => 'nullable|string',
+            'plan_check' => 'nullable|string',
             'to' => 'nullable|string',
             'cc' => 'nullable|string',
             'bcc' => 'nullable|string',
@@ -77,6 +78,7 @@ class NotificationController extends Controller
         $oldValues = $notification->toArray();
         $data = $request->validate([
             'notification_type' => 'nullable|string',
+            'plan_check' => 'nullable|string',
             'to' => 'nullable|string',
             'cc' => 'nullable|string',
             'bcc' => 'nullable|string',
