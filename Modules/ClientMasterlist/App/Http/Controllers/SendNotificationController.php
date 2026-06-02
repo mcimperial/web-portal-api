@@ -764,6 +764,22 @@ class SendNotificationController extends Controller
 
         $enrollees = $enrollees->get();
 
+        // Apply plan_check filter: only include enrollees whose health insurance plan matches
+        if ($notification) {
+            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
+            if ($planCheck === 'GOLD') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'GOLD');
+                });
+            } elseif ($planCheck === 'PLATINUM') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'PLATINUM');
+                });
+            }
+        }
+
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
 
@@ -859,6 +875,22 @@ class SendNotificationController extends Controller
             })
             ->get();
 
+        // Apply plan_check filter: only include enrollees whose health insurance plan matches
+        if ($notification) {
+            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
+            if ($planCheck === 'GOLD') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'GOLD');
+                });
+            } elseif ($planCheck === 'PLATINUM') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'PLATINUM');
+                });
+            }
+        }
+
         if ($enrollees->count() === 0) {
             Log::info("APPROVED BY HMO W/ PENDING DEPS: No matching enrollees found for enrollment {$enrollmentId}");
             return [];
@@ -933,6 +965,22 @@ class SendNotificationController extends Controller
         }
 
         $enrollees = $enrollees->get();
+
+        // Apply plan_check filter: only include enrollees whose health insurance plan matches
+        if ($notification) {
+            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
+            if ($planCheck === 'GOLD') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'GOLD');
+                });
+            } elseif ($planCheck === 'PLATINUM') {
+                $enrollees = $enrollees->filter(function ($enrollee) {
+                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
+                    return str_contains($plan, 'PLATINUM');
+                });
+            }
+        }
 
         if ($enrollees->count() > 0) {
             $filteredIds = [];
