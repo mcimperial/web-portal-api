@@ -325,6 +325,12 @@ class SendNotificationController extends Controller
         $messageBody  = $this->replaceVariables($notification->message, $replacements);
         $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
 
+        // Add password information to message body if CSV attachment contains password
+        if ($csvAttachment && isset($csvAttachment['password'])) {
+            $passwordNote = "\n\n---\nATTACHMENT PASSWORD: " . $csvAttachment['password'] . "\n---\n";
+            $messageBody .= $passwordNote;
+        }
+
         if (env('EMAIL_PROVIDER_SETTING') === 'infobip') {
             $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
 
@@ -1393,9 +1399,15 @@ class SendNotificationController extends Controller
                 ->where('status', 'ACTIVE')
                 ->whereNull('deleted_at');
             
-            // Apply date filters if provided
+            // Apply date filters based on coverage_start_date from health insurance
+            // Include employees from 1 day before the coverage_start_date to the date range
             if ($dateFrom && $dateTo) {
-                $query->whereBetween('updated_at', [$dateFrom, $dateTo]);
+                $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
+                    // Get employees whose coverage_start_date is between dateFrom and dateTo
+                    // Also include 1 day before dateFrom
+                    $oneDayBefore = \Carbon\Carbon::parse($dateFrom)->subDay()->format('Y-m-d H:i:s');
+                    $subQuery->whereBetween('coverage_start_date', [$oneDayBefore, $dateTo]);
+                });
             }
             
             // Apply dependents filter
@@ -1464,6 +1476,10 @@ class SendNotificationController extends Controller
 
             // Convert to CSV format
             $csvContent = '';
+            // Add password information at the top of CSV file (as metadata/comment line)
+            $csvContent .= "# PASSWORD PROTECTED - Password: " . $csvPassword . "\n";
+            $csvContent .= "# ============================================\n";
+            
             foreach ($csvData as $row) {
                 $csvContent .= $this->escapeCsvRow($row) . "\n";
             }
@@ -1480,6 +1496,7 @@ class SendNotificationController extends Controller
                 'filename' => $filename,
                 'enrollee_count' => $enrollees->count(),
                 'csv_path' => $tempCsvPath,
+                'password' => $csvPassword,
                 'password_length' => strlen($csvPassword)
             ]);
 
