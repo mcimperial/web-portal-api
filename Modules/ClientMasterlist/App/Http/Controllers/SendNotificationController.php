@@ -1370,8 +1370,7 @@ class SendNotificationController extends Controller
                 ->where('enrollment_id', $enrollmentId)
                 ->where('enrollment_status', $enrollmentStatus)
                 ->where('status', 'ACTIVE')
-                ->whereNull('deleted_at')
-                ->whereNull('principal_id'); // Only get principals, not dependents
+                ->whereNull('deleted_at');
             
             // Apply date filters if provided
             if ($dateFrom && $dateTo) {
