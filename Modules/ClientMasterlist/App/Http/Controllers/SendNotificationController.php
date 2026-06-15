@@ -1649,9 +1649,20 @@ class SendNotificationController extends Controller
 
             $companyId = $currentEnrollment->company_id;
             
+            Log::info("Multi-provider CSV generation started", [
+                'enrollment_id' => $enrollmentId,
+                'company_id' => $companyId,
+                'enrollment_status' => $enrollmentStatus,
+            ]);
+            
             // Get all enrollments for this company (regardless of provider)
             $enrollmentsForCompany = \Modules\ClientMasterlist\App\Models\Enrollment::where('company_id', $companyId)
                 ->get();
+                
+            Log::info("Found enrollments for company", [
+                'company_id' => $companyId,
+                'enrollment_count' => $enrollmentsForCompany->count(),
+            ]);
 
             $csvAttachments = [];
 
@@ -1675,20 +1686,20 @@ class SendNotificationController extends Controller
                     ->where('status', 'ACTIVE')
                     ->whereNull('deleted_at');
 
-                // Apply date filters based on certificate_date_issued from health insurance
-                if ($dateFrom && $dateTo) {
-                    $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
-                        $oneDayBefore = \Carbon\Carbon::parse($dateFrom)->subDay()->format('Y-m-d H:i:s');
-                        $subQuery->whereBetween('certificate_date_issued', [$oneDayBefore, $dateTo]);
-                    });
-                }
-
                 // Apply dependents filter
                 if ($withDependents !== 'NC') {
                     $query->where('with_dependents', $withDependents);
                 }
 
                 $enrollees = $query->get();
+                
+                // Log debug info
+                Log::info("Multi-provider: Fetched enrollees for provider", [
+                    'enrollment_id' => $enrollment->id,
+                    'provider' => $providerName,
+                    'enrollment_status' => $enrollmentStatus,
+                    'count' => $enrollees->count(),
+                ]);
 
                 // Skip this provider if no enrollees found
                 if ($enrollees->count() === 0) {
