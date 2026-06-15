@@ -549,7 +549,7 @@ class SendNotificationController extends Controller
 
             // Handle CSV generation for report notifications
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
-                // For APPROVED reports, just generate CSV but DON'T send to employees (internal use only)
+                // For APPROVED reports, generate CSV and send to TO, CC, and BCC recipients
                 if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
                     $csvAttachment = $this->generateCustomPasswordProtectedCsvAttachment($statusResult);
                     
@@ -560,17 +560,19 @@ class SendNotificationController extends Controller
                             'enrollment_id' => $notification->enrollment_id,
                             'filename' => $csvAttachment['name'],
                             'data_rows' => $csvAttachment['data_rows'],
-                            'status' => 'Generated (not sent to employees)',
-                            'password_protected' => true
+                            'status' => 'Generated and sent to TO, CC, and BCC recipients',
+                            'password_protected' => true,
+                            'to' => $notification->to,
+                            'cc' => $notification->cc,
+                            'bcc' => $notification->bcc
                         ]);
                         
-                        // Clean up temp files (CSV was generated but not sent)
-                        if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
-                            @unlink($csvAttachment['path']);
-                        }
-                        if (isset($csvAttachment['temp_path'])) {
-                            @unlink($csvAttachment['temp_path']);
-                        }
+                        // Store the CSV attachment info for use in email sending
+                        $request->merge([
+                            'csv_attachment' => $csvAttachment
+                        ]);
+
+                        $forCount = 1; // CSV notification counts as 1 valid recipient
                     } else {
                         // Clean up empty CSV file
                         if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
@@ -579,44 +581,43 @@ class SendNotificationController extends Controller
                         if ($csvAttachment && isset($csvAttachment['temp_path'])) {
                             @unlink($csvAttachment['temp_path']);
                         }
+
+                        // Skip sending this notification since there's no data
+                        continue;
                     }
-                    
-                    // Skip sending - just generation for internal use
-                    continue;
-                }
-                
-                // For other CSV reports (SUBMITTED), proceed with sending
-                $csvAttachment = $this->generateCsvAttachment(
-                    $statusResult
-                );
-
-                // Check if CSV has actual data rows before proceeding
-                if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
-                    // Store the CSV attachment info for use in email sending
-                    $request->merge([
-                        'csv_attachment' => $csvAttachment
-                    ]);
-
-                    $forCount = 1; // CSV notification counts as 1 valid recipient
-                } else if ($csvAttachment) {
-
-                    // Clean up empty CSV file
-                    if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
-                        @unlink($csvAttachment['path']);
-                    }
-
-                    if (isset($csvAttachment['temp_path'])) {
-                        @unlink($csvAttachment['temp_path']);
-                    }
-
-                    // Skip sending this notification since there's no data
-                    continue;
                 } else {
+                    // For other CSV reports (SUBMITTED), proceed with sending
+                    $csvAttachment = $this->generateCsvAttachment(
+                        $statusResult
+                    );
 
-                    // Skip this notification
-                    continue;
+                    // Check if CSV has actual data rows before proceeding
+                    if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                        // Store the CSV attachment info for use in email sending
+                        $request->merge([
+                            'csv_attachment' => $csvAttachment
+                        ]);
+
+                        $forCount = 1; // CSV notification counts as 1 valid recipient
+                    } else if ($csvAttachment) {
+
+                        // Clean up empty CSV file
+                        if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                            @unlink($csvAttachment['path']);
+                        }
+
+                        if (isset($csvAttachment['temp_path'])) {
+                            @unlink($csvAttachment['temp_path']);
+                        }
+
+                        // Skip sending this notification since there's no data
+                        continue;
+                    } else {
+
+                        // Skip this notification
+                        continue;
+                    }
                 }
-                // Handle specific enrollee IDs (e.g., for APPROVED BY HMO)
             } else if (!empty($statusResult) && is_array($statusResult) && isset($statusResult[0]) && is_numeric($statusResult[0])) {
                 $request->merge([
                     'to' => implode(',', $statusResult)
