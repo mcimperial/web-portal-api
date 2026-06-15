@@ -551,16 +551,17 @@ class SendNotificationController extends Controller
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
                 // For APPROVED reports, just generate CSV but DON'T send to employees (internal use only)
                 if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
-                    $csvAttachment = $this->generateCsvAttachment($statusResult);
+                    $csvAttachment = $this->generateCustomPasswordProtectedCsvAttachment($statusResult);
                     
                     if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
                         // Log that CSV was generated (for audit trail)
-                        Log::info("REPORT: ATTACHMENT (APPROVED) - CSV generated for internal use", [
+                        Log::info("REPORT: ATTACHMENT (APPROVED) - Custom CSV generated for internal use", [
                             'notification_id' => $notification->id,
                             'enrollment_id' => $notification->enrollment_id,
                             'filename' => $csvAttachment['name'],
                             'data_rows' => $csvAttachment['data_rows'],
-                            'status' => 'Generated (not sent to employees)'
+                            'status' => 'Generated (not sent to employees)',
+                            'password_protected' => true
                         ]);
                         
                         // Clean up temp files (CSV was generated but not sent)
