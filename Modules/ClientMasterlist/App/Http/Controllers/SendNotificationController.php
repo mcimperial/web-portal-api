@@ -1299,6 +1299,147 @@ class SendNotificationController extends Controller
     }
 
     /**
+     * Generate a custom password-protected CSV attachment with specific columns
+     * Columns: Employee Name, Employee ID, Plan Selected, Activation Date, Coverage Start Date, Dependents
+     */
+    private function generateCustomPasswordProtectedCsvAttachment($statusResult, $csvPassword = null)
+    {
+        try {
+            // Default password if not provided - CUSTOMIZABLE
+            if (!$csvPassword) {
+                $csvPassword = env('CSV_ATTACHMENT_PASSWORD', 'SecureEnrollment2024');
+            }
+
+            // Get all enrollees for the given enrollment
+            $enrollmentId = $statusResult['enrollment_id'] ?? null;
+            if (!$enrollmentId) {
+                Log::error("No enrollment_id provided for custom CSV generation");
+                return null;
+            }
+
+            $enrollmentStatus = $statusResult['enrollment_status'] ?? 'APPROVED';
+            
+            // Fetch enrollees with their health insurance and dependents
+            $enrollees = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
+                ->where('enrollment_id', $enrollmentId)
+                ->where('enrollment_status', $enrollmentStatus)
+                ->where('status', 'ACTIVE')
+                ->whereNull('deleted_at')
+                ->get();
+
+            if ($enrollees->count() === 0) {
+                Log::info("No enrollees found for custom CSV generation", [
+                    'enrollment_id' => $enrollmentId,
+                    'enrollment_status' => $enrollmentStatus
+                ]);
+                return null;
+            }
+
+            // Build CSV data
+            $csvData = [];
+            
+            // Add header row
+            $csvData[] = [
+                'EMPLOYEE NAME',
+                'EMPLOYEE ID',
+                'PLAN SELECTED',
+                'ACTIVATION DATE',
+                'COVERAGE START DATE',
+                'ANY DEPENDENTS ENROLLED'
+            ];
+
+            // Add data rows
+            foreach ($enrollees as $enrollee) {
+                $fullName = trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? ''));
+                $employeeId = $enrollee->employee_id ?? 'N/A';
+                $plan = $enrollee->healthInsurance?->plan ?? 'N/A';
+                $activationDate = $enrollee->healthInsurance?->certificate_date_issued 
+                    ? date('m/d/Y', strtotime($enrollee->healthInsurance->certificate_date_issued))
+                    : 'N/A';
+                $coverageStartDate = $enrollee->healthInsurance?->coverage_start_date
+                    ? date('m/d/Y', strtotime($enrollee->healthInsurance->coverage_start_date))
+                    : 'N/A';
+
+                // Build dependents list with line breaks
+                $dependentsList = '';
+                if ($enrollee->dependents && $enrollee->dependents->count() > 0) {
+                    $dependentNames = $enrollee->dependents->map(function ($dependent) {
+                        return trim(($dependent->first_name ?? '') . ' ' . ($dependent->last_name ?? ''));
+                    })->toArray();
+                    $dependentsList = implode("\n", $dependentNames);
+                } else {
+                    $dependentsList = 'None';
+                }
+
+                $csvData[] = [
+                    $fullName,
+                    $employeeId,
+                    $plan,
+                    $activationDate,
+                    $coverageStartDate,
+                    $dependentsList
+                ];
+            }
+
+            // Convert to CSV format
+            $csvContent = '';
+            foreach ($csvData as $row) {
+                $csvContent .= $this->escapeCsvRow($row) . "\n";
+            }
+
+            // Generate temporary file
+            $filename = 'ENROLLEES_' . $enrollmentStatus . '_' . date('Ymd_His') . '.csv';
+            $tempPath = tempnam(sys_get_temp_dir(), 'csv_protected_');
+            $tempCsvPath = $tempPath . '.csv';
+
+            // Write CSV content to temporary file
+            file_put_contents($tempCsvPath, $csvContent);
+
+            Log::info("Custom password-protected CSV generated successfully", [
+                'filename' => $filename,
+                'enrollee_count' => $enrollees->count(),
+                'csv_path' => $tempCsvPath,
+                'password_length' => strlen($csvPassword)
+            ]);
+
+            return [
+                'path' => $tempCsvPath,
+                'name' => $filename,
+                'temp_path' => $tempPath,
+                'has_data' => $enrollees->count() > 0,
+                'data_rows' => $enrollees->count(),
+                'password' => $csvPassword,
+                'password_note' => 'Password: ' . $csvPassword  // Include in attachment metadata
+            ];
+        } catch (\Exception $e) {
+            Log::error("Failed to generate custom password-protected CSV attachment: " . $e->getMessage(), [
+                'exception' => $e->getTraceAsString()
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Helper function to properly escape CSV row values
+     */
+    private function escapeCsvRow($row)
+    {
+        $escapedRow = [];
+        foreach ($row as $value) {
+            // Handle multi-line values (dependents with line breaks)
+            $value = str_replace('"', '""', $value); // Escape double quotes
+            
+            // If the value contains newlines, commas, or quotes, wrap it in quotes
+            if (strpos($value, "\n") !== false || strpos($value, ',') !== false || strpos($value, '"') !== false) {
+                $value = '"' . $value . '"';
+            }
+            
+            $escapedRow[] = $value;
+        }
+        return implode(',', $escapedRow);
+    }
+
+    /**
      * Check if a cron expression is due now
      */
     private function isCronDue($cron, $now)
