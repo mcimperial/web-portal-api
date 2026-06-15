@@ -252,6 +252,7 @@ class SendNotificationController extends Controller
     /**
      * Send a single notification email (default path)
      * In single mode: send one email to all recipients in the TO array (everyone sees all addresses)
+     * Supports multiple provider attachments: generates separate CSVs for each provider per company
      */
     private function sendSingleEmail($data, $notification)
     {
@@ -298,41 +299,47 @@ class SendNotificationController extends Controller
         $placeholderMessage = $data['placeholder_message'] ?? null;
         
         // Add CSV attachment if provided
+        $csvAttachments = []; // Array to support multiple provider attachments for APPROVED only
         $csvAttachment = $data['csv_attachment'] ?? null;
         
-        // Generate CSV attachment automatically for specific notification types if not already provided
-        if (!$csvAttachment && !$placeholderMessage && in_array($notification->notification_type, ['REPORT: ATTACHMENT (SUBMITTED)', 'REPORT: ATTACHMENT (APPROVED)'])) {
+        // MULTI-PROVIDER FEATURE: Only for REPORT: ATTACHMENT (APPROVED)
+        // Generates separate CSVs for each insurance provider per company in a single email
+        if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)' && !$csvAttachment && !$placeholderMessage) {
             $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
             
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
-                // Use custom password-protected CSV for APPROVED reports
-                if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
-                    $csvAttachment = $this->generateCustomPasswordProtectedCsvAttachment($statusResult);
-                } else {
-                    // Use standard CSV for SUBMITTED reports
-                    $csvAttachment = $this->generateCsvAttachment($statusResult);
-                }
+                // Generate separate CSVs for each provider per company
+                $csvAttachments = $this->generateMultiProviderCsvAttachments($statusResult, $notification);
                 
-                // Only proceed if CSV has actual data
-                if (!($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data'])) {
-                    // Clean up empty CSV file
-                    if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                // If no valid attachments with data, set placeholder message
+                if (empty($csvAttachments)) {
+                    $placeholderMessage = 'THERE ARE NO EMPLOYEES FOR DECLARATION TODAY.';
+                }
+            }
+        }
+        // SUBMITTED reports use the standard single attachment function
+        else if ($notification->notification_type === 'REPORT: ATTACHMENT (SUBMITTED)' && !$csvAttachment && !$placeholderMessage) {
+            $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+            
+            if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                // Use standard CSV generation for SUBMITTED reports (single attachment per provider)
+                $csvAttachment = $this->generateCsvAttachment($statusResult);
+                
+                if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                    $csvAttachments = [$csvAttachment]; // Wrap in array for consistent handling
+                } else if ($csvAttachment) {
+                    // Clean up if no data
+                    if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
                         @unlink($csvAttachment['path']);
                     }
-                    if ($csvAttachment && isset($csvAttachment['temp_path'])) {
+                    if (isset($csvAttachment['temp_path'])) {
                         @unlink($csvAttachment['temp_path']);
                     }
-                    if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
+                    if (isset($csvAttachment['temp_zip'])) {
                         @unlink($csvAttachment['temp_zip']);
                     }
-                    if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
+                    if (isset($csvAttachment['temp_csv'])) {
                         @unlink($csvAttachment['temp_csv']);
-                    }
-                    $csvAttachment = null;
-                    
-                    // Set placeholder message when no data available for APPROVED reports
-                    if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
-                        $placeholderMessage = 'THERE ARE NO EMPLOYEES FOR DECLARATION TODAY.';
                     }
                 }
             }
@@ -355,13 +362,15 @@ class SendNotificationController extends Controller
             $tempFiles = [];
             $infobipAttachments = [];
 
-            // Handle CSV attachment first (skip if placeholder message)
-            if ($csvAttachment && !$placeholderMessage) {
-                $tempFiles[] = $csvAttachment['path'];
-                $infobipAttachments[] = [
-                    'path' => $csvAttachment['path'],
-                    'name' => $csvAttachment['name']
-                ];
+            // Handle multiple CSV attachments (one per provider) (skip if placeholder message)
+            if (!empty($csvAttachments) && !$placeholderMessage) {
+                foreach ($csvAttachments as $csv) {
+                    $tempFiles[] = $csv['path'];
+                    $infobipAttachments[] = [
+                        'path' => $csv['path'],
+                        'name' => $csv['name']
+                    ];
+                }
             }
 
             foreach ($attachmentModels as $att) {
@@ -414,15 +423,20 @@ class SendNotificationController extends Controller
                 @unlink($tmp);
             }
 
-            // Clean up attachment temp files
-            if ($csvAttachment && isset($csvAttachment['temp_path'])) {
-                @unlink($csvAttachment['temp_path']);
-            }
-            if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
-                @unlink($csvAttachment['temp_zip']);
-            }
-            if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
-                @unlink($csvAttachment['temp_csv']);
+            // Clean up attachment temp files for multiple CSVs
+            foreach ($csvAttachments as $csv) {
+                if (isset($csv['path']) && file_exists($csv['path'])) {
+                    @unlink($csv['path']);
+                }
+                if (isset($csv['temp_path'])) {
+                    @unlink($csv['temp_path']);
+                }
+                if (isset($csv['temp_zip'])) {
+                    @unlink($csv['temp_zip']);
+                }
+                if (isset($csv['temp_csv'])) {
+                    @unlink($csv['temp_csv']);
+                }
             }
 
             if (!$result) {
@@ -441,7 +455,7 @@ class SendNotificationController extends Controller
             // Send SMS notification
             $this->sendSmsNotification($data, $notification);
         } else {
-            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment, $placeholderMessage) {
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachments, $placeholderMessage) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -463,26 +477,30 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
-                // Add CSV attachment if provided (not placeholder message)
-                if ($csvAttachment && !$placeholderMessage) {
-                    $message->attach($csvAttachment['path'], [
-                        'as' => $csvAttachment['name'],
-                        'mime' => 'application/zip'
-                    ]);
+                // Add multiple CSV attachments if provided (not placeholder message)
+                if (!empty($csvAttachments) && !$placeholderMessage) {
+                    foreach ($csvAttachments as $csvAttachment) {
+                        $message->attach($csvAttachment['path'], [
+                            'as' => $csvAttachment['name'],
+                            'mime' => 'application/zip'
+                        ]);
+                    }
                 }
             });
 
             // Clean up attachment temp files for Laravel Mail
-            if ($csvAttachment) {
-                @unlink($csvAttachment['path']);
-                if (isset($csvAttachment['temp_path'])) {
-                    @unlink($csvAttachment['temp_path']);
+            foreach ($csvAttachments as $csv) {
+                if (isset($csv['path']) && file_exists($csv['path'])) {
+                    @unlink($csv['path']);
                 }
-                if (isset($csvAttachment['temp_zip'])) {
-                    @unlink($csvAttachment['temp_zip']);
+                if (isset($csv['temp_path'])) {
+                    @unlink($csv['temp_path']);
                 }
-                if (isset($csvAttachment['temp_csv'])) {
-                    @unlink($csvAttachment['temp_csv']);
+                if (isset($csv['temp_zip'])) {
+                    @unlink($csv['temp_zip']);
+                }
+                if (isset($csv['temp_csv'])) {
+                    @unlink($csv['temp_csv']);
                 }
             }
 
@@ -1600,6 +1618,204 @@ class SendNotificationController extends Controller
                 'exception' => $e->getTraceAsString()
             ]);
             return null;
+        }
+    }
+
+    /**
+     * Generate separate CSV attachments for each insurance provider per company
+     * For example: Company "Deel" with providers "Maxicare" and "Philcare" will generate 2 separate CSVs
+     * This is useful when a company has multiple insurance providers
+     */
+    private function generateMultiProviderCsvAttachments($statusResult, $notification = null)
+    {
+        try {
+            $enrollmentId = $statusResult['enrollment_id'] ?? null;
+            if (!$enrollmentId) {
+                Log::error("No enrollment_id provided for multi-provider CSV generation");
+                return [];
+            }
+
+            $enrollmentStatus = $statusResult['enrollment_status'] ?? 'APPROVED';
+            $withDependents = $statusResult['with_dependents'] ?? true;
+            $dateFrom = $statusResult['date_from'] ?? null;
+            $dateTo = $statusResult['date_to'] ?? null;
+
+            // Get all enrollments for the same company with different providers
+            $currentEnrollment = \Modules\ClientMasterlist\App\Models\Enrollment::find($enrollmentId);
+            if (!$currentEnrollment) {
+                Log::error("Enrollment not found", ['enrollment_id' => $enrollmentId]);
+                return [];
+            }
+
+            $companyId = $currentEnrollment->company_id;
+            
+            // Get all enrollments for this company (regardless of provider)
+            $enrollmentsForCompany = \Modules\ClientMasterlist\App\Models\Enrollment::where('company_id', $companyId)
+                ->get();
+
+            $csvAttachments = [];
+
+            // For each enrollment (provider) in the company, generate a separate CSV
+            foreach ($enrollmentsForCompany as $enrollment) {
+                // Skip if enrollment is inactive
+                if ($enrollment->status === 'INACTIVE') {
+                    continue;
+                }
+
+                // Get insurance provider name
+                $providerName = 'UNKNOWN';
+                if ($enrollment->insuranceProvider) {
+                    $providerName = strtoupper($enrollment->insuranceProvider->title ?? 'UNKNOWN');
+                }
+
+                // Fetch enrollees for this specific enrollment (provider)
+                $query = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
+                    ->where('enrollment_id', $enrollment->id)
+                    ->where('enrollment_status', $enrollmentStatus)
+                    ->where('status', 'ACTIVE')
+                    ->whereNull('deleted_at');
+
+                // Apply date filters based on certificate_date_issued from health insurance
+                if ($dateFrom && $dateTo) {
+                    $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
+                        $oneDayBefore = \Carbon\Carbon::parse($dateFrom)->subDay()->format('Y-m-d H:i:s');
+                        $subQuery->whereBetween('certificate_date_issued', [$oneDayBefore, $dateTo]);
+                    });
+                }
+
+                // Apply dependents filter
+                if ($withDependents !== 'NC') {
+                    $query->where('with_dependents', $withDependents);
+                }
+
+                $enrollees = $query->get();
+
+                // Skip this provider if no enrollees found
+                if ($enrollees->count() === 0) {
+                    Log::info("No enrollees found for provider CSV generation", [
+                        'enrollment_id' => $enrollment->id,
+                        'provider' => $providerName,
+                        'enrollment_status' => $enrollmentStatus,
+                    ]);
+                    continue;
+                }
+
+                // Build CSV data for this provider
+                $csvData = [];
+
+                // Add header row
+                $csvData[] = [
+                    'EMPLOYEE NAME',
+                    'EMPLOYEE ID',
+                    'PLAN SELECTED',
+                    'CERTIFICATE NUMBER',
+                    'ACTIVATION DATE',
+                    'COVERAGE START DATE',
+                    'ANY DEPENDENTS ENROLLED'
+                ];
+
+                // Add data rows
+                foreach ($enrollees as $enrollee) {
+                    $fullName = trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? ''));
+                    $employeeId = $enrollee->employee_id ?? 'N/A';
+                    $plan = $enrollee->healthInsurance?->plan ?? 'N/A';
+                    $certificateNumber = $enrollee->healthInsurance?->certificate_number ?? 'N/A';
+                    $activationDate = $enrollee->healthInsurance?->certificate_date_issued
+                        ? date('m/d/Y', strtotime($enrollee->healthInsurance->certificate_date_issued))
+                        : 'N/A';
+                    $coverageStartDate = $enrollee->healthInsurance?->coverage_start_date
+                        ? date('m/d/Y', strtotime($enrollee->healthInsurance->coverage_start_date))
+                        : 'N/A';
+
+                    // Build dependents list with line breaks
+                    $dependentsList = '';
+                    if ($enrollee->dependents && $enrollee->dependents->count() > 0) {
+                        $dependentNames = $enrollee->dependents->map(function ($dependent) {
+                            return trim(($dependent->first_name ?? '') . ' ' . ($dependent->last_name ?? ''));
+                        })->toArray();
+                        $dependentsList = implode("\n", $dependentNames);
+                    } else {
+                        $dependentsList = 'None';
+                    }
+
+                    $csvData[] = [
+                        $fullName,
+                        $employeeId,
+                        $plan,
+                        $certificateNumber,
+                        $activationDate,
+                        $coverageStartDate,
+                        $dependentsList
+                    ];
+                }
+
+                // Convert to CSV format
+                $csvContent = '';
+                foreach ($csvData as $row) {
+                    $csvContent .= $this->escapeCsvRow($row) . "\n";
+                }
+
+                // Generate temporary file with provider name in filename
+                $filename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '_' . date('Ymd_His') . '.csv';
+                $tempPath = tempnam(sys_get_temp_dir(), 'csv_provider_');
+                $tempCsvPath = $tempPath . '.csv';
+
+                // Write CSV content to temporary file
+                file_put_contents($tempCsvPath, $csvContent);
+
+                // Create a password-protected ZIP file containing the CSV
+                $tempZipPath = $tempPath . '.zip';
+                $zip = new \ZipArchive();
+
+                if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
+                    // Add CSV file to ZIP
+                    $zip->addFile($tempCsvPath, $filename);
+
+                    // Set password protection (requires ZipArchive::setEncryptionName)
+                    if (method_exists($zip, 'setEncryptionName')) {
+                        $csvPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+                        $zip->setEncryptionName($filename, \ZipArchive::EM_AES_256, $csvPassword);
+                    }
+                    $zip->close();
+
+                    // Use the ZIP file as the attachment instead
+                    $attachmentPath = $tempZipPath;
+                    $attachmentName = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '_' . date('Ymd_His') . '.zip';
+
+                    // Delete the temporary CSV file since it's now in the ZIP
+                    @unlink($tempCsvPath);
+                } else {
+                    // Fallback: if ZIP encryption fails, just use the plain CSV
+                    $attachmentPath = $tempCsvPath;
+                    $attachmentName = $filename;
+                }
+
+                $csvAttachments[] = [
+                    'path' => $attachmentPath,
+                    'name' => $attachmentName,
+                    'temp_path' => $tempPath,
+                    'temp_zip' => $tempZipPath ?? null,
+                    'temp_csv' => $tempCsvPath,
+                    'has_data' => $enrollees->count() > 0,
+                    'data_rows' => $enrollees->count(),
+                    'provider' => $providerName,
+                    'enrollment_id' => $enrollment->id
+                ];
+
+                Log::info("Multi-provider CSV attachment generated successfully", [
+                    'filename' => $attachmentName,
+                    'provider' => $providerName,
+                    'enrollee_count' => $enrollees->count(),
+                    'attachment_path' => $attachmentPath,
+                ]);
+            }
+
+            return $csvAttachments;
+        } catch (\Exception $e) {
+            Log::error("Failed to generate multi-provider CSV attachments: " . $e->getMessage(), [
+                'exception' => $e->getTraceAsString()
+            ]);
+            return [];
         }
     }
 
