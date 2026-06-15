@@ -1458,14 +1458,14 @@ class SendNotificationController extends Controller
                 ->where('status', 'ACTIVE')
                 ->whereNull('deleted_at');
             
-            // Apply date filters based on coverage_start_date from health insurance
-            // Include employees from 1 day before the coverage_start_date to the date range
+            // Apply date filters based on certificate_date_issued from health insurance
+            // Include employees from 1 day before the certificate_date_issued to the date range
             if ($dateFrom && $dateTo) {
                 $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
-                    // Get employees whose coverage_start_date is between dateFrom and dateTo
+                    // Get employees whose certificate_date_issued is between dateFrom and dateTo
                     // Also include 1 day before dateFrom
                     $oneDayBefore = \Carbon\Carbon::parse($dateFrom)->subDay()->format('Y-m-d H:i:s');
-                    $subQuery->whereBetween('coverage_start_date', [$oneDayBefore, $dateTo]);
+                    $subQuery->whereBetween('certificate_date_issued', [$oneDayBefore, $dateTo]);
                 });
             }
             
