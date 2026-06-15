@@ -1610,8 +1610,8 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Generate separate CSV attachments for each insurance provider per company
-     * For example: Company "Deel" with providers "Maxicare" and "Philcare" will generate 2 separate CSVs
+     * Generate a single ZIP attachment containing separate CSVs for each insurance provider per company
+     * For example: Company "Deel" with providers "Maxicare" and "Philcare" will generate 1 ZIP containing 2 CSVs
      * This is useful when a company has multiple insurance providers
      */
     private function generateMultiProviderCsvAttachments($statusResult, $notification = null)
@@ -1652,9 +1652,11 @@ class SendNotificationController extends Controller
                 'enrollment_count' => $enrollmentsForCompany->count(),
             ]);
 
-            $csvAttachments = [];
+            // Collect CSV files to add to the combined ZIP
+            $csvFilesToZip = [];
+            $tempFilesForCleanup = [];
 
-            // For each enrollment (provider) in the company, generate a separate CSV
+            // For each enrollment (provider) in the company, generate a CSV
             foreach ($enrollmentsForCompany as $enrollment) {
                 // Skip if enrollment is inactive
                 if ($enrollment->status === 'INACTIVE') {
@@ -1673,6 +1675,18 @@ class SendNotificationController extends Controller
                     ->where('enrollment_status', $enrollmentStatus)
                     ->where('status', 'ACTIVE')
                     ->whereNull('deleted_at');
+
+                // Apply date range filter from schedule (yesterday's time to today's time)
+                if ($dateFrom && $dateTo) {
+                    $query->where('updated_at', '>=', $dateFrom)
+                          ->where('updated_at', '<=', $dateTo);
+                    
+                    Log::info("Applying date range filter", [
+                        'date_from' => $dateFrom,
+                        'date_to' => $dateTo,
+                        'enrollment_id' => $enrollment->id,
+                    ]);
+                }
 
                 // Apply dependents filter
                 if ($withDependents !== 'NC') {
@@ -1755,61 +1769,98 @@ class SendNotificationController extends Controller
                 }
 
                 // Generate temporary file with provider name in filename
-                $filename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '_' . date('Ymd_His') . '.csv';
+                $filename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.csv';
                 $tempPath = tempnam(sys_get_temp_dir(), 'csv_provider_');
                 $tempCsvPath = $tempPath . '.csv';
 
                 // Write CSV content to temporary file
                 file_put_contents($tempCsvPath, $csvContent);
 
-                // Create a password-protected ZIP file containing the CSV
-                $tempZipPath = $tempPath . '.zip';
-                $zip = new \ZipArchive();
-
-                if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
-                    // Add CSV file to ZIP
-                    $zip->addFile($tempCsvPath, $filename);
-
-                    // Set password protection (requires ZipArchive::setEncryptionName)
-                    if (method_exists($zip, 'setEncryptionName')) {
-                        $csvPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
-                        $zip->setEncryptionName($filename, \ZipArchive::EM_AES_256, $csvPassword);
-                    }
-                    $zip->close();
-
-                    // Use the ZIP file as the attachment instead
-                    $attachmentPath = $tempZipPath;
-                    $attachmentName = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '_' . date('Ymd_His') . '.zip';
-
-                    // Delete the temporary CSV file since it's now in the ZIP
-                    @unlink($tempCsvPath);
-                } else {
-                    // Fallback: if ZIP encryption fails, just use the plain CSV
-                    $attachmentPath = $tempCsvPath;
-                    $attachmentName = $filename;
-                }
-
-                $csvAttachments[] = [
-                    'path' => $attachmentPath,
-                    'name' => $attachmentName,
-                    'temp_path' => $tempPath,
-                    'temp_zip' => $tempZipPath ?? null,
-                    'temp_csv' => $tempCsvPath,
-                    'has_data' => $enrollees->count() > 0,
-                    'data_rows' => $enrollees->count(),
-                    'provider' => $providerName,
-                    'enrollment_id' => $enrollment->id
-                ];
-
-                Log::info("Multi-provider CSV attachment generated successfully", [
-                    'filename' => $attachmentName,
+                // Store for later addition to combined ZIP
+                $csvFilesToZip[] = [
+                    'path' => $tempCsvPath,
+                    'name' => $filename,
                     'provider' => $providerName,
                     'enrollee_count' => $enrollees->count(),
-                    'attachment_path' => $attachmentPath,
+                ];
+
+                $tempFilesForCleanup[] = $tempCsvPath;
+
+                Log::info("Multi-provider CSV prepared for combined ZIP", [
+                    'filename' => $filename,
+                    'provider' => $providerName,
+                    'enrollee_count' => $enrollees->count(),
                 ]);
             }
 
-            return $csvAttachments;
+            // If no CSVs were generated, return empty
+            if (empty($csvFilesToZip)) {
+                Log::info("No enrollees found across all providers, skipping ZIP creation");
+                return [];
+            }
+
+            // Create a single password-protected ZIP file containing all provider CSVs
+            $csvPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+            $tempPath = tempnam(sys_get_temp_dir(), 'csv_combined_');
+            $tempZipPath = $tempPath . '.zip';
+            
+            $zip = new \ZipArchive();
+
+            if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
+                // Add all CSV files to the single ZIP
+                foreach ($csvFilesToZip as $csvFile) {
+                    $zip->addFile($csvFile['path'], $csvFile['name']);
+
+                    // Set password protection on each file
+                    if (method_exists($zip, 'setEncryptionName')) {
+                        $zip->setEncryptionName($csvFile['name'], \ZipArchive::EM_AES_256, $csvPassword);
+                    }
+
+                    Log::info("Added CSV to combined ZIP", [
+                        'filename' => $csvFile['name'],
+                        'provider' => $csvFile['provider'],
+                    ]);
+                }
+                $zip->close();
+
+                // Generate combined ZIP attachment name
+                $attachmentName = 'ENROLLEES_' . $enrollmentStatus . '_' . date('Ymd_His') . '.zip';
+
+                Log::info("Combined ZIP attachment created successfully", [
+                    'filename' => $attachmentName,
+                    'total_providers' => count($csvFilesToZip),
+                    'total_enrollees' => array_sum(array_column($csvFilesToZip, 'enrollee_count')),
+                    'attachment_path' => $tempZipPath,
+                ]);
+
+                // Cleanup temporary CSV files
+                foreach ($tempFilesForCleanup as $tempFile) {
+                    @unlink($tempFile);
+                }
+
+                // Return single attachment in array format
+                return [
+                    [
+                        'path' => $tempZipPath,
+                        'name' => $attachmentName,
+                        'temp_path' => $tempPath,
+                        'temp_zip' => $tempZipPath,
+                        'has_data' => true,
+                        'data_rows' => array_sum(array_column($csvFilesToZip, 'enrollee_count')),
+                        'providers' => array_column($csvFilesToZip, 'provider'),
+                        'provider_count' => count($csvFilesToZip),
+                    ]
+                ];
+            } else {
+                Log::error("Failed to create combined ZIP archive");
+                
+                // Cleanup on failure
+                foreach ($tempFilesForCleanup as $tempFile) {
+                    @unlink($tempFile);
+                }
+                
+                return [];
+            }
         } catch (\Exception $e) {
             Log::error("Failed to generate multi-provider CSV attachments: " . $e->getMessage(), [
                 'exception' => $e->getTraceAsString()
