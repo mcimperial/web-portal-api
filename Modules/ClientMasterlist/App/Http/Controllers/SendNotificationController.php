@@ -1625,8 +1625,17 @@ class SendNotificationController extends Controller
 
             $enrollmentStatus = $statusResult['enrollment_status'] ?? 'APPROVED';
             $withDependents = $statusResult['with_dependents'] ?? true;
+            
+            // Get date range from statusResult - keys are lowercase (date_from, date_to)
             $dateFrom = $statusResult['date_from'] ?? null;
             $dateTo = $statusResult['date_to'] ?? null;
+            
+            Log::info("Multi-provider CSV generation - Date range from statusResult", [
+                'dateFrom' => $dateFrom,
+                'dateTo' => $dateTo,
+                'has_date_from' => !empty($dateFrom),
+                'has_date_to' => !empty($dateTo),
+            ]);
 
             // Get all enrollments for the same company with different providers
             $currentEnrollment = \Modules\ClientMasterlist\App\Models\Enrollment::find($enrollmentId);
