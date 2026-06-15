@@ -271,6 +271,9 @@ class SendNotificationController extends Controller
                 return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
             })
             : [];
+        
+        // Check if this is a placeholder message (no employees for declaration)
+        $placeholderMessage = $data['placeholder_message'] ?? null;
 
         // If TO is empty but CC or BCC exist, use the system email as TO for technical requirement,
         // but it won't be visible to recipients since the actual recipients are in CC/BCC
@@ -291,11 +294,14 @@ class SendNotificationController extends Controller
             }
         }
 
+        // Check if this is a placeholder message (no employees for declaration)
+        $placeholderMessage = $data['placeholder_message'] ?? null;
+        
         // Add CSV attachment if provided
         $csvAttachment = $data['csv_attachment'] ?? null;
         
         // Generate CSV attachment automatically for specific notification types if not already provided
-        if (!$csvAttachment && in_array($notification->notification_type, ['REPORT: ATTACHMENT (SUBMITTED)', 'REPORT: ATTACHMENT (APPROVED)'])) {
+        if (!$csvAttachment && !$placeholderMessage && in_array($notification->notification_type, ['REPORT: ATTACHMENT (SUBMITTED)', 'REPORT: ATTACHMENT (APPROVED)'])) {
             $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
             
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
@@ -322,8 +328,15 @@ class SendNotificationController extends Controller
         }
 
         $replacements = $this->getVariableReplacements($notification, $data);
-        $messageBody  = $this->replaceVariables($notification->message, $replacements);
-        $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
+        
+        // Use placeholder message if no data available
+        if ($placeholderMessage) {
+            $messageBody  = $placeholderMessage;
+            $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
+        } else {
+            $messageBody  = $this->replaceVariables($notification->message, $replacements);
+            $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
+        }
 
         if (env('EMAIL_PROVIDER_SETTING') === 'infobip') {
             $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
@@ -331,8 +344,8 @@ class SendNotificationController extends Controller
             $tempFiles = [];
             $infobipAttachments = [];
 
-            // Handle CSV attachment first
-            if ($csvAttachment) {
+            // Handle CSV attachment first (skip if placeholder message)
+            if ($csvAttachment && !$placeholderMessage) {
                 $tempFiles[] = $csvAttachment['path'];
                 $infobipAttachments[] = [
                     'path' => $csvAttachment['path'],
@@ -370,12 +383,15 @@ class SendNotificationController extends Controller
                 }
             }
 
+            // For placeholder message, don't include attachments
+            $attachmentsToSend = $placeholderMessage ? [] : $infobipAttachments;
+            
             $emailService = new EmailSender(
                 $to, // pass as array
                 $notification->is_html ? $messageBody : nl2br($messageBody),
                 strtoupper($subjectBody ?? 'Notification'),
                 'default',
-                $infobipAttachments, // pass array of ['path','name']
+                $attachmentsToSend, // pass array of ['path','name']
                 $cc, // pass as array
                 $bcc, // pass as array
                 []
@@ -414,7 +430,7 @@ class SendNotificationController extends Controller
             // Send SMS notification
             $this->sendSmsNotification($data, $notification);
         } else {
-            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment) {
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachment, $placeholderMessage) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -436,11 +452,11 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
-                // Add CSV attachment if provided
-                if ($csvAttachment) {
+                // Add CSV attachment if provided (not placeholder message)
+                if ($csvAttachment && !$placeholderMessage) {
                     $message->attach($csvAttachment['path'], [
                         'as' => $csvAttachment['name'],
-                        'mime' => 'text/csv'
+                        'mime' => 'application/zip'
                     ]);
                 }
             });
@@ -606,16 +622,34 @@ class SendNotificationController extends Controller
 
                         $forCount = 1; // CSV notification counts as 1 valid recipient
                     } else {
-                        // Clean up empty CSV file
+                        // No employees for declaration - send placeholder message instead
+                        Log::info("REPORT: ATTACHMENT (APPROVED) - No employees found, sending placeholder message", [
+                            'notification_id' => $notification->id,
+                            'enrollment_id' => $notification->enrollment_id,
+                            'status' => 'No data - sending placeholder'
+                        ]);
+                        
+                        // Clean up empty CSV file and temp files
                         if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
                             @unlink($csvAttachment['path']);
                         }
                         if ($csvAttachment && isset($csvAttachment['temp_path'])) {
                             @unlink($csvAttachment['temp_path']);
                         }
-
-                        // Skip sending this notification since there's no data
-                        continue;
+                        if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
+                            @unlink($csvAttachment['temp_zip']);
+                        }
+                        if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
+                            @unlink($csvAttachment['temp_csv']);
+                        }
+                        
+                        // Set placeholder message for empty data scenario
+                        $request->merge([
+                            'csv_attachment' => null,
+                            'placeholder_message' => 'THERE ARE NO EMPLOYEES FOR DECLARATION TODAY.'
+                        ]);
+                        
+                        $forCount = 1; // Still send the notification
                     }
                 } else {
                     // For other CSV reports (SUBMITTED), proceed with sending
@@ -633,13 +667,21 @@ class SendNotificationController extends Controller
                         $forCount = 1; // CSV notification counts as 1 valid recipient
                     } else if ($csvAttachment) {
 
-                        // Clean up empty CSV file
+                        // Clean up empty CSV file and temp files
                         if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
                             @unlink($csvAttachment['path']);
                         }
 
                         if (isset($csvAttachment['temp_path'])) {
                             @unlink($csvAttachment['temp_path']);
+                        }
+                        
+                        if (isset($csvAttachment['temp_zip'])) {
+                            @unlink($csvAttachment['temp_zip']);
+                        }
+                        
+                        if (isset($csvAttachment['temp_csv'])) {
+                            @unlink($csvAttachment['temp_csv']);
                         }
 
                         // Skip sending this notification since there's no data
@@ -1376,7 +1418,7 @@ class SendNotificationController extends Controller
 
     /**
      * Generate a custom password-protected CSV attachment with specific columns
-     * Columns: Employee Name, Employee ID, Plan Selected, Activation Date, Coverage Start Date, Dependents
+     * Columns: Employee Name, Employee ID, Plan Selected, Activation Date, Coverage Start Date, Certificate Number, Dependents
      */
     private function generateCustomPasswordProtectedCsvAttachment($statusResult, $csvPassword = null)
     {
@@ -1444,6 +1486,7 @@ class SendNotificationController extends Controller
                 'PLAN SELECTED',
                 'ACTIVATION DATE',
                 'COVERAGE START DATE',
+                'CERTIFICATE NUMBER',
                 'ANY DEPENDENTS ENROLLED'
             ];
 
@@ -1470,12 +1513,15 @@ class SendNotificationController extends Controller
                     $dependentsList = 'None';
                 }
 
+                $certificateNumber = $enrollee->healthInsurance?->certificate_number ?? 'N/A';
+                
                 $csvData[] = [
                     $fullName,
                     $employeeId,
                     $plan,
                     $activationDate,
                     $coverageStartDate,
+                    $certificateNumber,
                     $dependentsList
                 ];
             }
