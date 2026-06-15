@@ -279,7 +279,13 @@ class SendNotificationController extends Controller
             $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
             
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
-                $csvAttachment = $this->generateCsvAttachment($statusResult);
+                // Use custom password-protected CSV for APPROVED reports
+                if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
+                    $csvAttachment = $this->generateCustomPasswordProtectedCsvAttachment($statusResult);
+                } else {
+                    // Use standard CSV for SUBMITTED reports
+                    $csvAttachment = $this->generateCsvAttachment($statusResult);
+                }
                 
                 // Only proceed if CSV has actual data
                 if (!($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data'])) {
@@ -543,6 +549,42 @@ class SendNotificationController extends Controller
 
             // Handle CSV generation for report notifications
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                // For APPROVED reports, just generate CSV but DON'T send to employees (internal use only)
+                if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
+                    $csvAttachment = $this->generateCsvAttachment($statusResult);
+                    
+                    if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                        // Log that CSV was generated (for audit trail)
+                        Log::info("REPORT: ATTACHMENT (APPROVED) - CSV generated for internal use", [
+                            'notification_id' => $notification->id,
+                            'enrollment_id' => $notification->enrollment_id,
+                            'filename' => $csvAttachment['name'],
+                            'data_rows' => $csvAttachment['data_rows'],
+                            'status' => 'Generated (not sent to employees)'
+                        ]);
+                        
+                        // Clean up temp files (CSV was generated but not sent)
+                        if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                            @unlink($csvAttachment['path']);
+                        }
+                        if (isset($csvAttachment['temp_path'])) {
+                            @unlink($csvAttachment['temp_path']);
+                        }
+                    } else {
+                        // Clean up empty CSV file
+                        if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                            @unlink($csvAttachment['path']);
+                        }
+                        if ($csvAttachment && isset($csvAttachment['temp_path'])) {
+                            @unlink($csvAttachment['temp_path']);
+                        }
+                    }
+                    
+                    // Skip sending - just generation for internal use
+                    continue;
+                }
+                
+                // For other CSV reports (SUBMITTED), proceed with sending
                 $csvAttachment = $this->generateCsvAttachment(
                     $statusResult
                 );
