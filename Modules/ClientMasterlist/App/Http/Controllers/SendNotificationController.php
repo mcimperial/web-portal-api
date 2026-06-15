@@ -1360,19 +1360,37 @@ class SendNotificationController extends Controller
             }
 
             $enrollmentStatus = $statusResult['enrollment_status'] ?? 'APPROVED';
+            $withDependents = $statusResult['with_dependents'] ?? true;
+            $dateFrom = $statusResult['date_from'] ?? null;
+            $dateTo = $statusResult['date_to'] ?? null;
             
             // Fetch enrollees with their health insurance and dependents
-            $enrollees = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
+            $query = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
                 ->where('enrollment_id', $enrollmentId)
                 ->where('enrollment_status', $enrollmentStatus)
                 ->where('status', 'ACTIVE')
                 ->whereNull('deleted_at')
-                ->get();
+                ->whereNull('principal_id'); // Only get principals, not dependents
+            
+            // Apply date filters if provided
+            if ($dateFrom && $dateTo) {
+                $query->whereBetween('updated_at', [$dateFrom, $dateTo]);
+            }
+            
+            // Apply dependents filter
+            if ($withDependents !== 'NC') {
+                $query->where('with_dependents', $withDependents);
+            }
+            
+            $enrollees = $query->get();
 
             if ($enrollees->count() === 0) {
                 Log::info("No enrollees found for custom CSV generation", [
                     'enrollment_id' => $enrollmentId,
-                    'enrollment_status' => $enrollmentStatus
+                    'enrollment_status' => $enrollmentStatus,
+                    'with_dependents' => $withDependents,
+                    'date_from' => $dateFrom,
+                    'date_to' => $dateTo
                 ]);
                 return null;
             }
