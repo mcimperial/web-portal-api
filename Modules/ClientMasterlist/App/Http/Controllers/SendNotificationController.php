@@ -1630,11 +1630,23 @@ class SendNotificationController extends Controller
             $dateFrom = $statusResult['date_from'] ?? null;
             $dateTo = $statusResult['date_to'] ?? null;
             
-            Log::info("Multi-provider CSV generation - Date range from statusResult", [
+            // If date range is missing, calculate it from schedule (fallback)
+            if (!$dateFrom || !$dateTo) {
+                Log::warning("Date range missing from statusResult, calculating from notification schedule", [
+                    'enrollment_id' => $enrollmentId,
+                    'has_date_from' => !empty($dateFrom),
+                    'has_date_to' => !empty($dateTo),
+                ]);
+                
+                $dateRange = $this->calculateDateRangeFromSchedule($notification);
+                $dateFrom = $dateRange['from'];
+                $dateTo = $dateRange['to'];
+            }
+            
+            Log::info("Multi-provider CSV generation - Date range ENFORCED", [
                 'dateFrom' => $dateFrom,
                 'dateTo' => $dateTo,
-                'has_date_from' => !empty($dateFrom),
-                'has_date_to' => !empty($dateTo),
+                'enrollment_status' => $enrollmentStatus,
             ]);
 
             // Get all enrollments for the same company with different providers
@@ -1685,17 +1697,19 @@ class SendNotificationController extends Controller
                     ->where('status', 'ACTIVE')
                     ->whereNull('deleted_at');
 
-                // Apply date range filter from schedule (yesterday's time to today's time)
-                if ($dateFrom && $dateTo) {
-                    $query->where('updated_at', '>=', $dateFrom)
-                          ->where('updated_at', '<=', $dateTo);
-                    
-                    Log::info("Applying date range filter", [
-                        'date_from' => $dateFrom,
-                        'date_to' => $dateTo,
-                        'enrollment_id' => $enrollment->id,
-                    ]);
-                }
+                // MANDATORY: Apply date range filter based on certificate_date_issued (for APPROVED notifications)
+                // Only get employees whose certificate was issued within yesterday to today
+                $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
+                    $subQuery->where('certificate_date_issued', '>=', $dateFrom)
+                             ->where('certificate_date_issued', '<=', $dateTo);
+                });
+                
+                Log::info("MANDATORY certificate_date_issued filter applied", [
+                    'date_from' => $dateFrom,
+                    'date_to' => $dateTo,
+                    'enrollment_id' => $enrollment->id,
+                    'provider' => $providerName,
+                ]);
 
                 // Apply dependents filter
                 if ($withDependents !== 'NC') {
