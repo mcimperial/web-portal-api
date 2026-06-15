@@ -1495,6 +1495,7 @@ class SendNotificationController extends Controller
                 $fullName = trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? ''));
                 $employeeId = $enrollee->employee_id ?? 'N/A';
                 $plan = $enrollee->healthInsurance?->plan ?? 'N/A';
+                $certificateNumber = $enrollee->healthInsurance?->certificate_number ?? 'N/A';
                 $activationDate = $enrollee->healthInsurance?->certificate_date_issued 
                     ? date('m/d/Y', strtotime($enrollee->healthInsurance->certificate_date_issued))
                     : 'N/A';
@@ -1513,15 +1514,13 @@ class SendNotificationController extends Controller
                     $dependentsList = 'None';
                 }
 
-                $certificateNumber = $enrollee->healthInsurance?->certificate_number ?? 'N/A';
-                
                 $csvData[] = [
                     $fullName,
                     $employeeId,
                     $plan,
+                    $certificateNumber,
                     $activationDate,
                     $coverageStartDate,
-                    $certificateNumber,
                     $dependentsList
                 ];
             }
