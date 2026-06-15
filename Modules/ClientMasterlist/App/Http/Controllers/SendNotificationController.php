@@ -325,12 +325,6 @@ class SendNotificationController extends Controller
         $messageBody  = $this->replaceVariables($notification->message, $replacements);
         $subjectBody  = $this->replaceVariables($notification->subject, $replacements);
 
-        // Add password information to message body if CSV attachment contains password
-        if ($csvAttachment && isset($csvAttachment['password'])) {
-            $passwordNote = "\n\n---\nATTACHMENT PASSWORD: " . $csvAttachment['password'] . "\n---\n";
-            $messageBody .= $passwordNote;
-        }
-
         if (env('EMAIL_PROVIDER_SETTING') === 'infobip') {
             $blockedExtensions = ['ade', 'adp', 'app', 'asp', 'aspx', 'bas', 'bat', 'chm', 'cmd', 'com', 'cpl', 'crt', 'csh', 'exe', 'fxp', 'hlp', 'hta', 'inf', 'ins', 'isp', 'js', 'jse', 'ksh', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mda', 'mdb', 'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msi', 'msp', 'mst', 'ops', 'pcd', 'pif', 'prf', 'prg', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'reg', 'scf', 'scr', 'sct', 'shb', 'shs', 'tmp', 'url', 'vb', 'vbe', 'vbs', 'vsmacros', 'vsw', 'ws', 'wsc', 'wsf', 'wsh', 'xnk'];
 
@@ -393,9 +387,15 @@ class SendNotificationController extends Controller
                 @unlink($tmp);
             }
 
-            // Clean up CSV attachment temp files
+            // Clean up attachment temp files
             if ($csvAttachment && isset($csvAttachment['temp_path'])) {
                 @unlink($csvAttachment['temp_path']);
+            }
+            if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
+                @unlink($csvAttachment['temp_zip']);
+            }
+            if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
+                @unlink($csvAttachment['temp_csv']);
             }
 
             if (!$result) {
@@ -445,11 +445,17 @@ class SendNotificationController extends Controller
                 }
             });
 
-            // Clean up CSV attachment temp files for Laravel Mail
+            // Clean up attachment temp files for Laravel Mail
             if ($csvAttachment) {
                 @unlink($csvAttachment['path']);
                 if (isset($csvAttachment['temp_path'])) {
                     @unlink($csvAttachment['temp_path']);
+                }
+                if (isset($csvAttachment['temp_zip'])) {
+                    @unlink($csvAttachment['temp_zip']);
+                }
+                if (isset($csvAttachment['temp_csv'])) {
+                    @unlink($csvAttachment['temp_csv']);
                 }
             }
 
@@ -1476,10 +1482,6 @@ class SendNotificationController extends Controller
 
             // Convert to CSV format
             $csvContent = '';
-            // Add password information at the top of CSV file (as metadata/comment line)
-            $csvContent .= "# PASSWORD PROTECTED - Password: " . $csvPassword . "\n";
-            $csvContent .= "# ============================================\n";
-            
             foreach ($csvData as $row) {
                 $csvContent .= $this->escapeCsvRow($row) . "\n";
             }
@@ -1491,23 +1493,51 @@ class SendNotificationController extends Controller
 
             // Write CSV content to temporary file
             file_put_contents($tempCsvPath, $csvContent);
+            
+            // Create a password-protected ZIP file containing the CSV
+            $tempZipPath = $tempPath . '.zip';
+            $zip = new \ZipArchive();
+            
+            if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
+                // Add CSV file to ZIP
+                $zip->addFile($tempCsvPath, $filename);
+                
+                // Set password protection (requires ZipArchive::setEncryptionName)
+                if (method_exists($zip, 'setEncryptionName')) {
+                    $zip->setEncryptionName($filename, \ZipArchive::EM_AES_256, $csvPassword);
+                }
+                $zip->close();
+                
+                // Use the ZIP file as the attachment instead
+                $attachmentPath = $tempZipPath;
+                $attachmentName = 'ENROLLEES_' . $enrollmentStatus . '_' . date('Ymd_His') . '.zip';
+                
+                // Delete the temporary CSV file since it's now in the ZIP
+                @unlink($tempCsvPath);
+            } else {
+                // Fallback: if ZIP encryption fails, just use the plain CSV
+                $attachmentPath = $tempCsvPath;
+                $attachmentName = $filename;
+            }
 
-            Log::info("Custom password-protected CSV generated successfully", [
-                'filename' => $filename,
+            Log::info("Custom password-protected attachment generated successfully", [
+                'filename' => $attachmentName,
                 'enrollee_count' => $enrollees->count(),
-                'csv_path' => $tempCsvPath,
+                'attachment_path' => $attachmentPath,
                 'password' => $csvPassword,
                 'password_length' => strlen($csvPassword)
             ]);
 
             return [
-                'path' => $tempCsvPath,
-                'name' => $filename,
+                'path' => $attachmentPath,
+                'name' => $attachmentName,
                 'temp_path' => $tempPath,
+                'temp_zip' => $tempZipPath ?? null,
+                'temp_csv' => $tempCsvPath,
                 'has_data' => $enrollees->count() > 0,
                 'data_rows' => $enrollees->count(),
                 'password' => $csvPassword,
-                'password_note' => 'Password: ' . $csvPassword  // Include in attachment metadata
+                'password_note' => 'Password protected'
             ];
         } catch (\Exception $e) {
             Log::error("Failed to generate custom password-protected CSV attachment: " . $e->getMessage(), [
