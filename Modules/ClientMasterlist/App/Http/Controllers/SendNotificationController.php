@@ -1484,9 +1484,9 @@ class SendNotificationController extends Controller
                 'EMPLOYEE NAME',
                 'EMPLOYEE ID',
                 'PLAN SELECTED',
+                'CERTIFICATE NUMBER',
                 'ACTIVATION DATE',
                 'COVERAGE START DATE',
-                'CERTIFICATE NUMBER',
                 'ANY DEPENDENTS ENROLLED'
             ];
 
