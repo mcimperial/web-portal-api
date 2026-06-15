@@ -322,7 +322,18 @@ class SendNotificationController extends Controller
                     if ($csvAttachment && isset($csvAttachment['temp_path'])) {
                         @unlink($csvAttachment['temp_path']);
                     }
+                    if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
+                        @unlink($csvAttachment['temp_zip']);
+                    }
+                    if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
+                        @unlink($csvAttachment['temp_csv']);
+                    }
                     $csvAttachment = null;
+                    
+                    // Set placeholder message when no data available for APPROVED reports
+                    if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
+                        $placeholderMessage = 'THERE ARE NO EMPLOYEES FOR DECLARATION TODAY.';
+                    }
                 }
             }
         }
@@ -1425,7 +1436,7 @@ class SendNotificationController extends Controller
         try {
             // Default password if not provided - CUSTOMIZABLE
             if (!$csvPassword) {
-                $csvPassword = env('CSV_ATTACHMENT_PASSWORD', 'SecureEnrollment2024');
+                $csvPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!'); // Set a default password in .env file for security
             }
 
             // Get all enrollees for the given enrollment
