@@ -135,7 +135,7 @@ class SendNotificationController extends Controller
 
         $data = $request->validate([
             'notification_id' => 'required|integer|exists:cm_notification,id',
-            'to' => 'required|string',
+            'to' => 'nullable|string',
             'cc' => 'nullable|string',
             'bcc' => 'nullable|string',
             'attach_enrollee_id' => 'sometimes|nullable|integer',
@@ -153,6 +153,23 @@ class SendNotificationController extends Controller
                 'success' => false,
                 'message' => 'Notification not found',
             ], 404);
+        }
+
+        // Ensure at least one recipient field (TO, CC, or BCC) is provided
+        $hasTo = !empty(trim($data['to'] ?? ''));
+        $hasCc = !empty(trim($data['cc'] ?? ''));
+        $hasBcc = !empty(trim($data['bcc'] ?? ''));
+
+        if (!$hasTo && !$hasCc && !$hasBcc) {
+            return response()->json([
+                'success' => false,
+                'message' => 'At least one recipient field (TO, CC, or BCC) is required.',
+            ], 422);
+        }
+
+        // If TO is empty but CC or BCC exist, use a system placeholder for TO to satisfy email requirements
+        if (!$hasTo && ($hasCc || $hasBcc)) {
+            $data['to'] = env('MAIL_FROM_ADDRESS', 'noreply@example.com');
         }
 
         Log::info("Notification found, proceeding with send logic", [
@@ -254,7 +271,10 @@ class SendNotificationController extends Controller
                 return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
             })
             : [];
-        if (empty($to)) {
+
+        // If TO is empty but CC or BCC exist, use the system email as TO for technical requirement,
+        // but it won't be visible to recipients since the actual recipients are in CC/BCC
+        if (empty($to) && (empty($cc) && empty($bcc))) {
             return response()->json([
                 'success' => false,
                 'message' => 'No valid recipient email addresses provided after filtering.',
