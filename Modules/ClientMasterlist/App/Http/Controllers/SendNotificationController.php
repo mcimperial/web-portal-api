@@ -302,9 +302,13 @@ class SendNotificationController extends Controller
         $csvAttachments = []; // Array to support multiple provider attachments for APPROVED only
         $csvAttachment = $data['csv_attachment'] ?? null;
         
+        // Check if csv_attachments (plural) were passed from scheduled notification
+        if (isset($data['csv_attachments']) && is_array($data['csv_attachments']) && !empty($data['csv_attachments'])) {
+            $csvAttachments = $data['csv_attachments'];
+        }
         // MULTI-PROVIDER FEATURE: Only for REPORT: ATTACHMENT (APPROVED)
         // Generates separate CSVs for each insurance provider per company in a single email
-        if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)' && !$csvAttachment && !$placeholderMessage) {
+        else if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)' && !$csvAttachment && !$placeholderMessage) {
             $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
             
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
@@ -626,27 +630,25 @@ class SendNotificationController extends Controller
 
             // Handle CSV generation for report notifications
             if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
-                // For APPROVED reports, generate CSV and send to TO, CC, and BCC recipients
+                // For APPROVED reports, generate MULTI-PROVIDER CSVs using new method
                 if ($notification->notification_type === 'REPORT: ATTACHMENT (APPROVED)') {
-                    $csvAttachment = $this->generateCustomPasswordProtectedCsvAttachment($statusResult);
+                    $csvAttachments = $this->generateMultiProviderCsvAttachments($statusResult, $notification);
                     
-                    if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
-                        // Log that CSV was generated (for audit trail)
-                        Log::info("REPORT: ATTACHMENT (APPROVED) - Custom CSV generated for internal use", [
+                    if (!empty($csvAttachments)) {
+                        // Log that multi-provider CSVs were generated
+                        Log::info("REPORT: ATTACHMENT (APPROVED) - Multi-provider CSVs generated for scheduled notification", [
                             'notification_id' => $notification->id,
                             'enrollment_id' => $notification->enrollment_id,
-                            'filename' => $csvAttachment['name'],
-                            'data_rows' => $csvAttachment['data_rows'],
-                            'status' => 'Generated and sent to TO, CC, and BCC recipients',
-                            'password_protected' => true,
+                            'provider_count' => count($csvAttachments),
+                            'status' => 'Generated multi-provider CSVs',
                             'to' => $notification->to,
                             'cc' => $notification->cc,
                             'bcc' => $notification->bcc
                         ]);
                         
-                        // Store the CSV attachment info for use in email sending
+                        // Store the multi-provider CSV attachments for use in email sending
                         $request->merge([
-                            'csv_attachment' => $csvAttachment
+                            'csv_attachments' => $csvAttachments
                         ]);
 
                         $forCount = 1; // CSV notification counts as 1 valid recipient
@@ -658,20 +660,6 @@ class SendNotificationController extends Controller
                             'status' => 'No data - sending placeholder'
                         ]);
                         
-                        // Clean up empty CSV file and temp files
-                        if ($csvAttachment && isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
-                            @unlink($csvAttachment['path']);
-                        }
-                        if ($csvAttachment && isset($csvAttachment['temp_path'])) {
-                            @unlink($csvAttachment['temp_path']);
-                        }
-                        if ($csvAttachment && isset($csvAttachment['temp_zip'])) {
-                            @unlink($csvAttachment['temp_zip']);
-                        }
-                        if ($csvAttachment && isset($csvAttachment['temp_csv'])) {
-                            @unlink($csvAttachment['temp_csv']);
-                        }
-                        
                         // Set placeholder message for empty data scenario
                         $request->merge([
                             'csv_attachment' => null,
@@ -681,7 +669,7 @@ class SendNotificationController extends Controller
                         $forCount = 1; // Still send the notification
                     }
                 } else {
-                    // For other CSV reports (SUBMITTED), proceed with sending
+                    // For other CSV reports (SUBMITTED), proceed with sending using single attachment
                     $csvAttachment = $this->generateCsvAttachment(
                         $statusResult
                     );
