@@ -1849,80 +1849,44 @@ class SendNotificationController extends Controller
             // If no CSVs were generated, return empty array
             // This will trigger the placeholder message to be sent instead
             if (empty($csvFilesToZip)) {
-                Log::info("No enrollees found across all providers, skipping ZIP creation - placeholder message will be used");
+                Log::info("No enrollees found across all providers, skipping attachment - placeholder message will be used");
                 return [];
             }
 
-            // Create a single password-protected ZIP file containing all provider CSVs
-            $csvPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
-            $tempPath = tempnam(sys_get_temp_dir(), 'csv_combined_');
-            $tempZipPath = $tempPath . '.zip';
-            
-            $zip = new \ZipArchive();
+            // Return multiple attachments - one per provider
+            $attachments = [];
+            $totalEnrollees = 0;
 
-            if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
-                // Add all CSV files to the single ZIP
-                foreach ($csvFilesToZip as $csvFile) {
-                    $zip->addFile($csvFile['path'], $csvFile['name']);
-
-                    Log::info("Added CSV to combined ZIP", [
-                        'filename' => $csvFile['name'],
-                        'provider' => $csvFile['provider'],
-                    ]);
-                }
-                
-                // Set password on the entire ZIP archive if method exists
-                if (method_exists($zip, 'setPassword')) {
-                    try {
-                        $zip->setPassword($csvPassword);
-                        Log::info("Password protection applied to ZIP archive");
-                    } catch (\Exception $encryptionError) {
-                        Log::warning("Failed to set password on ZIP, proceeding without encryption", [
-                            'error' => $encryptionError->getMessage()
-                        ]);
-                    }
-                }
-                
-                $zip->close();
-
-                // Generate combined ZIP attachment name
-                $attachmentName = 'ENROLLEES_' . $enrollmentStatus . '_' . date('Ymd_His') . '.zip';
-
-                Log::info("Combined ZIP attachment created successfully", [
-                    'filename' => $attachmentName,
-                    'total_providers' => count($csvFilesToZip),
-                    'total_enrollees' => array_sum(array_column($csvFilesToZip, 'enrollee_count')),
-                    'attachment_path' => $tempZipPath,
-                ]);
-
-                // Cleanup temporary CSV files
-                foreach ($tempFilesForCleanup as $tempFile) {
-                    @unlink($tempFile);
-                }
-
-                // Return single attachment in array format
-                return [
-                    [
-                        'path' => $tempZipPath,
-                        'name' => $attachmentName,
-                        'temp_path' => $tempPath,
-                        'temp_zip' => $tempZipPath,
-                        'has_data' => true,
-                        'data_rows' => array_sum(array_column($csvFilesToZip, 'enrollee_count')),
-                        'providers' => array_column($csvFilesToZip, 'provider'),
-                        'provider_count' => count($csvFilesToZip),
-                    ]
+            foreach ($csvFilesToZip as $csvFile) {
+                // Attachment already created, just add to return array
+                $attachments[] = [
+                    'path' => $csvFile['path'],
+                    'name' => $csvFile['name'],
+                    'temp_path' => $csvFile['path'],
+                    'has_data' => $csvFile['enrollee_count'] > 0,
+                    'data_rows' => $csvFile['enrollee_count'],
+                    'provider' => $csvFile['provider'],
                 ];
-            } else {
-                Log::error("Failed to create combined ZIP archive");
-                
-                // Cleanup on failure
-                foreach ($tempFilesForCleanup as $tempFile) {
-                    @unlink($tempFile);
-                }
-                
-                return [];
+
+                $totalEnrollees += $csvFile['enrollee_count'];
+
+                Log::info("Added provider CSV as separate attachment", [
+                    'filename' => $csvFile['name'],
+                    'provider' => $csvFile['provider'],
+                    'enrollee_count' => $csvFile['enrollee_count'],
+                ]);
             }
+
+            Log::info("Multi-provider CSV attachments created successfully", [
+                'total_providers' => count($csvFilesToZip),
+                'total_enrollees' => $totalEnrollees,
+                'attachment_count' => count($attachments),
+            ]);
+
+            // Cleanup temporary provider CSV files will be done during email sending
+            // Store cleanup paths in attachment array for later cleanup
+            
+            return $attachments;
         } catch (\Exception $e) {
             Log::error("Failed to generate multi-provider CSV attachments: " . $e->getMessage(), [
                 'exception' => $e->getTraceAsString()
