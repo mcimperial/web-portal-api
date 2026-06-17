@@ -1715,12 +1715,16 @@ class SendNotificationController extends Controller
 
                 // FILTER 1: Apply date range filter based on certificate_date_issued (DATE ONLY)
                 // Extract just the date portion from the datetime range
+                // Important: The schedule produces a datetime range, e.g., 2026-06-16 09:00:00 to 2026-06-17 09:00:00
+                // We only care about the DATE portion, so certificates from 2026-06-16 onwards (NOT 2026-06-15)
                 $dateFromDate = \Carbon\Carbon::parse($dateFrom)->format('Y-m-d');
                 $dateToDate = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
                 
                 // Get enrollees whose certificate was issued within the scheduled date range
+                // Use > (strictly greater than) for fromDate to exclude the previous day
+                // and <= (less than or equal to) for toDate to include the current day
                 $query->whereHas('healthInsurance', function ($subQuery) use ($dateFromDate, $dateToDate) {
-                    $subQuery->where('certificate_date_issued', '>=', $dateFromDate)
+                    $subQuery->where('certificate_date_issued', '>', \Carbon\Carbon::parse($dateFromDate)->subDay()->format('Y-m-d'))
                              ->where('certificate_date_issued', '<=', $dateToDate);
                 });
                 
