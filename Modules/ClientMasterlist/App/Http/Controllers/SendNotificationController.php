@@ -1882,7 +1882,55 @@ class SendNotificationController extends Controller
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
 
-                // Attach XLSX directly – password protection applied via sheet + workbook security (no ZIP)
+                // ---------------------------------------------------------------
+                // Add file-open password (ECMA-376 encryption) via msoffcrypto-tool
+                // PhpSpreadsheet does NOT support open-password encryption natively.
+                // We use Python's msoffcrypto-tool to encrypt the saved XLSX so that
+                // Excel/LibreOffice prompts for the password before the file can be opened.
+                //
+                // Install on server: pip3 install msoffcrypto-tool
+                // ---------------------------------------------------------------
+                if (function_exists('shell_exec')) {
+                    $tmpEncPath = $tempXlsxPath . '.enc';
+
+                    // Build inline Python script passed as -c argument (no temp file needed)
+                    $pyCode = implode(';', [
+                        'import msoffcrypto, sys',
+                        'src=open(sys.argv[1],"rb")',
+                        'of=msoffcrypto.OfficeFile(src)',
+                        'dst=open(sys.argv[2],"wb")',
+                        'of.encrypt(sys.argv[3],dst)',
+                        'src.close()',
+                        'dst.close()',
+                    ]);
+
+                    $cmd = sprintf(
+                        'python3 -c %s %s %s %s 2>&1',
+                        escapeshellarg($pyCode),
+                        escapeshellarg($tempXlsxPath),
+                        escapeshellarg($tmpEncPath),
+                        escapeshellarg($xlsxPassword)
+                    );
+
+                    $cmdOutput = shell_exec($cmd);
+
+                    if (file_exists($tmpEncPath) && filesize($tmpEncPath) > 1024) {
+                        // Replace the unencrypted file with the encrypted one
+                        rename($tmpEncPath, $tempXlsxPath);
+                        Log::info("XLSX open-password encryption applied", [
+                            'provider' => $providerName,
+                            'method'   => 'msoffcrypto-tool',
+                        ]);
+                    } else {
+                        // msoffcrypto-tool not installed or failed — sheet/workbook protection still active
+                        @unlink($tmpEncPath);
+                        Log::warning("msoffcrypto open-password encryption skipped — sheet+workbook protection still active", [
+                            'provider'   => $providerName,
+                            'cmd_output' => $cmdOutput,
+                        ]);
+                    }
+                }
+
                 $xlsxFilesToAttach[] = [
                     'path'          => $tempXlsxPath,
                     'name'          => $xlsxFilename,
