@@ -1287,17 +1287,18 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Calculate date range from yesterday's schedule time to today's schedule time
-     * Based on the notification's cron schedule
+     * Calculate date range based on the notification's cron schedule
+     * For daily schedules (e.g., 0 9 * * * for 9am daily), returns from TODAY at scheduled time to NOW
+     * This ensures only certificates issued/updated from the scheduled time onwards are included
      */
     private function calculateDateRangeFromSchedule($notification = null)
     {
         $now = now();
 
         if (!$notification || !$notification->schedule) {
-            // Default to yesterday 00:00:00 onwards if no schedule
+            // Default to today 00:00:00 onwards if no schedule
             return [
-                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
+                'from' => $now->copy()->startOfDay()->format('Y-m-d H:i:s'),
                 'to' => $now->format('Y-m-d H:i:s')
             ];
         }
@@ -1323,7 +1324,13 @@ class SendNotificationController extends Controller
                 // Every minute - use yesterday datetime to today datetime
                 $dateFrom = $now->copy()->subDay();
                 $dateTo = $now;
+            } else if ($days === '*' && $months === '*') {
+                // Daily schedule (e.g., 0 9 * * * for 9am daily)
+                // Use the scheduled time on TODAY (not yesterday)
+                $dateFrom = $now->copy()->setHour(intval($hours))->setMinute(intval($minutes))->setSecond(0);
+                $dateTo = $now;
             } else {
+                // For other intervals (hourly, weekly, monthly, etc.)
                 $dateFrom = $currentScheduledTime->copy();
                 $dateTo = $now;
 
@@ -1334,9 +1341,6 @@ class SendNotificationController extends Controller
                 } elseif ($hours === '*') {
                     // Hourly (every hour) - subtract 1 hour
                     $dateFrom->subHours(1);
-                } elseif ($days === '*') {
-                    // Daily (every day) - subtract 1 day
-                    $dateFrom->subDays(1);
                 } elseif ($months === '*') {
                     // Monthly (every month) - subtract 1 month
                     $dateFrom->subMonths(1);
@@ -1346,27 +1350,27 @@ class SendNotificationController extends Controller
                 }
             }
 
-                /* Log::info("Date range calculated based on schedule interval", [
+            Log::info("Date range calculated based on schedule interval", [
                 'schedule' => $notification->schedule,
                 'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s'),
                 'notification_type' => $notification->notification_type ?? 'unknown'
-            ]); */
+            ]);
 
             return [
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
-            /* Log::warning("Failed to parse cron schedule, using default date range", [
+            Log::warning("Failed to parse cron schedule, using default date range", [
                 'schedule' => $notification->schedule,
                 'error' => $e->getMessage()
-            ]); */
+            ]);
 
-            // Fallback to default range
+            // Fallback to default range (today from start of day)
             return [
-                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
+                'from' => $now->copy()->startOfDay()->format('Y-m-d H:i:s'),
                 'to' => $now->format('Y-m-d H:i:s')
             ];
         }
