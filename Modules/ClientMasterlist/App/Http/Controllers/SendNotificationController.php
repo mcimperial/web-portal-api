@@ -1287,18 +1287,17 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Calculate date range based on the notification's cron schedule
-     * For daily schedules (e.g., 0 9 * * * for 9am daily), returns from TODAY at scheduled time to NOW
-     * This ensures only certificates issued/updated from the scheduled time onwards are included
+     * Calculate date range from yesterday's schedule time to today's schedule time
+     * Based on the notification's cron schedule
      */
     private function calculateDateRangeFromSchedule($notification = null)
     {
         $now = now();
 
         if (!$notification || !$notification->schedule) {
-            // Default to today 00:00:00 onwards if no schedule
+            // Default to yesterday 00:00:00 onwards if no schedule
             return [
-                'from' => $now->copy()->startOfDay()->format('Y-m-d H:i:s'),
+                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
                 'to' => $now->format('Y-m-d H:i:s')
             ];
         }
@@ -1324,13 +1323,7 @@ class SendNotificationController extends Controller
                 // Every minute - use yesterday datetime to today datetime
                 $dateFrom = $now->copy()->subDay();
                 $dateTo = $now;
-            } else if ($days === '*' && $months === '*') {
-                // Daily schedule (e.g., 0 9 * * * for 9am daily)
-                // Use the scheduled time on TODAY (not yesterday)
-                $dateFrom = $now->copy()->setHour(intval($hours))->setMinute(intval($minutes))->setSecond(0);
-                $dateTo = $now;
             } else {
-                // For other intervals (hourly, weekly, monthly, etc.)
                 $dateFrom = $currentScheduledTime->copy();
                 $dateTo = $now;
 
@@ -1341,6 +1334,9 @@ class SendNotificationController extends Controller
                 } elseif ($hours === '*') {
                     // Hourly (every hour) - subtract 1 hour
                     $dateFrom->subHours(1);
+                } elseif ($days === '*') {
+                    // Daily (every day) - subtract 1 day
+                    $dateFrom->subDays(1);
                 } elseif ($months === '*') {
                     // Monthly (every month) - subtract 1 month
                     $dateFrom->subMonths(1);
@@ -1350,27 +1346,27 @@ class SendNotificationController extends Controller
                 }
             }
 
-            Log::info("Date range calculated based on schedule interval", [
+                /* Log::info("Date range calculated based on schedule interval", [
                 'schedule' => $notification->schedule,
                 'current_scheduled' => $currentScheduledTime->format('Y-m-d H:i:s'),
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s'),
                 'notification_type' => $notification->notification_type ?? 'unknown'
-            ]);
+            ]); */
 
             return [
                 'from' => $dateFrom->format('Y-m-d H:i:s'),
                 'to' => $dateTo->format('Y-m-d H:i:s')
             ];
         } catch (\Exception $e) {
-            Log::warning("Failed to parse cron schedule, using default date range", [
+            /* Log::warning("Failed to parse cron schedule, using default date range", [
                 'schedule' => $notification->schedule,
                 'error' => $e->getMessage()
-            ]);
+            ]); */
 
-            // Fallback to default range (today from start of day)
+            // Fallback to default range
             return [
-                'from' => $now->copy()->startOfDay()->format('Y-m-d H:i:s'),
+                'from' => $now->copy()->subDay()->startOfDay()->format('Y-m-d H:i:s'),
                 'to' => $now->format('Y-m-d H:i:s')
             ];
         }
@@ -1617,6 +1613,19 @@ class SendNotificationController extends Controller
      * Generate a single ZIP attachment containing separate CSVs for each insurance provider per company
      * For example: Company "Deel" with providers "Maxicare" and "Philcare" will generate 1 ZIP containing 2 CSVs
      * This is useful when a company has multiple insurance providers
+     * 
+     * LOGIC:
+     * 1. Select enrollees/principals with APPROVED status
+     * 2. Filter by certificate_date_issued (DATE ONLY) within scheduled date range
+     * 3. Filter by updated_at (DATETIME) within scheduled datetime range for exact matching
+     * 4. Generate CSV for each provider and bundle into a single password-protected ZIP
+     * 5. If no enrollees found, return empty array (placeholder message will be used)
+     * 
+     * EXAMPLE: If schedule is daily at 9 AM:
+     * - dateFrom = June 17, 2026 at 9:00 AM
+     * - dateTo = June 18, 2026 at 9:00 AM
+     * - Certificate filter: June 17 to June 18 (date only, any time)
+     * - Updated_at filter: June 17 9:00 AM to June 18 9:00 AM (exact datetime)
      */
     private function generateMultiProviderCsvAttachments($statusResult, $notification = null)
     {
@@ -1695,34 +1704,41 @@ class SendNotificationController extends Controller
                 }
 
                 // Fetch enrollees for this specific enrollment (provider)
+                // LOGIC: Select by APPROVED status with dual filters:
+                // 1. certificate_date_issued (date only) - check if within scheduled DATE range
+                // 2. updated_at (datetime) - check if exactly within scheduled DATE and TIME range
                 $query = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
                     ->where('enrollment_id', $enrollment->id)
                     ->where('enrollment_status', $enrollmentStatus)
                     ->where('status', 'ACTIVE')
                     ->whereNull('deleted_at');
 
-                // MANDATORY: Apply date range filter based on certificate_date_issued (for APPROVED notifications)
-                // Extract just the date portion from dateFrom and dateTo for certificate_date_issued comparison
-                $certificateDateFrom = \Carbon\Carbon::parse($dateFrom)->format('Y-m-d');
-                $certificateDateTo = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
+                // FILTER 1: Apply date range filter based on certificate_date_issued (DATE ONLY)
+                // Extract just the date portion from the datetime range
+                $dateFromDate = \Carbon\Carbon::parse($dateFrom)->format('Y-m-d');
+                $dateToDate = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
                 
-                // Only get employees whose certificate was issued within the scheduled date window
-                $query->whereHas('healthInsurance', function ($subQuery) use ($certificateDateFrom, $certificateDateTo) {
-                    $subQuery->where('certificate_date_issued', '>=', $certificateDateFrom)
-                             ->where('certificate_date_issued', '<=', $certificateDateTo);
+                // Get enrollees whose certificate was issued within the scheduled date range
+                $query->whereHas('healthInsurance', function ($subQuery) use ($dateFromDate, $dateToDate) {
+                    $subQuery->where('certificate_date_issued', '>=', $dateFromDate)
+                             ->where('certificate_date_issued', '<=', $dateToDate);
                 });
                 
-                // MANDATORY: Also filter by updated_at to ensure recent changes within the scheduled time window
+                // FILTER 2: Apply datetime range filter based on updated_at (DATETIME)
+                // Get enrollees updated exactly within the scheduled datetime range
                 $query->where('updated_at', '>=', $dateFrom)
                       ->where('updated_at', '<=', $dateTo);
                 
-                Log::info("MANDATORY certificate_date_issued and updated_at filter applied", [
-                    'certificate_date_from' => $certificateDateFrom,
-                    'certificate_date_to' => $certificateDateTo,
-                    'updated_at_from' => $dateFrom,
-                    'updated_at_to' => $dateTo,
+                Log::info("Multi-provider CSV filters applied", [
+                    'date_from' => $dateFrom,
+                    'date_to' => $dateTo,
                     'enrollment_id' => $enrollment->id,
                     'provider' => $providerName,
+                    'filters' => [
+                        'enrollment_status' => $enrollmentStatus,
+                        'certificate_date_issued_date_range' => "$dateFromDate to $dateToDate (DATE ONLY)",
+                        'updated_at_datetime_range' => "$dateFrom to $dateTo (DATETIME)"
+                    ]
                 ]);
 
                 // Apply dependents filter
@@ -1830,9 +1846,10 @@ class SendNotificationController extends Controller
                 ]);
             }
 
-            // If no CSVs were generated, return empty
+            // If no CSVs were generated, return empty array
+            // This will trigger the placeholder message to be sent instead
             if (empty($csvFilesToZip)) {
-                Log::info("No enrollees found across all providers, skipping ZIP creation");
+                Log::info("No enrollees found across all providers, skipping ZIP creation - placeholder message will be used");
                 return [];
             }
 
