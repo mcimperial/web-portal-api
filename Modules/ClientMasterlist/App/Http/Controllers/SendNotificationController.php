@@ -323,7 +323,9 @@ class SendNotificationController extends Controller
 
                     // No enrollees found across all providers – send placeholder instead of skipping
                     if (empty($csvAttachments)) {
-                        $placeholderMessage = 'This is to notify that there are no new active members as of today, ' . date('F j, Y') . '.';
+                        $placeholderMessage = '<b>Hi Deel,</b> <br />
+                                               This is to notify that there are no new active members as of today, ' . date('F j, Y') . '.<br />
+                                               <b>This is an auto-generated Email. Doesn’t support replies.</b>';
                     }
                 }
             }
