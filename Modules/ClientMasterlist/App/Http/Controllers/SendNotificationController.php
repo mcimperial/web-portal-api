@@ -663,7 +663,7 @@ class SendNotificationController extends Controller
                         // Set placeholder message for empty data scenario
                         $request->merge([
                             'csv_attachment' => null,
-                            'placeholder_message' => 'THERE ARE NO EMPLOYEES FOR DECLARATION TODAY.'
+                            'placeholder_message' => 'This is to notify that there are no new active members as of today, ' . date('Y-m-d') . '.'
                         ]);
                         
                         $forCount = 1; // Still send the notification
@@ -1698,15 +1698,25 @@ class SendNotificationController extends Controller
                     ->whereNull('deleted_at');
 
                 // MANDATORY: Apply date range filter based on certificate_date_issued (for APPROVED notifications)
-                // Only get employees whose certificate was issued within yesterday to today
-                $query->whereHas('healthInsurance', function ($subQuery) use ($dateFrom, $dateTo) {
-                    $subQuery->where('certificate_date_issued', '>=', $dateFrom)
-                             ->where('certificate_date_issued', '<=', $dateTo);
+                // Extract just the date portion from dateFrom and dateTo for certificate_date_issued comparison
+                $certificateDateFrom = \Carbon\Carbon::parse($dateFrom)->format('Y-m-d');
+                $certificateDateTo = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
+                
+                // Only get employees whose certificate was issued within the scheduled date window
+                $query->whereHas('healthInsurance', function ($subQuery) use ($certificateDateFrom, $certificateDateTo) {
+                    $subQuery->where('certificate_date_issued', '>=', $certificateDateFrom)
+                             ->where('certificate_date_issued', '<=', $certificateDateTo);
                 });
                 
-                Log::info("MANDATORY certificate_date_issued filter applied", [
-                    'date_from' => $dateFrom,
-                    'date_to' => $dateTo,
+                // MANDATORY: Also filter by updated_at to ensure recent changes within the scheduled time window
+                $query->where('updated_at', '>=', $dateFrom)
+                      ->where('updated_at', '<=', $dateTo);
+                
+                Log::info("MANDATORY certificate_date_issued and updated_at filter applied", [
+                    'certificate_date_from' => $certificateDateFrom,
+                    'certificate_date_to' => $certificateDateTo,
+                    'updated_at_from' => $dateFrom,
+                    'updated_at_to' => $dateTo,
                     'enrollment_id' => $enrollment->id,
                     'provider' => $providerName,
                 ]);
