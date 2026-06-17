@@ -1705,8 +1705,8 @@ class SendNotificationController extends Controller
 
                 // Fetch enrollees for this specific enrollment (provider)
                 // LOGIC: Select by APPROVED status with dual filters:
-                // 1. certificate_date_issued (date only) - check if within scheduled DATE range
-                // 2. updated_at (datetime) - check if exactly within scheduled DATE and TIME range
+                // 1. certificate_date_issued (date only) - check if activated within scheduled DATE range
+                // 2. updated_at (datetime) - check if exactly updated within scheduled DATE and TIME range (PRIMARY FILTER)
                 $query = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
                     ->where('enrollment_id', $enrollment->id)
                     ->where('enrollment_status', $enrollmentStatus)
@@ -1714,21 +1714,18 @@ class SendNotificationController extends Controller
                     ->whereNull('deleted_at');
 
                 // FILTER 1: Apply date range filter based on certificate_date_issued (DATE ONLY)
-                // Extract just the date portion from the datetime range
-                // Important: The schedule produces a datetime range, e.g., 2026-06-16 09:00:00 to 2026-06-17 09:00:00
-                // We only care about the DATE portion, so certificates from 2026-06-16 onwards (NOT 2026-06-15)
-                $dateFromDate = \Carbon\Carbon::parse($dateFrom)->format('Y-m-d');
+                // Get enrollees whose certificate was issued on or after the scheduled date start
+                $dateFromDate = \Carbon\Carbon::parse($dateTo)->subDay()->format('Y-m-d');
                 $dateToDate = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
                 
-                // Get enrollees whose certificate was issued within the scheduled date range
-                // Use >= for fromDate (inclusive) and <= for toDate (inclusive)
                 $query->whereHas('healthInsurance', function ($subQuery) use ($dateFromDate, $dateToDate) {
-                    $subQuery->whereRaw("DATE(certificate_date_issued) >= ?", [$dateFromDate])
-                             ->whereRaw("DATE(certificate_date_issued) <= ?", [$dateToDate]);
+                    $subQuery->where('certificate_date_issued', '>=', $dateFromDate)
+                             ->where('certificate_date_issued', '<=', $dateToDate);
                 });
                 
-                // FILTER 2: Apply datetime range filter based on updated_at (DATETIME)
-                // Get enrollees updated exactly within the scheduled datetime range
+                // FILTER 2: Apply datetime range filter based on updated_at (DATETIME) - PRIMARY FILTER
+                // Get enrollees updated EXACTLY within the scheduled datetime range
+                // This is the definitive filter - only include enrollees updated during this specific time window
                 $query->where('updated_at', '>=', $dateFrom)
                       ->where('updated_at', '<=', $dateTo);
                 
