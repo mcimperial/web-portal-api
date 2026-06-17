@@ -433,7 +433,7 @@ class SendNotificationController extends Controller
                 @unlink($tmp);
             }
 
-            // Clean up attachment temp files for multiple CSVs
+            // Clean up attachment temp files for multiple XLSX/CSV attachments
             foreach ($csvAttachments as $csv) {
                 if (isset($csv['path']) && file_exists($csv['path'])) {
                     @unlink($csv['path']);
@@ -443,6 +443,9 @@ class SendNotificationController extends Controller
                 }
                 if (isset($csv['temp_zip'])) {
                     @unlink($csv['temp_zip']);
+                }
+                if (isset($csv['temp_xlsx']) && file_exists($csv['temp_xlsx'])) {
+                    @unlink($csv['temp_xlsx']);
                 }
                 if (isset($csv['temp_csv'])) {
                     @unlink($csv['temp_csv']);
@@ -487,12 +490,12 @@ class SendNotificationController extends Controller
                         $message->attach($file);
                     }
                 }
-                // Add multiple CSV attachments if provided (not placeholder message)
+                // Add multiple XLSX/CSV attachments if provided (not placeholder message)
                 if (!empty($csvAttachments) && !$placeholderMessage) {
                     foreach ($csvAttachments as $csvAttachment) {
                         $message->attach($csvAttachment['path'], [
-                            'as' => $csvAttachment['name'],
-                            'mime' => 'text/csv'
+                            'as'   => $csvAttachment['name'],
+                            'mime' => $csvAttachment['mime'] ?? 'application/octet-stream',
                         ]);
                     }
                 }
@@ -508,6 +511,9 @@ class SendNotificationController extends Controller
                 }
                 if (isset($csv['temp_zip'])) {
                     @unlink($csv['temp_zip']);
+                }
+                if (isset($csv['temp_xlsx']) && file_exists($csv['temp_xlsx'])) {
+                    @unlink($csv['temp_xlsx']);
                 }
                 if (isset($csv['temp_csv'])) {
                     @unlink($csv['temp_csv']);
@@ -1616,17 +1622,17 @@ class SendNotificationController extends Controller
     }
 
     /**
-     * Generate a single ZIP attachment containing separate CSVs for each insurance provider per company
-     * For example: Company "Deel" with providers "Maxicare" and "Philcare" will generate 1 ZIP containing 2 CSVs
-     * This is useful when a company has multiple insurance providers
-     * 
+     * Generate separate XLSX attachments (password-protected via AES-256 ZIP) for each insurance
+     * provider per company. For example: Company "Deel" with providers "Maxicare" and "Philcare"
+     * will produce 2 ZIP files, each containing a password-protected XLSX for that provider.
+     *
      * LOGIC:
      * 1. Select enrollees/principals with APPROVED status
      * 2. Filter by certificate_date_issued (DATE ONLY) within scheduled date range
-     * 3. Filter by updated_at (DATETIME) within scheduled datetime range for exact matching
-     * 4. Generate CSV for each provider and bundle into a single password-protected ZIP
+     * 3. Filter by updated_at (DATETIME) within scheduled datetime range (PRIMARY FILTER)
+     * 4. Generate XLSX per provider with sheet protection + AES-256 encrypted ZIP
      * 5. If no enrollees found, return empty array (placeholder message will be used)
-     * 
+     *
      * EXAMPLE: If schedule is daily at 9 AM:
      * - dateFrom = June 17, 2026 at 9:00 AM
      * - dateTo = June 18, 2026 at 9:00 AM
@@ -1638,35 +1644,38 @@ class SendNotificationController extends Controller
         try {
             $enrollmentId = $statusResult['enrollment_id'] ?? null;
             if (!$enrollmentId) {
-                Log::error("No enrollment_id provided for multi-provider CSV generation");
+                Log::error("No enrollment_id provided for multi-provider XLSX generation");
                 return [];
             }
 
             $enrollmentStatus = $statusResult['enrollment_status'] ?? 'APPROVED';
-            $withDependents = $statusResult['with_dependents'] ?? true;
-            
+            $withDependents   = $statusResult['with_dependents'] ?? true;
+
             // Get date range from statusResult - keys are lowercase (date_from, date_to)
             $dateFrom = $statusResult['date_from'] ?? null;
-            $dateTo = $statusResult['date_to'] ?? null;
-            
+            $dateTo   = $statusResult['date_to'] ?? null;
+
             // If date range is missing, calculate it from schedule (fallback)
             if (!$dateFrom || !$dateTo) {
                 Log::warning("Date range missing from statusResult, calculating from notification schedule", [
                     'enrollment_id' => $enrollmentId,
                     'has_date_from' => !empty($dateFrom),
-                    'has_date_to' => !empty($dateTo),
+                    'has_date_to'   => !empty($dateTo),
                 ]);
-                
+
                 $dateRange = $this->calculateDateRangeFromSchedule($notification);
-                $dateFrom = $dateRange['from'];
-                $dateTo = $dateRange['to'];
+                $dateFrom  = $dateRange['from'];
+                $dateTo    = $dateRange['to'];
             }
-            
-            Log::info("Multi-provider CSV generation - Date range ENFORCED", [
-                'dateFrom' => $dateFrom,
-                'dateTo' => $dateTo,
+
+            Log::info("Multi-provider XLSX generation - Date range ENFORCED", [
+                'dateFrom'          => $dateFrom,
+                'dateTo'            => $dateTo,
                 'enrollment_status' => $enrollmentStatus,
             ]);
+
+            // Password used for both XLSX sheet protection and ZIP encryption
+            $xlsxPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
 
             // Get all enrollments for the same company with different providers
             $currentEnrollment = \Modules\ClientMasterlist\App\Models\Enrollment::find($enrollmentId);
@@ -1676,29 +1685,28 @@ class SendNotificationController extends Controller
             }
 
             $companyId = $currentEnrollment->company_id;
-            
-            Log::info("Multi-provider CSV generation started", [
-                'enrollment_id' => $enrollmentId,
-                'company_id' => $companyId,
+
+            Log::info("Multi-provider XLSX generation started", [
+                'enrollment_id'     => $enrollmentId,
+                'company_id'        => $companyId,
                 'enrollment_status' => $enrollmentStatus,
             ]);
-            
+
             // Get all enrollments for this company (regardless of provider)
             $enrollmentsForCompany = \Modules\ClientMasterlist\App\Models\Enrollment::where('company_id', $companyId)
                 ->get();
-                
+
             Log::info("Found enrollments for company", [
-                'company_id' => $companyId,
+                'company_id'       => $companyId,
                 'enrollment_count' => $enrollmentsForCompany->count(),
             ]);
 
-            // Collect CSV files for per-provider attachments
-            $csvFilesToZip = [];
-            $tempFilesForCleanup = [];
+            // Collect XLSX attachment files per provider
+            $xlsxFilesToAttach = [];
 
-            // For each enrollment (provider) in the company, generate a CSV
+            // For each enrollment (provider) in the company, generate an XLSX
             foreach ($enrollmentsForCompany as $enrollment) {
-                // Skip if enrollment is inactive
+                // Skip inactive enrollments
                 if ($enrollment->status === 'INACTIVE') {
                     continue;
                 }
@@ -1710,41 +1718,38 @@ class SendNotificationController extends Controller
                 }
 
                 // Fetch enrollees for this specific enrollment (provider)
-                // LOGIC: Select by APPROVED status with dual filters:
-                // 1. certificate_date_issued (date only) - check if activated within scheduled DATE range
-                // 2. updated_at (datetime) - check if exactly updated within scheduled DATE and TIME range (PRIMARY FILTER)
+                // LOGIC: dual filters:
+                // 1. certificate_date_issued (DATE ONLY) - activated within scheduled DATE range
+                // 2. updated_at (DATETIME) - exactly updated within scheduled DATE and TIME range (PRIMARY)
                 $query = Enrollee::with(['healthInsurance', 'dependents.healthInsurance'])
                     ->where('enrollment_id', $enrollment->id)
                     ->where('enrollment_status', $enrollmentStatus)
                     ->where('status', 'ACTIVE')
                     ->whereNull('deleted_at');
 
-                // FILTER 1: Apply date range filter based on certificate_date_issued (DATE ONLY)
-                // Get enrollees whose certificate was issued on or after the scheduled date start
+                // FILTER 1: certificate_date_issued (DATE ONLY)
                 $dateFromDate = \Carbon\Carbon::parse($dateTo)->subDay()->format('Y-m-d');
-                $dateToDate = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
-                
+                $dateToDate   = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
+
                 $query->whereHas('healthInsurance', function ($subQuery) use ($dateFromDate, $dateToDate) {
                     $subQuery->where('certificate_date_issued', '>=', $dateFromDate)
                              ->where('certificate_date_issued', '<=', $dateToDate);
                 });
-                
-                // FILTER 2: Apply datetime range filter based on updated_at (DATETIME) - PRIMARY FILTER
-                // Get enrollees updated EXACTLY within the scheduled datetime range
-                // This is the definitive filter - only include enrollees updated during this specific time window
+
+                // FILTER 2: updated_at (DATETIME) - PRIMARY FILTER
                 $query->where('updated_at', '>=', $dateFrom)
                       ->where('updated_at', '<=', $dateTo);
-                
-                Log::info("Multi-provider CSV filters applied", [
-                    'date_from' => $dateFrom,
-                    'date_to' => $dateTo,
+
+                Log::info("Multi-provider XLSX filters applied", [
+                    'date_from'     => $dateFrom,
+                    'date_to'       => $dateTo,
                     'enrollment_id' => $enrollment->id,
-                    'provider' => $providerName,
-                    'filters' => [
-                        'enrollment_status' => $enrollmentStatus,
-                        'certificate_date_issued_date_range' => "$dateFromDate to $dateToDate (DATE ONLY)",
-                        'updated_at_datetime_range' => "$dateFrom to $dateTo (DATETIME)"
-                    ]
+                    'provider'      => $providerName,
+                    'filters'       => [
+                        'enrollment_status'              => $enrollmentStatus,
+                        'certificate_date_issued_range'  => "$dateFromDate to $dateToDate (DATE ONLY)",
+                        'updated_at_datetime_range'      => "$dateFrom to $dateTo (DATETIME)",
+                    ],
                 ]);
 
                 // Apply dependents filter
@@ -1753,148 +1758,202 @@ class SendNotificationController extends Controller
                 }
 
                 $enrollees = $query->get();
-                
-                // Log debug info
+
                 Log::info("Multi-provider: Fetched enrollees for provider", [
-                    'enrollment_id' => $enrollment->id,
-                    'provider' => $providerName,
+                    'enrollment_id'     => $enrollment->id,
+                    'provider'          => $providerName,
                     'enrollment_status' => $enrollmentStatus,
-                    'count' => $enrollees->count(),
+                    'count'             => $enrollees->count(),
                 ]);
 
                 // Skip this provider if no enrollees found
                 if ($enrollees->count() === 0) {
-                    Log::info("No enrollees found for provider CSV generation", [
-                        'enrollment_id' => $enrollment->id,
-                        'provider' => $providerName,
+                    Log::info("No enrollees found for provider XLSX generation", [
+                        'enrollment_id'     => $enrollment->id,
+                        'provider'          => $providerName,
                         'enrollment_status' => $enrollmentStatus,
                     ]);
                     continue;
                 }
 
-                // Build CSV data for this provider
-                $csvData = [];
+                // --- Build sheet data (header + rows) ---
+                $sheetData = [];
 
-                // Add header row
-                $csvData[] = [
+                // Header row
+                $sheetData[] = [
                     'EMPLOYEE NAME',
                     'EMPLOYEE ID',
                     'PLAN SELECTED',
                     'CERTIFICATE NUMBER',
                     'ACTIVATION DATE',
                     'COVERAGE START DATE',
-                    'ANY DEPENDENTS ENROLLED'
+                    'ANY DEPENDENTS ENROLLED',
                 ];
 
-                // Add data rows
+                // Data rows
                 foreach ($enrollees as $enrollee) {
-                    $fullName = trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? ''));
-                    $employeeId = $enrollee->employee_id ?? 'N/A';
-                    $plan = $enrollee->healthInsurance?->plan ?? 'N/A';
+                    $fullName        = trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? ''));
+                    $employeeId      = $enrollee->employee_id ?? 'N/A';
+                    $plan            = $enrollee->healthInsurance?->plan ?? 'N/A';
                     $certificateNumber = $enrollee->healthInsurance?->certificate_number ?? 'N/A';
-                    $activationDate = $enrollee->healthInsurance?->certificate_date_issued
+                    $activationDate  = $enrollee->healthInsurance?->certificate_date_issued
                         ? date('m/d/Y', strtotime($enrollee->healthInsurance->certificate_date_issued))
                         : 'N/A';
                     $coverageStartDate = $enrollee->healthInsurance?->coverage_start_date
                         ? date('m/d/Y', strtotime($enrollee->healthInsurance->coverage_start_date))
                         : 'N/A';
 
-                    // Build dependents list with line breaks
-                    $dependentsList = '';
+                    $dependentsList = 'None';
                     if ($enrollee->dependents && $enrollee->dependents->count() > 0) {
                         $dependentNames = $enrollee->dependents->map(function ($dependent) {
                             return trim(($dependent->first_name ?? '') . ' ' . ($dependent->last_name ?? ''));
                         })->toArray();
                         $dependentsList = implode("\n", $dependentNames);
-                    } else {
-                        $dependentsList = 'None';
                     }
 
-                    $csvData[] = [
+                    $sheetData[] = [
                         $fullName,
                         $employeeId,
                         $plan,
                         $certificateNumber,
                         $activationDate,
                         $coverageStartDate,
-                        $dependentsList
+                        $dependentsList,
                     ];
                 }
 
-                // Convert to CSV format
-                $csvContent = '';
-                foreach ($csvData as $row) {
-                    $csvContent .= $this->escapeCsvRow($row) . "\n";
+                // --- Build spreadsheet with PhpSpreadsheet ---
+                $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+                $sheet       = $spreadsheet->getActiveSheet();
+                $sheet->setTitle(substr($providerName, 0, 31)); // Sheet names max 31 chars
+
+                // Write all data at once (header + data rows)
+                $sheet->fromArray($sheetData, null, 'A1');
+
+                // Style header row: bold white text on blue background, centred
+                $sheet->getStyle('A1:G1')->applyFromArray([
+                    'font' => [
+                        'bold'  => true,
+                        'color' => ['rgb' => 'FFFFFF'],
+                    ],
+                    'fill' => [
+                        'fillType'   => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID,
+                        'startColor' => ['rgb' => '2F75B6'],
+                    ],
+                    'alignment' => [
+                        'horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER,
+                    ],
+                ]);
+
+                // Enable text-wrap for the dependents column (G) on all data rows
+                $lastRow = count($sheetData);
+                if ($lastRow > 1) {
+                    $sheet->getStyle('G2:G' . $lastRow)->getAlignment()->setWrapText(true);
                 }
 
-                // Generate temporary file with provider name in filename
-                $filename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.csv';
-                $tempPath = tempnam(sys_get_temp_dir(), 'csv_provider_');
-                $tempCsvPath = $tempPath . '.csv';
+                // Auto-size all columns
+                foreach (range('A', 'G') as $col) {
+                    $sheet->getColumnDimension($col)->setAutoSize(true);
+                }
 
-                // Write CSV content to temporary file
-                file_put_contents($tempCsvPath, $csvContent);
+                // Apply sheet protection (prevents editing without the password)
+                $sheet->getProtection()->setSheet(true)->setPassword($xlsxPassword);
 
-                // Store for later addition to attachments
-                $csvFilesToZip[] = [
-                    'path' => $tempCsvPath,
-                    'name' => $filename,
-                    'provider' => $providerName,
+                // Save XLSX to a temporary file
+                $xlsxFilename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.xlsx';
+                $tempBasePath = tempnam(sys_get_temp_dir(), 'xlsx_provider_');
+                $tempXlsxPath = $tempBasePath . '.xlsx';
+
+                $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
+                $writer->save($tempXlsxPath);
+                $spreadsheet->disconnectWorksheets();
+                unset($spreadsheet);
+
+                // Package XLSX in a password-protected ZIP (AES-256)
+                $tempZipPath    = $tempBasePath . '.zip';
+                $zip            = new \ZipArchive();
+                $attachmentPath = $tempXlsxPath;
+                $attachmentName = $xlsxFilename;
+                $attachmentMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+                if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
+                    $zip->addFile($tempXlsxPath, $xlsxFilename);
+                    if (method_exists($zip, 'setEncryptionName')) {
+                        $zip->setEncryptionName($xlsxFilename, \ZipArchive::EM_AES_256, $xlsxPassword);
+                    }
+                    $zip->close();
+
+                    // Use the ZIP as the actual attachment
+                    $attachmentPath = $tempZipPath;
+                    $attachmentName = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.zip';
+                    $attachmentMime = 'application/zip';
+
+                    // Remove raw XLSX – it is now inside the encrypted ZIP
+                    @unlink($tempXlsxPath);
+                }
+
+                $xlsxFilesToAttach[] = [
+                    'path'          => $attachmentPath,
+                    'name'          => $attachmentName,
+                    'mime'          => $attachmentMime,
+                    'temp_path'     => $tempBasePath,
+                    'temp_zip'      => $tempZipPath,
+                    'temp_xlsx'     => $tempXlsxPath,
+                    'provider'      => $providerName,
                     'enrollee_count' => $enrollees->count(),
+                    'has_data'      => $enrollees->count() > 0,
+                    'data_rows'     => $enrollees->count(),
                 ];
 
-                $tempFilesForCleanup[] = $tempCsvPath;
-
-                Log::info("Multi-provider CSV prepared for attachment", [
-                    'filename' => $filename,
-                    'provider' => $providerName,
-                    'enrollee_count' => $enrollees->count(),
+                Log::info("Multi-provider XLSX prepared for attachment", [
+                    'filename'           => $attachmentName,
+                    'provider'           => $providerName,
+                    'enrollee_count'     => $enrollees->count(),
+                    'password_protected' => true,
                 ]);
             }
 
-            // If no CSVs were generated, return empty array
+            // If no XLSXs were generated, return empty array
             // This will trigger the placeholder message to be sent instead
-            if (empty($csvFilesToZip)) {
+            if (empty($xlsxFilesToAttach)) {
                 Log::info("No enrollees found across all providers, skipping attachment - placeholder message will be used");
                 return [];
             }
 
-            // Return multiple attachments - one per provider
-            $attachments = [];
+            $attachments   = [];
             $totalEnrollees = 0;
 
-            foreach ($csvFilesToZip as $csvFile) {
-                // Attachment already created, just add to return array
+            foreach ($xlsxFilesToAttach as $xlsxFile) {
                 $attachments[] = [
-                    'path' => $csvFile['path'],
-                    'name' => $csvFile['name'],
-                    'temp_path' => $csvFile['path'],
-                    'has_data' => $csvFile['enrollee_count'] > 0,
-                    'data_rows' => $csvFile['enrollee_count'],
-                    'provider' => $csvFile['provider'],
+                    'path'      => $xlsxFile['path'],
+                    'name'      => $xlsxFile['name'],
+                    'mime'      => $xlsxFile['mime'],
+                    'temp_path' => $xlsxFile['temp_path'],
+                    'temp_zip'  => $xlsxFile['temp_zip'],
+                    'temp_xlsx' => $xlsxFile['temp_xlsx'],
+                    'has_data'  => $xlsxFile['has_data'],
+                    'data_rows' => $xlsxFile['data_rows'],
+                    'provider'  => $xlsxFile['provider'],
                 ];
 
-                $totalEnrollees += $csvFile['enrollee_count'];
+                $totalEnrollees += $xlsxFile['enrollee_count'];
 
-                Log::info("Added provider CSV as separate attachment", [
-                    'filename' => $csvFile['name'],
-                    'provider' => $csvFile['provider'],
-                    'enrollee_count' => $csvFile['enrollee_count'],
+                Log::info("Added provider XLSX as separate attachment", [
+                    'filename'      => $xlsxFile['name'],
+                    'provider'      => $xlsxFile['provider'],
+                    'enrollee_count' => $xlsxFile['enrollee_count'],
                 ]);
             }
 
-            Log::info("Multi-provider CSV attachments created successfully", [
-                'total_providers' => count($csvFilesToZip),
-                'total_enrollees' => $totalEnrollees,
+            Log::info("Multi-provider XLSX attachments created successfully", [
+                'total_providers'  => count($xlsxFilesToAttach),
+                'total_enrollees'  => $totalEnrollees,
                 'attachment_count' => count($attachments),
             ]);
 
-            // Cleanup temporary provider CSV files will be done during email sending
-            // Store cleanup paths in attachment array for later cleanup
-            
             return $attachments;
         } catch (\Exception $e) {
-            Log::error("Failed to generate multi-provider CSV attachments: " . $e->getMessage(), [
+            Log::error("Failed to generate multi-provider XLSX attachments: " . $e->getMessage(), [
                 'exception' => $e->getTraceAsString()
             ]);
             return [];
