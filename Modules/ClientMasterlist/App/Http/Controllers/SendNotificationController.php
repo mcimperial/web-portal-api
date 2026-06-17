@@ -1865,15 +1865,22 @@ class SendNotificationController extends Controller
                 foreach ($csvFilesToZip as $csvFile) {
                     $zip->addFile($csvFile['path'], $csvFile['name']);
 
-                    // Set password protection on each file using PKWARE encryption (Windows compatible)
-                    if (method_exists($zip, 'setEncryptionName')) {
-                        $zip->setEncryptionName($csvFile['name'], \ZipArchive::EM_AES_256, $csvPassword);
-                    }
-
                     Log::info("Added CSV to combined ZIP", [
                         'filename' => $csvFile['name'],
                         'provider' => $csvFile['provider'],
                     ]);
+                }
+                
+                // Set password on the entire ZIP archive if method exists
+                if (method_exists($zip, 'setPassword')) {
+                    try {
+                        $zip->setPassword($csvPassword);
+                        Log::info("Password protection applied to ZIP archive");
+                    } catch (\Exception $encryptionError) {
+                        Log::warning("Failed to set password on ZIP, proceeding without encryption", [
+                            'error' => $encryptionError->getMessage()
+                        ]);
+                    }
                 }
                 
                 $zip->close();
