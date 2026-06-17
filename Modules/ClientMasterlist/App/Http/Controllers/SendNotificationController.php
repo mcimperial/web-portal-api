@@ -410,10 +410,20 @@ class SendNotificationController extends Controller
                         ];
                     } else {
                         $tmp = tempnam(sys_get_temp_dir(), 'attach_');
-                        file_put_contents($tmp, $fileContents);
+                        // Give the temp file the proper extension so msoffcrypto-tool detects the format
+                        $tmpFinal = $ext ? $tmp . '.' . $ext : $tmp;
+                        file_put_contents($tmpFinal, $fileContents);
+                        // Encrypt XLSX/XLS files with an open-password before sending
+                        if (in_array($ext, ['xlsx', 'xls'])) {
+                            $attachPwd = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+                            $this->encryptFileWithPassword($tmpFinal, $attachPwd);
+                        }
                         $tempFiles[] = $tmp;
+                        if ($tmpFinal !== $tmp) {
+                            $tempFiles[] = $tmpFinal;
+                        }
                         $infobipAttachments[] = [
-                            'path' => $tmp,
+                            'path' => $tmpFinal,
                             'name' => $originalName
                         ];
                     }
@@ -475,7 +485,43 @@ class SendNotificationController extends Controller
             // Send SMS notification
             $this->sendSmsNotification($data, $notification);
         } else {
-            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $attachments, $messageBody, $subjectBody, $csvAttachments, $placeholderMessage) {
+            // Download static notification attachments from DO Spaces.
+            // XLSX/XLS files are encrypted in-place with the open-password before attaching.
+            $mailStaticAttachments = [];
+            $mailStaticTempFiles   = [];
+            $staticAttachPwd = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+
+            foreach ($attachmentModels as $att) {
+                if (!empty($att->file_path)) {
+                    try {
+                        $endpoint        = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
+                        $publicUrlPrefix = 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/';
+                        $objectKey       = ltrim(str_replace($publicUrlPrefix, '', $att->file_path), '/');
+                        $fileContents    = Storage::disk('spaces')->get($objectKey);
+                        $originalName    = $att->file_name ?? basename($objectKey);
+                        $ext             = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+
+                        $tmp      = tempnam(sys_get_temp_dir(), 'mail_attach_');
+                        $tmpFinal = $ext ? $tmp . '.' . $ext : $tmp;
+                        file_put_contents($tmpFinal, $fileContents);
+
+                        // Encrypt XLSX/XLS files with open-password
+                        if (in_array($ext, ['xlsx', 'xls'])) {
+                            $this->encryptFileWithPassword($tmpFinal, $staticAttachPwd);
+                        }
+
+                        $mailStaticTempFiles[] = $tmp;
+                        if ($tmpFinal !== $tmp) {
+                            $mailStaticTempFiles[] = $tmpFinal;
+                        }
+                        $mailStaticAttachments[] = ['path' => $tmpFinal, 'name' => $originalName];
+                    } catch (\Exception $e) {
+                        Log::warning("Failed to process static attachment for Laravel Mail: " . $e->getMessage());
+                    }
+                }
+            }
+
+            Mail::send([], [], function ($message) use ($notification, $to, $cc, $bcc, $mailStaticAttachments, $messageBody, $subjectBody, $csvAttachments, $placeholderMessage) {
                 $message->to($to)
                     ->subject($subjectBody ?? 'Notification');
                 if ($notification->is_html) {
@@ -492,9 +538,10 @@ class SendNotificationController extends Controller
                 if (env('MAIL_FROM_ADDRESS')) {
                     $message->from(env('MAIL_FROM_ADDRESS'), env('MAIL_FROM_NAME', 'Notification'));
                 }
-                if (!empty($attachments)) {
-                    foreach ($attachments as $file) {
-                        $message->attach($file);
+                // Static notification attachments (downloaded locally, XLSX/XLS already encrypted)
+                if (!empty($mailStaticAttachments) && !$placeholderMessage) {
+                    foreach ($mailStaticAttachments as $file) {
+                        $message->attach($file['path'], ['as' => $file['name']]);
                     }
                 }
                 // Add multiple XLSX/CSV attachments if provided (not placeholder message)
@@ -507,6 +554,11 @@ class SendNotificationController extends Controller
                     }
                 }
             });
+
+            // Clean up static attachment temp files
+            foreach ($mailStaticTempFiles as $tmp) {
+                @unlink($tmp);
+            }
 
             // Clean up attachment temp files for Laravel Mail
             foreach ($csvAttachments as $csv) {
@@ -1882,61 +1934,34 @@ class SendNotificationController extends Controller
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
 
-                // ---------------------------------------------------------------
-                // Add file-open password (ECMA-376 encryption) via msoffcrypto-tool
-                // PhpSpreadsheet does NOT support open-password encryption natively.
-                // We use Python's msoffcrypto-tool to encrypt the saved XLSX so that
-                // Excel/LibreOffice prompts for the password before the file can be opened.
-                //
-                // Install on server: pip3 install msoffcrypto-tool
-                // ---------------------------------------------------------------
-                if (function_exists('shell_exec')) {
-                    $tmpEncPath = $tempXlsxPath . '.enc';
+                // Wrap XLSX in a password-protected ZIP (AES-256) — pure PHP, no Python required
+                $tempZipPath = $tempBasePath . '.zip';
+                $zipFilename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.zip';
+                $zip = new \ZipArchive();
 
-                    // Build inline Python script passed as -c argument (no temp file needed)
-                    $pyCode = implode(';', [
-                        'import msoffcrypto, sys',
-                        'src=open(sys.argv[1],"rb")',
-                        'of=msoffcrypto.OfficeFile(src)',
-                        'dst=open(sys.argv[2],"wb")',
-                        'of.encrypt(sys.argv[3],dst)',
-                        'src.close()',
-                        'dst.close()',
-                    ]);
-
-                    $cmd = sprintf(
-                        'python3 -c %s %s %s %s 2>&1',
-                        escapeshellarg($pyCode),
-                        escapeshellarg($tempXlsxPath),
-                        escapeshellarg($tmpEncPath),
-                        escapeshellarg($xlsxPassword)
-                    );
-
-                    $cmdOutput = shell_exec($cmd);
-
-                    if (file_exists($tmpEncPath) && filesize($tmpEncPath) > 1024) {
-                        // Replace the unencrypted file with the encrypted one
-                        rename($tmpEncPath, $tempXlsxPath);
-                        Log::info("XLSX open-password encryption applied", [
-                            'provider' => $providerName,
-                            'method'   => 'msoffcrypto-tool',
-                        ]);
-                    } else {
-                        // msoffcrypto-tool not installed or failed — sheet/workbook protection still active
-                        @unlink($tmpEncPath);
-                        Log::warning("msoffcrypto open-password encryption skipped — sheet+workbook protection still active", [
-                            'provider'   => $providerName,
-                            'cmd_output' => $cmdOutput,
-                        ]);
+                if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
+                    $zip->addFile($tempXlsxPath, $xlsxFilename);
+                    if (method_exists($zip, 'setEncryptionName')) {
+                        $zip->setEncryptionName($xlsxFilename, \ZipArchive::EM_AES_256, $xlsxPassword);
                     }
+                    $zip->close();
+                    $attachmentPath = $tempZipPath;
+                    $attachmentName = $zipFilename;
+                    $attachmentMime = 'application/zip';
+                } else {
+                    // Fallback: attach plain XLSX with internal sheet/workbook protection only
+                    $attachmentPath = $tempXlsxPath;
+                    $attachmentName = $xlsxFilename;
+                    $attachmentMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                    $tempZipPath    = null;
                 }
 
                 $xlsxFilesToAttach[] = [
-                    'path'          => $tempXlsxPath,
-                    'name'          => $xlsxFilename,
-                    'mime'          => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'path'          => $attachmentPath,
+                    'name'          => $attachmentName,
+                    'mime'          => $attachmentMime,
                     'temp_path'     => $tempBasePath,
-                    'temp_zip'      => null,
+                    'temp_zip'      => $tempZipPath,
                     'temp_xlsx'     => $tempXlsxPath,
                     'provider'      => $providerName,
                     'enrollee_count' => $enrollees->count(),
@@ -1945,10 +1970,11 @@ class SendNotificationController extends Controller
                 ];
 
                 Log::info("Multi-provider XLSX prepared for attachment", [
-                    'filename'           => $xlsxFilename,
+                    'filename'           => $attachmentName,
                     'provider'           => $providerName,
                     'enrollee_count'     => $enrollees->count(),
                     'password_protected' => true,
+                    'encryption'         => 'AES-256 ZIP (PHP native)',
                 ]);
             }
 
@@ -2017,6 +2043,53 @@ class SendNotificationController extends Controller
             $escapedRow[] = $value;
         }
         return implode(',', $escapedRow);
+    }
+
+    /**
+     * Encrypt an XLSX/XLS file IN-PLACE with an open-password using msoffcrypto-tool (ECMA-376 AES).
+     * After this call, Excel/LibreOffice will prompt for the password before the file can be opened.
+     *
+     * Requires on server: pip3 install msoffcrypto-tool
+     * Falls back silently if Python/msoffcrypto is unavailable — sheet+workbook protection still applies.
+     */
+    private function encryptFileWithPassword(string $filePath, string $password): void
+    {
+        if (!function_exists('shell_exec') || !file_exists($filePath)) {
+            return;
+        }
+
+        $tmpEncPath = $filePath . '.enc';
+
+        $pyCode = implode(';', [
+            'import msoffcrypto, sys',
+            'src=open(sys.argv[1],"rb")',
+            'of=msoffcrypto.OfficeFile(src)',
+            'dst=open(sys.argv[2],"wb")',
+            'of.encrypt(sys.argv[3],dst)',
+            'src.close()',
+            'dst.close()',
+        ]);
+
+        $cmd = sprintf(
+            'python3 -c %s %s %s %s 2>&1',
+            escapeshellarg($pyCode),
+            escapeshellarg($filePath),
+            escapeshellarg($tmpEncPath),
+            escapeshellarg($password)
+        );
+
+        $cmdOutput = shell_exec($cmd);
+
+        if (file_exists($tmpEncPath) && filesize($tmpEncPath) > 1024) {
+            rename($tmpEncPath, $filePath);
+            Log::info("File open-password encryption applied", ['file' => basename($filePath)]);
+        } else {
+            @unlink($tmpEncPath);
+            Log::warning("Open-password encryption skipped (msoffcrypto unavailable?)", [
+                'file'       => basename($filePath),
+                'cmd_output' => $cmdOutput,
+            ]);
+        }
     }
 
     /**
