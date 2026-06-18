@@ -1941,22 +1941,25 @@ class SendNotificationController extends Controller
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
 
-                // Wrap XLSX in a password-protected ZIP (AES-256) — pure PHP, no Python required
+                // Wrap XLSX in a password-protected ZIP using ZipCrypto (traditional encryption).
+                // ZipCrypto is natively supported by Windows Explorer — it will prompt for the
+                // password before the ZIP can be opened/extracted on any OS.
+                // (AES-256 ZIPs require 7-Zip on Windows and are NOT supported by Explorer.)
                 $tempZipPath = $tempBasePath . '.zip';
                 $zipFilename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.zip';
                 $zip = new \ZipArchive();
 
                 if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
                     $zip->addFile($tempXlsxPath, $xlsxFilename);
-                    if (method_exists($zip, 'setEncryptionName')) {
-                        $zip->setEncryptionName($xlsxFilename, \ZipArchive::EM_AES_256, $xlsxPassword);
-                    }
+                    // EM_TRAD_ENC (ZipCrypto) = Windows-native password prompt on open
+                    $encMethod = defined('ZipArchive::EM_TRAD_ENC') ? \ZipArchive::EM_TRAD_ENC : 1;
+                    $zip->setEncryptionName($xlsxFilename, $encMethod, $xlsxPassword);
                     $zip->close();
                     $attachmentPath = $tempZipPath;
                     $attachmentName = $zipFilename;
                     $attachmentMime = 'application/zip';
                 } else {
-                    // Fallback: attach plain XLSX with internal sheet/workbook protection only
+                    // Fallback: attach plain XLSX (sheet/workbook protection still active)
                     $attachmentPath = $tempXlsxPath;
                     $attachmentName = $xlsxFilename;
                     $attachmentMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -1964,16 +1967,16 @@ class SendNotificationController extends Controller
                 }
 
                 $xlsxFilesToAttach[] = [
-                    'path'          => $attachmentPath,
-                    'name'          => $attachmentName,
-                    'mime'          => $attachmentMime,
-                    'temp_path'     => $tempBasePath,
-                    'temp_zip'      => $tempZipPath,
-                    'temp_xlsx'     => $tempXlsxPath,
-                    'provider'      => $providerName,
+                    'path'           => $attachmentPath,
+                    'name'           => $attachmentName,
+                    'mime'           => $attachmentMime,
+                    'temp_path'      => $tempBasePath,
+                    'temp_zip'       => $tempZipPath,
+                    'temp_xlsx'      => $tempXlsxPath,
+                    'provider'       => $providerName,
                     'enrollee_count' => $enrollees->count(),
-                    'has_data'      => $enrollees->count() > 0,
-                    'data_rows'     => $enrollees->count(),
+                    'has_data'       => $enrollees->count() > 0,
+                    'data_rows'      => $enrollees->count(),
                 ];
 
                 Log::info("Multi-provider XLSX prepared for attachment", [
@@ -1981,7 +1984,7 @@ class SendNotificationController extends Controller
                     'provider'           => $providerName,
                     'enrollee_count'     => $enrollees->count(),
                     'password_protected' => true,
-                    'encryption'         => 'AES-256 ZIP (PHP native)',
+                    'encryption'         => 'ZipCrypto ZIP (Windows-native password prompt on open)',
                 ]);
             }
 
