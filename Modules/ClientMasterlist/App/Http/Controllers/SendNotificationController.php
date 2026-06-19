@@ -1690,13 +1690,13 @@ class SendNotificationController extends Controller
     /**
      * Generate separate password-protected XLSX attachments for each insurance provider per company.
      * For example: Company "Deel" with providers "Maxicare" and "Philcare" will produce 2 XLSX files,
-     * each password-protected via sheet protection + workbook-level security (same password for all).
+     * each as a plain XLSX file (no password, no ZIP — to be added later).
      *
      * LOGIC:
      * 1. Select enrollees/principals with APPROVED status
      * 2. Filter by certificate_date_issued (DATE ONLY) within scheduled date range
      * 3. Filter by updated_at (DATETIME) within scheduled datetime range (PRIMARY FILTER)
-     * 4. Generate XLSX per provider with sheet + workbook password protection (no ZIP wrapper)
+     * 4. Generate XLSX per provider
      * 5. If no enrollees found, return empty array (placeholder message will be used)
      *
      * EXAMPLE: If schedule is daily at 9 AM:
@@ -1739,9 +1739,6 @@ class SendNotificationController extends Controller
                 'dateTo'            => $dateTo,
                 'enrollment_status' => $enrollmentStatus,
             ]);
-
-            // Password used for both XLSX sheet protection and ZIP encryption
-            $xlsxPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
 
             // Get all enrollments for the same company with different providers
             $currentEnrollment = \Modules\ClientMasterlist\App\Models\Enrollment::find($enrollmentId);
@@ -1922,15 +1919,6 @@ class SendNotificationController extends Controller
                     $sheet->getColumnDimension($col)->setAutoSize(true);
                 }
 
-                // Apply sheet protection (prevents editing without the password)
-                $sheet->getProtection()->setSheet(true)->setPassword($xlsxPassword);
-
-                // Apply workbook-level protection (prevents structure changes without password)
-                $spreadsheet->getSecurity()
-                    ->setLockStructure(true)
-                    ->setLockWindows(true)
-                    ->setWorkbookPassword($xlsxPassword);
-
                 // Save XLSX to a temporary file
                 $xlsxFilename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.xlsx';
                 $tempBasePath = tempnam(sys_get_temp_dir(), 'xlsx_provider_');
@@ -1941,37 +1929,12 @@ class SendNotificationController extends Controller
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
 
-                // Wrap XLSX in a password-protected ZIP using ZipCrypto (traditional encryption).
-                // ZipCrypto is natively supported by Windows Explorer — it will prompt for the
-                // password before the ZIP can be opened/extracted on any OS.
-                // (AES-256 ZIPs require 7-Zip on Windows and are NOT supported by Explorer.)
-                $tempZipPath = $tempBasePath . '.zip';
-                $zipFilename = 'ENROLLEES_' . $providerName . '_' . $enrollmentStatus . '.zip';
-                $zip = new \ZipArchive();
-
-                if ($zip->open($tempZipPath, \ZipArchive::CREATE) === true) {
-                    $zip->addFile($tempXlsxPath, $xlsxFilename);
-                    // EM_TRAD_ENC (ZipCrypto) = Windows-native password prompt on open
-                    $encMethod = defined('ZipArchive::EM_TRAD_ENC') ? \ZipArchive::EM_TRAD_ENC : 1;
-                    $zip->setEncryptionName($xlsxFilename, $encMethod, $xlsxPassword);
-                    $zip->close();
-                    $attachmentPath = $tempZipPath;
-                    $attachmentName = $zipFilename;
-                    $attachmentMime = 'application/zip';
-                } else {
-                    // Fallback: attach plain XLSX (sheet/workbook protection still active)
-                    $attachmentPath = $tempXlsxPath;
-                    $attachmentName = $xlsxFilename;
-                    $attachmentMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-                    $tempZipPath    = null;
-                }
-
                 $xlsxFilesToAttach[] = [
-                    'path'           => $attachmentPath,
-                    'name'           => $attachmentName,
-                    'mime'           => $attachmentMime,
+                    'path'           => $tempXlsxPath,
+                    'name'           => $xlsxFilename,
+                    'mime'           => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     'temp_path'      => $tempBasePath,
-                    'temp_zip'       => $tempZipPath,
+                    'temp_zip'       => null,
                     'temp_xlsx'      => $tempXlsxPath,
                     'provider'       => $providerName,
                     'enrollee_count' => $enrollees->count(),
@@ -1980,11 +1943,9 @@ class SendNotificationController extends Controller
                 ];
 
                 Log::info("Multi-provider XLSX prepared for attachment", [
-                    'filename'           => $attachmentName,
-                    'provider'           => $providerName,
-                    'enrollee_count'     => $enrollees->count(),
-                    'password_protected' => true,
-                    'encryption'         => 'ZipCrypto ZIP (Windows-native password prompt on open)',
+                    'filename'       => $xlsxFilename,
+                    'provider'       => $providerName,
+                    'enrollee_count' => $enrollees->count(),
                 ]);
             }
 
