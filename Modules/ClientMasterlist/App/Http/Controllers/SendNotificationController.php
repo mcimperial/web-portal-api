@@ -2026,13 +2026,52 @@ class SendNotificationController extends Controller
      * Encrypt an XLSX/XLS file IN-PLACE with an open-password using msoffcrypto-tool (ECMA-376 AES).
      * After this call, Excel/LibreOffice will prompt for the password before the file can be opened.
      *
-     * Requires on server: pip3 install msoffcrypto-tool
-     * Falls back silently if Python/msoffcrypto is unavailable — sheet+workbook protection still applies.
+     * Auto-installs msoffcrypto-tool via pip if not present (handles fresh Forge deploys).
+     * Falls back silently if Python is unavailable.
      */
     private function encryptFileWithPassword(string $filePath, string $password): void
     {
         if (!function_exists('shell_exec') || !file_exists($filePath)) {
             return;
+        }
+
+        // Locate the Python 3 executable (handles different Forge/Ubuntu layouts)
+        $python = '';
+        foreach (['python3', 'python', '/usr/bin/python3', '/usr/local/bin/python3'] as $candidate) {
+            $found = trim(shell_exec('which ' . escapeshellarg($candidate) . ' 2>/dev/null') ?? '');
+            if (!empty($found)) {
+                $python = $found;
+                break;
+            }
+        }
+
+        if (empty($python)) {
+            Log::warning("Python not found — XLSX open-password encryption skipped", [
+                'file' => basename($filePath),
+            ]);
+            return;
+        }
+
+        // Check if msoffcrypto-tool is importable; auto-install if missing (runs once on Forge)
+        $checkOutput = trim(shell_exec($python . ' -c "import msoffcrypto" 2>&1') ?? '');
+        if (!empty($checkOutput)) {
+            // Package missing — attempt silent pip install
+            $installOutput = trim(shell_exec($python . ' -m pip install msoffcrypto-tool --quiet 2>&1') ?? '');
+            Log::info("msoffcrypto-tool not found — attempted pip install", [
+                'file'           => basename($filePath),
+                'install_output' => $installOutput,
+            ]);
+
+            // Re-check after install
+            $checkOutput = trim(shell_exec($python . ' -c "import msoffcrypto" 2>&1') ?? '');
+            if (!empty($checkOutput)) {
+                Log::warning("msoffcrypto-tool still unavailable after install attempt — encryption skipped", [
+                    'file'           => basename($filePath),
+                    'install_output' => $installOutput,
+                    'check_output'   => $checkOutput,
+                ]);
+                return;
+            }
         }
 
         $tmpEncPath = $filePath . '.enc';
@@ -2048,7 +2087,8 @@ class SendNotificationController extends Controller
         ]);
 
         $cmd = sprintf(
-            'python3 -c %s %s %s %s 2>&1',
+            '%s -c %s %s %s %s 2>&1',
+            $python,
             escapeshellarg($pyCode),
             escapeshellarg($filePath),
             escapeshellarg($tmpEncPath),
@@ -2062,7 +2102,7 @@ class SendNotificationController extends Controller
             Log::info("File open-password encryption applied", ['file' => basename($filePath)]);
         } else {
             @unlink($tmpEncPath);
-            Log::warning("Open-password encryption skipped (msoffcrypto unavailable?)", [
+            Log::warning("Open-password encryption failed", [
                 'file'       => basename($filePath),
                 'cmd_output' => $cmdOutput,
             ]);
