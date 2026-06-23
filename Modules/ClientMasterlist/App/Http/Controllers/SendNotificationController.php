@@ -1929,6 +1929,11 @@ class SendNotificationController extends Controller
                 $spreadsheet->disconnectWorksheets();
                 unset($spreadsheet);
 
+                // Apply open-password encryption to the XLSX file (no ZIP).
+                // Requires on server: pip3 install msoffcrypto-tool
+                $xlsxPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+                $this->encryptFileWithPassword($tempXlsxPath, $xlsxPassword);
+
                 $xlsxFilesToAttach[] = [
                     'path'           => $tempXlsxPath,
                     'name'           => $xlsxFilename,
@@ -1946,6 +1951,7 @@ class SendNotificationController extends Controller
                     'filename'       => $xlsxFilename,
                     'provider'       => $providerName,
                     'enrollee_count' => $enrollees->count(),
+                    'password_protected' => true,
                 ]);
             }
 
