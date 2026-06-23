@@ -2026,8 +2026,9 @@ class SendNotificationController extends Controller
      * Encrypt an XLSX/XLS file IN-PLACE with an open-password using msoffcrypto-tool (ECMA-376 AES).
      * After this call, Excel/LibreOffice will prompt for the password before the file can be opened.
      *
-     * Auto-installs msoffcrypto-tool via pip if not present (handles fresh Forge deploys).
-     * Falls back silently if Python is unavailable.
+     * Uses a dedicated Python venv at storage/framework/msoffcrypto_venv to avoid Ubuntu 24+ / Forge
+     * "externally-managed-environment" (PEP 668) restrictions that block system-wide pip installs.
+     * The venv is created once on first run and reused on all subsequent calls.
      */
     private function encryptFileWithPassword(string $filePath, string $password): void
     {
@@ -2035,40 +2036,57 @@ class SendNotificationController extends Controller
             return;
         }
 
-        // Locate the Python 3 executable (handles different Forge/Ubuntu layouts)
-        $python = '';
+        // Locate the system Python 3 executable (needed only to create the venv)
+        $systemPython = '';
         foreach (['python3', 'python', '/usr/bin/python3', '/usr/local/bin/python3'] as $candidate) {
             $found = trim(shell_exec('which ' . escapeshellarg($candidate) . ' 2>/dev/null') ?? '');
             if (!empty($found)) {
-                $python = $found;
+                $systemPython = $found;
                 break;
             }
         }
 
-        if (empty($python)) {
+        if (empty($systemPython)) {
             Log::warning("Python not found — XLSX open-password encryption skipped", [
                 'file' => basename($filePath),
             ]);
             return;
         }
 
-        // Check if msoffcrypto-tool is importable; auto-install if missing (runs once on Forge)
-        $checkOutput = trim(shell_exec($python . ' -c "import msoffcrypto" 2>&1') ?? '');
-        if (!empty($checkOutput)) {
-            // Package missing — attempt silent pip install
-            $installOutput = trim(shell_exec($python . ' -m pip install msoffcrypto-tool --quiet 2>&1') ?? '');
-            Log::info("msoffcrypto-tool not found — attempted pip install", [
-                'file'           => basename($filePath),
-                'install_output' => $installOutput,
-            ]);
+        // Dedicated venv stored in Laravel's storage/framework directory.
+        // This sidesteps PEP 668 "externally-managed-environment" on Ubuntu 24+ / Python 3.12+.
+        $venvPath   = storage_path('framework/msoffcrypto_venv');
+        $venvPython = $venvPath . '/bin/python3';
 
-            // Re-check after install
-            $checkOutput = trim(shell_exec($python . ' -c "import msoffcrypto" 2>&1') ?? '');
-            if (!empty($checkOutput)) {
-                Log::warning("msoffcrypto-tool still unavailable after install attempt — encryption skipped", [
-                    'file'           => basename($filePath),
-                    'install_output' => $installOutput,
-                    'check_output'   => $checkOutput,
+        // Create the venv and install msoffcrypto-tool on first call (once per server)
+        if (!file_exists($venvPython)) {
+            $venvOut = trim(shell_exec($systemPython . ' -m venv ' . escapeshellarg($venvPath) . ' 2>&1') ?? '');
+
+            if (!file_exists($venvPython)) {
+                Log::warning("Could not create Python venv — XLSX encryption skipped", [
+                    'file'     => basename($filePath),
+                    'venv_out' => $venvOut,
+                ]);
+                return;
+            }
+
+            $installOut = trim(shell_exec($venvPython . ' -m pip install msoffcrypto-tool --quiet 2>&1') ?? '');
+            Log::info("msoffcrypto-tool installed into dedicated venv", [
+                'venv'           => $venvPath,
+                'install_output' => $installOut,
+            ]);
+        }
+
+        // Quick sanity-check that the package is importable inside the venv
+        $checkOut = trim(shell_exec($venvPython . ' -c "import msoffcrypto" 2>&1') ?? '');
+        if (!empty($checkOut)) {
+            // Try reinstalling in case a previous install was partial
+            shell_exec($venvPython . ' -m pip install msoffcrypto-tool --quiet 2>&1');
+            $checkOut = trim(shell_exec($venvPython . ' -c "import msoffcrypto" 2>&1') ?? '');
+            if (!empty($checkOut)) {
+                Log::warning("msoffcrypto not importable in venv — XLSX encryption skipped", [
+                    'file'         => basename($filePath),
+                    'check_output' => $checkOut,
                 ]);
                 return;
             }
@@ -2088,7 +2106,7 @@ class SendNotificationController extends Controller
 
         $cmd = sprintf(
             '%s -c %s %s %s %s 2>&1',
-            $python,
+            $venvPython,
             escapeshellarg($pyCode),
             escapeshellarg($filePath),
             escapeshellarg($tmpEncPath),
