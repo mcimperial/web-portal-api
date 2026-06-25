@@ -196,6 +196,8 @@ class EnrolleeController extends Controller
             'enrollment_filter' => $request->query('enrollment_filter'),
             'enrollment_status' => $request->query('enrollment_status'),
             'search' => $request->query('search'),
+            'date_from' => $request->query('date_from'),
+            'date_to' => $request->query('date_to'),
             'per_page' => $request->query('per_page', 20),
         ];
     }
@@ -226,6 +228,7 @@ class EnrolleeController extends Controller
         $this->applyEnrollmentStatusFilter($query, $filters['enrollment_status']);
         $this->applySearchFilter($query, $filters['search']);
         $this->applyEnrollmentFilter($query, $filters['enrollment_filter']);
+        $this->applyDateRangeFilter($query, $filters['date_from'] ?? null, $filters['date_to'] ?? null);
 
         return $query->orderBy('updated_at', 'desc');
     }
