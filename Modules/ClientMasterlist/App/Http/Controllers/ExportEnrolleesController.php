@@ -327,22 +327,33 @@ class ExportEnrolleesController extends Controller
 
     private function applyDateFilters($query, array $filters)
     {
-        // Default to true (certification date) when not specified — preserves existing behaviour
+        // Default to true (certification date) when not specified
         $raw = $filters['use_certification_date'] ?? null;
         $useCertificationDate = ($raw === null) ? true : filter_var($raw, FILTER_VALIDATE_BOOLEAN);
 
-        if (isset($filters['date_from'])) {
-            if ($useCertificationDate) {
-                $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
-            } else {
-                $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
-            }
+        $hasDateFrom = isset($filters['date_from']) && $filters['date_from'] !== '';
+        $hasDateTo   = isset($filters['date_to'])   && $filters['date_to']   !== '';
+
+        if (!$hasDateFrom && !$hasDateTo) {
+            return;
         }
 
-        if (isset($filters['date_to'])) {
-            if ($useCertificationDate) {
-                $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
-            } else {
+        if ($useCertificationDate) {
+            // Single whereHas — filter by certificate_date_issued within the given range
+            $query->whereHas('healthInsurance', function ($subQ) use ($filters, $hasDateFrom, $hasDateTo) {
+                if ($hasDateFrom) {
+                    $subQ->where('certificate_date_issued', '>=', $filters['date_from']);
+                }
+                if ($hasDateTo) {
+                    $subQ->where('certificate_date_issued', '<=', $filters['date_to']);
+                }
+            });
+        } else {
+            // Filter by updated_at on the enrollee record itself
+            if ($hasDateFrom) {
+                $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
+            }
+            if ($hasDateTo) {
                 $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
             }
         }
