@@ -51,6 +51,8 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 
     // Export enrollees as CSV (must be above apiResource to avoid shadowing)
     Route::get('enrollees/export', [ExportEnrolleesController::class, 'exportEnrollees']);
+    // Export enrollees and update SUBMITTED → FOR-APPROVAL (separate from read-only export)
+    Route::get('enrollees/export-with-update', [ExportEnrolleesController::class, 'exportAndUpdateEnrollees']);
 
     Route::get('/enrollees/select', [EnrolleeController::class, 'getAllForSelect']);
 
