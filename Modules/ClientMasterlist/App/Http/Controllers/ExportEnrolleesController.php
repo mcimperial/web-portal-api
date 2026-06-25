@@ -148,17 +148,32 @@ class ExportEnrolleesController extends Controller
         $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal);
         $csv = $this->generateCsv($headers, $rows);
 
-        if ($isForAttachment && $filters['enrollment_status'] === 'SUBMITTED') {
+        return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
+    }
+
+    public function exportAndUpdateEnrollees(Request $request)
+    {
+        $filters = $this->extractFilters($request);
+        $withDependents = $request->query('with_dependents', false);
+
+        $enrollees = $this->buildBaseQuery($filters)->get();
+        $exportType = $this->getExportType($filters['enrollment_id']);
+
+        $columns = $this->determineColumns($request, $exportType, true);
+        [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
+
+        $useDefaultLabels = (bool) $request->query('use_selected_columns');
+        $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
+        $useDefaultValues = (bool) $request->query('use_selected_columns');
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal);
+        $csv = $this->generateCsv($headers, $rows);
+
+        // Update SUBMITTED enrollees to FOR-APPROVAL after export
+        if ($filters['enrollment_status'] === 'SUBMITTED') {
             $this->updateSubmittedEnrollees($enrollees);
         }
 
         return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
-    }
-
-    public function exportEnrolleesForAttachment(Request $request)
-    {
-        $request->merge(['for_attachment' => true]);
-        return $this->exportEnrollees($request);
     }
 
     // =========================================================================
@@ -174,6 +189,7 @@ class ExportEnrolleesController extends Controller
             'enrollment_status' => $request->query('enrollment_status'),
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
+            'use_certification_date' => $request->query('use_certification_date'),
         ];
     }
 
@@ -311,10 +327,12 @@ class ExportEnrolleesController extends Controller
 
     private function applyDateFilters($query, array $filters)
     {
-        $enrollmentStatus = $filters['enrollment_status'] ?? '';
-        
+        // Default to true (certification date) when not specified — preserves existing behaviour
+        $raw = $filters['use_certification_date'] ?? null;
+        $useCertificationDate = ($raw === null) ? true : filter_var($raw, FILTER_VALIDATE_BOOLEAN);
+
         if (isset($filters['date_from'])) {
-            if ($enrollmentStatus === 'APPROVED') {
+            if ($useCertificationDate) {
                 $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
             } else {
                 $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
@@ -322,7 +340,7 @@ class ExportEnrolleesController extends Controller
         }
 
         if (isset($filters['date_to'])) {
-            if ($enrollmentStatus === 'APPROVED') {
+            if ($useCertificationDate) {
                 $query->whereHas('healthInsurance', fn($subQ) => $this->applyHealthInsuranceDateFilters($subQ, $filters));
             } else {
                 $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
