@@ -20,6 +20,7 @@ class ActionLogController extends Controller
     {
         $enrollmentId = $request->query('enrollment_id');
         $limit = $request->query('limit', 3);
+        $viewerRole = $request->query('viewer_role');
 
         if (!$enrollmentId) {
             return response()->json([
@@ -33,9 +34,17 @@ class ActionLogController extends Controller
             ->pluck('id')
             ->toArray();
 
+        // Build the base query
+        $query = ActionLog::where('model_type', 'Modules\ClientMasterlist\App\Models\Enrollee')
+            ->whereIn('model_id', $enrolleeIds);
+
+        // viewer-se can only see logs from employee-se users
+        if ($viewerRole === 'viewer-se') {
+            $query->where('metadata->user_role', 'employee-se');
+        }
+
         // Get action logs for all enrollees in this enrollment
-        $actionLogs = ActionLog::where('model_type', 'Modules\ClientMasterlist\App\Models\Enrollee')
-            ->whereIn('model_id', $enrolleeIds)
+        $actionLogs = $query
             ->orderBy('created_at', 'desc')
             ->limit($limit)
             ->get()
@@ -48,6 +57,7 @@ class ActionLogController extends Controller
                     'user_email' => $log->user_email,
                     'status' => $log->status,
                     'created_at' => $log->created_at,
+                    'user_role' => $log->metadata['user_role'] ?? null,
                     'metadata' => $log->metadata,
                 ];
             });
@@ -67,6 +77,7 @@ class ActionLogController extends Controller
     public function getAllForEnrollment(Request $request): JsonResponse
     {
         $enrollmentId = $request->query('enrollment_id');
+        $viewerRole = $request->query('viewer_role');
 
         if (!$enrollmentId) {
             return response()->json([
@@ -80,9 +91,17 @@ class ActionLogController extends Controller
             ->pluck('id')
             ->toArray();
 
+        // Build the base query
+        $query = ActionLog::where('model_type', 'Modules\ClientMasterlist\App\Models\Enrollee')
+            ->whereIn('model_id', $enrolleeIds);
+
+        // viewer-se can only see logs from employee-se users
+        if ($viewerRole === 'viewer-se') {
+            $query->where('metadata->user_role', 'employee-se');
+        }
+
         // Get action logs for all enrollees in this enrollment
-        $actionLogs = ActionLog::where('model_type', 'Modules\ClientMasterlist\App\Models\Enrollee')
-            ->whereIn('model_id', $enrolleeIds)
+        $actionLogs = $query
             ->orderBy('created_at', 'desc')
             ->limit(100)
             ->get()
@@ -97,6 +116,7 @@ class ActionLogController extends Controller
                     'created_at' => $log->created_at,
                     'old_values' => $log->old_values,
                     'new_values' => $log->new_values,
+                    'user_role' => $log->metadata['user_role'] ?? null,
                     'metadata' => $log->metadata,
                 ];
             });
