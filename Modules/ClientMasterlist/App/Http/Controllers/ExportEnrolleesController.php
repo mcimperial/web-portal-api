@@ -54,6 +54,31 @@ class ExportEnrolleesController extends Controller
                 'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
                 'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
                 'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
+                'maxicare_plan_code'
+            ],
+            'labels' => [
+                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
+                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
+                'maxicare_account_code' => 'Account Code', 'maxicare_employee_id' => 'Employee No',
+                'maxicare_first_name' => 'First Name', 'maxicare_last_name' => 'Last Name',
+                'maxicare_middle_name' => 'Middle Name', 'maxicare_extension' => 'Extension',
+                'maxicare_gender' => 'Gender', 'maxicare_member_type' => 'Member Type',
+                'maxicare_relation' => 'Relationship', 'maxicare_address_line_1' => 'Address Line 1',
+                'maxicare_city' => 'City', 'maxicare_province' => 'Province',
+                'maxicare_civil_status' => 'Civil Status', 'maxicare_birth_date' => 'Birth Date',
+                'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
+                'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
+                'maxicare_plan_code' => 'Plan Code'
+            ]
+        ],
+        'MAXI-SCVP-W-PLAN' => [
+            'columns' => [
+                'maxicare_account_code', 'maxicare_employee_id', 'maxicare_first_name',
+                'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
+                'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
+                'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
+                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
+                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
                 'maxicare_plan_code', 'maxicare_plan_description', 'maxicare_plan_type_d'
             ],
             'labels' => [
@@ -203,7 +228,7 @@ class ExportEnrolleesController extends Controller
 
     private function isCustomExportType(string $exportType): bool
     {
-        return in_array($exportType, ['MAXI-SCVP', 'MAXI-ACVP']);
+        return in_array($exportType, ['MAXI-SCVP', 'MAXI-SCVP-W-PLAN', 'MAXI-ACVP']);
     }
 
     private function getConfig(string $exportType): array
@@ -658,7 +683,7 @@ class ExportEnrolleesController extends Controller
             'remarks' => $this->getSkipRemarks($entity, $isPrincipal, $isDeletedDependent),
             'reason_for_skipping' => $this->getReasonForSkipping($entity, $isPrincipal),
             'attachment_for_skip_hierarchy' => $this->getSkipAttachment($entity, $isPrincipal),
-            'effective_date' => $this->getEffectiveDate(),
+            'effective_date' => $this->getEffectiveDate($entity, $isPrincipal, $principal),
             'enrollment_status' => $this->getEnrollmentStatus($entity, $isPrincipal, $principal),
             'relation' => $this->getRelation($entity, $withDependents, $isPrincipal),
             'department', 'position' => $this->getFromPrincipalOrEntity($entity, $principal, $isPrincipal, $column),
@@ -693,7 +718,7 @@ class ExportEnrolleesController extends Controller
             'maxicare_birth_date' => $entity->birth_date ?? '',
             'maxicare_mobile_no' => $entity->phone1 ?? '',
             'maxicare_email' => $entity->email1 ?? '',
-            'maxicare_effective_date' => $this->getEffectiveDate(),
+            'maxicare_effective_date' => $this->getEffectiveDate($entity, $isPrincipal, $principal),
             'maxicare_date_hired', 'maxicare_date_regularization' => $entity->employment_start_date ?? '',
             'maxicare_philhealth' => 'R',
             'maxicare_plan_code' => $this->getPlanCode($entity, $isPrincipal, $principal, $enrollment),
@@ -765,8 +790,20 @@ class ExportEnrolleesController extends Controller
         return in_array($entity->enrollment_status, ['SKIPPED', 'OVERAGE']);
     }
 
-    private function getEffectiveDate(): string
+    private function getEffectiveDate($entity = null, bool $isPrincipal = true, $principal = null): string
     {
+        $specialCompanyCodes = ['PEAK', 'JUSTWORKS'];
+
+        $enrollment = $this->getEnrollmentReference($entity, $isPrincipal, $principal);
+
+        if ($enrollment && $enrollment->company_id) {
+            $company = Company::find($enrollment->company_id);
+            if ($company && in_array(strtoupper($company->company_code ?? ''), $specialCompanyCodes)) {
+                $principalEntity = $isPrincipal ? $entity : $principal;
+                return $principalEntity->employment_start_date ?? date('Y-m-d', strtotime('first day of next month'));
+            }
+        }
+
         return date('Y-m-d', strtotime('first day of next month'));
     }
 

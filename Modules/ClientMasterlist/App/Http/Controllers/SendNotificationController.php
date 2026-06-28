@@ -1931,8 +1931,8 @@ class SendNotificationController extends Controller
 
                 // Apply open-password encryption to the XLSX file (no ZIP).
                 // Requires on server: pip3 install msoffcrypto-tool
-                $xlsxPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
-                $this->encryptFileWithPassword($tempXlsxPath, $xlsxPassword);
+                // $xlsxPassword = env('CSV_ATTACHMENT_PASSWORD', '%!@#deElDCSV@#%!');
+                // $this->encryptFileWithPassword($tempXlsxPath, $xlsxPassword);
 
                 $xlsxFilesToAttach[] = [
                     'path'           => $tempXlsxPath,
