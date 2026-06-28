@@ -47,7 +47,11 @@ trait LogsActions
 
         // Get request information
         $request = request();
-        
+
+        // Automatically capture the user's primary role into metadata
+        $userRole = $user ? $user->roles()->orderBy('id')->pluck('slug')->first() : null;
+        $mergedMetadata = array_merge($metadata ?? [], ['user_role' => $userRole]);
+
         return ActionLog::create([
             'action_type' => $actionType,
             'model_type' => $modelType,
@@ -58,7 +62,7 @@ trait LogsActions
             'description' => $description ?? $this->generateDescription($actionType, $modelType, $modelId),
             'old_values' => $oldValues,
             'new_values' => $newValues,
-            'metadata' => $metadata,
+            'metadata' => $mergedMetadata,
             'ip_address' => $request->ip(),
             'user_agent' => $request->userAgent(),
             'status' => $status,
