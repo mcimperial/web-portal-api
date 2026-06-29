@@ -903,6 +903,7 @@ class SendNotificationController extends Controller
                     'export_enrollment_type' => 'REGULAR',
                     'is_renewal' => false,
                     'with_dependents' => true,
+                    'use_certification_date' => false, // SUBMITTED enrollees have no certificate_date_issued yet; filter by updated_at
                     'date_from' => $dateRange['from'],
                     'date_to' => $dateRange['to'],
                     'columns' => $columns
@@ -1459,7 +1460,7 @@ class SendNotificationController extends Controller
 
             // Create a request object with the parameters
             $request = new Request([
-                'maxicare_customized_column' => $statusResult['maxicare_customized_column'],
+                'maxicare_customized_column' => $statusResult['maxicare_customized_column'] ?? false,
                 'enrollment_id' => $statusResult['enrollment_id'],
                 'enrollment_status' => $statusResult['enrollment_status'] ?? null,
                 'export_enrollment_type' => $statusResult['export_enrollment_type'] ?? 'REGULAR',
@@ -1467,13 +1468,15 @@ class SendNotificationController extends Controller
                 'with_dependents' => $statusResult['with_dependents'] ?? true,
                 'date_from' => $statusResult['date_from'] ?? null,
                 'date_to' => $statusResult['date_to'] ?? null,
+                'use_certification_date' => $statusResult['use_certification_date'] ?? true,
+                'for_attachment' => true,
                 'columns' => $statusResult['columns'] ?? []
             ]);
 
             // Create ExportEnrolleesController instance and call the export method
             $exportController = new ExportEnrolleesController();
 
-            $response = $exportController->exportEnrolleesForAttachment($request);
+            $response = $exportController->exportEnrollees($request);
 
             // Get the CSV content from the response
             $csvContent = $response->getContent();

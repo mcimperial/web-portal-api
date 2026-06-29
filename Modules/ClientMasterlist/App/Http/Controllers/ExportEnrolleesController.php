@@ -375,11 +375,19 @@ class ExportEnrolleesController extends Controller
             });
         } else {
             // Filter by updated_at on the enrollee record itself
+            // If the date string already includes a time component (from cron schedule calculation),
+            // use it as-is; otherwise append start/end-of-day times.
             if ($hasDateFrom) {
-                $query->where('updated_at', '>=', $filters['date_from'] . ' 00:00:00');
+                $fromVal = (strpos($filters['date_from'], ':') !== false)
+                    ? $filters['date_from']
+                    : $filters['date_from'] . ' 00:00:00';
+                $query->where('updated_at', '>=', $fromVal);
             }
             if ($hasDateTo) {
-                $query->where('updated_at', '<=', $filters['date_to'] . ' 23:59:59');
+                $toVal = (strpos($filters['date_to'], ':') !== false)
+                    ? $filters['date_to']
+                    : $filters['date_to'] . ' 23:59:59';
+                $query->where('updated_at', '<=', $toVal);
             }
         }
     }
