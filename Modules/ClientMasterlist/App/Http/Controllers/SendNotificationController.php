@@ -1474,9 +1474,10 @@ class SendNotificationController extends Controller
             ]);
 
             // Create ExportEnrolleesController instance and call the export method
+            // Use exportAndUpdateEnrollees so SUBMITTED enrollees are transitioned to FOR-APPROVAL
             $exportController = new ExportEnrolleesController();
 
-            $response = $exportController->exportEnrollees($request);
+            $response = $exportController->exportAndUpdateEnrollees($request);
 
             // Get the CSV content from the response
             $csvContent = $response->getContent();
