@@ -11,6 +11,7 @@ use Modules\ClientMasterlist\App\Models\Dependent;
 use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\InsuranceProvider;
+use Modules\ClientMasterlist\App\Models\ImportLog;
 use App\Models\Company;
 
 use App\Http\Traits\DateSanitizer;
@@ -22,6 +23,142 @@ use Illuminate\Support\Facades\Log;
 class ImportEnrolleeController extends Controller
 {
     use UppercaseInput, DateSanitizer;
+
+    /**
+     * Store detailed import logging information
+     */
+    private $importLog = [
+        'principals' => [],
+        'dependents' => [],
+        'summary' => [
+            'total_principals' => 0,
+            'total_dependents' => 0,
+            'principals_created' => 0,
+            'principals_updated' => 0,
+            'dependents_created' => 0,
+            'dependents_updated' => 0,
+        ]
+    ];
+
+    /**
+     * Add principal log entry with field mapping
+     */
+    private function logPrincipal(string $employeeId, string $action, array $enrolleeData, array $changes = [], array $healthInsuranceData = []): void
+    {
+        $this->importLog['principals'][] = [
+            'employee_id' => $employeeId,
+            'action' => $action,
+            'enrollee_fields' => [
+                'first_name' => $enrolleeData['first_name'] ?? null,
+                'last_name' => $enrolleeData['last_name'] ?? null,
+                'middle_name' => $enrolleeData['middle_name'] ?? null,
+                'birth_date' => $enrolleeData['birth_date'] ?? null,
+                'gender' => $enrolleeData['gender'] ?? null,
+                'employment_start_date' => $enrolleeData['employment_start_date'] ?? null,
+                'employment_end_date' => $enrolleeData['employment_end_date'] ?? null,
+                'email1' => $enrolleeData['email1'] ?? null,
+                'phone1' => $enrolleeData['phone1'] ?? null,
+                'address' => $enrolleeData['address'] ?? null,
+                'department' => $enrolleeData['department'] ?? null,
+                'position' => $enrolleeData['position'] ?? null,
+                'marital_status' => $enrolleeData['marital_status'] ?? null,
+                'nationality' => $enrolleeData['nationality'] ?? null,
+                'enrollment_status' => $enrolleeData['enrollment_status'] ?? null,
+            ],
+            'health_insurance_fields' => [
+                'certificate_number' => $healthInsuranceData['certificate_number'] ?? null,
+                'plan' => $healthInsuranceData['plan'] ?? null,
+                'premium' => $healthInsuranceData['premium'] ?? null,
+                'coverage_start_date' => $healthInsuranceData['coverage_start_date'] ?? null,
+                'coverage_end_date' => $healthInsuranceData['coverage_end_date'] ?? null,
+                'is_company_paid' => $healthInsuranceData['is_company_paid'] ?? null,
+                'is_renewal' => $healthInsuranceData['is_renewal'] ?? null,
+                'is_skipping' => $healthInsuranceData['is_skipping'] ?? null,
+                'reason_for_skipping' => $healthInsuranceData['reason_for_skipping'] ?? null,
+            ],
+            'changes' => $changes,
+            'timestamp' => now()->toDateTimeString(),
+        ];
+
+        if ($action === 'created') {
+            $this->importLog['summary']['principals_created']++;
+        } elseif ($action === 'updated' && !empty($changes)) {
+            $this->importLog['summary']['principals_updated']++;
+        }
+    }
+
+    /**
+     * Add dependent log entry with field mapping
+     */
+    private function logDependent(int $principalId, string $employeeId, string $action, array $dependentData, array $changes = [], array $healthInsuranceData = []): void
+    {
+        $this->importLog['dependents'][] = [
+            'principal_id' => $principalId,
+            'principal_employee_id' => $employeeId,
+            'action' => $action,
+            'dependent_fields' => [
+                'first_name' => $dependentData['first_name'] ?? null,
+                'last_name' => $dependentData['last_name'] ?? null,
+                'middle_name' => $dependentData['middle_name'] ?? null,
+                'relation' => $dependentData['relation'] ?? null,
+                'birth_date' => $dependentData['birth_date'] ?? null,
+                'gender' => $dependentData['gender'] ?? null,
+                'marital_status' => $dependentData['marital_status'] ?? null,
+                'nationality' => $dependentData['nationality'] ?? null,
+                'enrollment_status' => $dependentData['enrollment_status'] ?? null,
+            ],
+            'health_insurance_fields' => [
+                'certificate_number' => $healthInsuranceData['certificate_number'] ?? null,
+                'plan' => $healthInsuranceData['plan'] ?? null,
+                'premium' => $healthInsuranceData['premium'] ?? null,
+                'coverage_start_date' => $healthInsuranceData['coverage_start_date'] ?? null,
+                'coverage_end_date' => $healthInsuranceData['coverage_end_date'] ?? null,
+                'is_company_paid' => $healthInsuranceData['is_company_paid'] ?? null,
+                'is_skipping' => $healthInsuranceData['is_skipping'] ?? null,
+            ],
+            'changes' => $changes,
+            'timestamp' => now()->toDateTimeString(),
+        ];
+
+        if ($action === 'created') {
+            $this->importLog['summary']['dependents_created']++;
+        } elseif ($action === 'updated' && !empty($changes)) {
+            $this->importLog['summary']['dependents_updated']++;
+        }
+    }
+
+    /**
+     * Save import log to database
+     */
+    private function saveImportLog(int $enrollmentId, string $dateFormat = 'auto', string $confidence = '0%', string $status = 'success', string $errorMessage = null): ImportLog
+    {
+        $importLog = ImportLog::create([
+            'enrollment_id' => $enrollmentId,
+            'import_date' => now(),
+            'total_principals' => $this->importLog['summary']['total_principals'],
+            'total_dependents' => $this->importLog['summary']['total_dependents'],
+            'principals_created' => $this->importLog['summary']['principals_created'],
+            'principals_updated' => $this->importLog['summary']['principals_updated'],
+            'dependents_created' => $this->importLog['summary']['dependents_created'],
+            'dependents_updated' => $this->importLog['summary']['dependents_updated'],
+            'import_details' => $this->importLog,
+            'date_format_detected' => $dateFormat,
+            'date_format_confidence' => $confidence,
+            'status' => $status,
+            'error_message' => $errorMessage,
+        ]);
+
+        Log::info('Import log saved to database', [
+            'import_log_id' => $importLog->id,
+            'enrollment_id' => $enrollmentId,
+            'principals_created' => $this->importLog['summary']['principals_created'],
+            'principals_updated' => $this->importLog['summary']['principals_updated'],
+            'dependents_created' => $this->importLog['summary']['dependents_created'],
+            'dependents_updated' => $this->importLog['summary']['dependents_updated'],
+        ]);
+
+        return $importLog;
+    }
 
     /**
      * Analyze and sanitize dates in bulk import data with improved format detection
@@ -146,6 +283,9 @@ class ImportEnrolleeController extends Controller
             $enrollees = $request->input('enrollees', []);
             $enrollmentId = $request->input('enrollment_id');
 
+            // Initialize import log
+            $this->importLog['summary']['total_principals'] = count($enrollees);
+
             // Perform bulk date analysis before processing individual records
             $dateFields = [
                 'birth_date',
@@ -247,6 +387,15 @@ class ImportEnrolleeController extends Controller
 
                     $principalMap[$employeeId] = $principal;
 
+                    // Log principal import
+                    $this->logPrincipal(
+                        $employeeId,
+                        $this->importLog['summary']['principals_created'] > 0 && in_array($employeeId, array_keys($principalMap)) ? 'updated' : 'created',
+                        $enrolleeData,
+                        [],
+                        $healthInsuranceData
+                    );
+
                     // Attach health insurance if data exists
                     if (!empty($healthInsuranceData)) {
                         // Set coverage_end_date from employment_end_date if employee is INACTIVE
@@ -275,6 +424,9 @@ class ImportEnrolleeController extends Controller
                     ];
                 }
             }
+
+            // Update total dependents count
+            $this->importLog['summary']['total_dependents'] = array_sum(array_map('count', $dependentsByPrincipal));
 
             // Process dependents
             foreach ($dependentsByPrincipal as $employeeId => $dependents) {
@@ -336,6 +488,16 @@ class ImportEnrolleeController extends Controller
                     foreach ($dependents as $index => $dependent) {
                         $healthInsuranceData = $dependent['health_insurance_data'];
                         if (!empty($healthInsuranceData) && isset($createdDependents[$index])) {
+                            // Log dependent import
+                            $this->logDependent(
+                                $principal->id,
+                                $employeeId,
+                                'created',
+                                $dependent['enrollee_data'],
+                                [],
+                                $healthInsuranceData
+                            );
+
                             $this->attachHealthInsurance(new Request([
                                 'dependent_id' => $createdDependents[$index]['id'],
                                 'insurance' => $healthInsuranceData
@@ -351,6 +513,14 @@ class ImportEnrolleeController extends Controller
                 }
             }
 
+            // Save import log to database
+            $importLog = $this->saveImportLog(
+                $enrollmentId,
+                $dateAnalysis['recommended_format'],
+                $dateAnalysis['confidence'] ?? '0%',
+                'success'
+            );
+
             // Commit all transaction levels to ensure data is actually saved
             $transactionLevel = DB::transactionLevel();
 
@@ -358,8 +528,25 @@ class ImportEnrolleeController extends Controller
                 DB::commit();
             }
 
-            return response()->json(['message' => 'Import successful'], 200);
+            return response()->json([
+                'message' => 'Import successful',
+                'import_log_id' => $importLog->id,
+                'summary' => $this->importLog['summary'],
+            ], 200);
         } catch (\Exception $e) {
+
+            // Save import log with error status
+            try {
+                $this->saveImportLog(
+                    $enrollmentId ?? 0,
+                    'unknown',
+                    '0%',
+                    'failed',
+                    $e->getMessage()
+                );
+            } catch (\Exception $logError) {
+                Log::error('Failed to save error log', ['error' => $logError->getMessage()]);
+            }
 
             // Rollback all transaction levels
             $transactionLevel = DB::transactionLevel();
@@ -1101,4 +1288,214 @@ class ImportEnrolleeController extends Controller
             return response()->json(['message' => 'Failed to attach health insurance', 'error' => $e->getMessage()], 500);
         }
     }
+
+    /**
+     * Download import log as text file for super admin
+     */
+    public function downloadImportLog(int $importLogId)
+    {
+        try {
+            $importLog = ImportLog::with('enrollment')->find($importLogId);
+
+            if (!$importLog) {
+                return response()->json(['message' => 'Import log not found'], 404);
+            }
+
+            // Generate text report
+            $report = $this->generateImportReport($importLog);
+
+            // Generate filename with enrollment and date info
+            $enrollment = $importLog->enrollment;
+            $filename = "import_log_enrollment-{$enrollment->id}_{$importLog->import_date->format('Y-m-d_His')}.txt";
+
+            return response($report, 200)
+                ->header('Content-Type', 'text/plain; charset=utf-8')
+                ->header('Content-Disposition', "attachment; filename=\"{$filename}\"");
+        } catch (\Exception $e) {
+            Log::error('Failed to download import log', [
+                'import_log_id' => $importLogId,
+                'error' => $e->getMessage()
+            ]);
+            return response()->json(['message' => 'Failed to download import log', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Get import logs for an enrollment
+     */
+    public function getImportLogs(Request $request)
+    {
+        try {
+            $enrollmentId = $request->input('enrollment_id');
+
+            if (!$enrollmentId) {
+                return response()->json(['message' => 'Enrollment ID is required'], 400);
+            }
+
+            $logs = ImportLog::where('enrollment_id', $enrollmentId)
+                ->orderBy('import_date', 'desc')
+                ->get();
+
+            return response()->json([
+                'data' => $logs,
+                'count' => $logs->count(),
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Failed to get import logs', [
+                'error' => $e->getMessage()
+            ]);
+            return response()->json(['message' => 'Failed to get import logs', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Generate formatted text report from import log
+     */
+    private function generateImportReport(ImportLog $importLog): string
+    {
+        $details = $importLog->import_details ?? [];
+        $summary = $details['summary'] ?? [];
+        $principals = $details['principals'] ?? [];
+        $dependents = $details['dependents'] ?? [];
+
+        $report = "=" . str_repeat("=", 98) . "\n";
+        $report .= "IMPORT LOG REPORT\n";
+        $report .= "=" . str_repeat("=", 98) . "\n\n";
+
+        // Header Information
+        $report .= "IMPORT INFORMATION:\n";
+        $report .= "-" . str_repeat("-", 98) . "\n";
+        $report .= sprintf("Import Log ID:          %s\n", $importLog->id);
+        $report .= sprintf("Enrollment ID:          %s\n", $importLog->enrollment_id);
+        $report .= sprintf("Import Date:            %s\n", $importLog->import_date->format('Y-m-d H:i:s'));
+        $report .= sprintf("Status:                 %s\n", strtoupper($importLog->status));
+        $report .= sprintf("Date Format Detected:   %s\n", $importLog->date_format_detected);
+        $report .= sprintf("Date Confidence:        %s\n", $importLog->date_format_confidence);
+
+        if ($importLog->error_message) {
+            $report .= sprintf("Error Message:          %s\n", $importLog->error_message);
+        }
+
+        $report .= "\n";
+
+        // Summary Statistics
+        $report .= "IMPORT SUMMARY:\n";
+        $report .= "-" . str_repeat("-", 98) . "\n";
+        $report .= sprintf("Total Principals:       %d\n", $summary['total_principals'] ?? 0);
+        $report .= sprintf("Principals Created:     %d\n", $summary['principals_created'] ?? 0);
+        $report .= sprintf("Principals Updated:     %d\n", $summary['principals_updated'] ?? 0);
+        $report .= sprintf("Total Dependents:       %d\n", $summary['total_dependents'] ?? 0);
+        $report .= sprintf("Dependents Created:     %d\n", $summary['dependents_created'] ?? 0);
+        $report .= sprintf("Dependents Updated:     %d\n", $summary['dependents_updated'] ?? 0);
+
+        $report .= "\n";
+
+        // Principals Details
+        if (!empty($principals)) {
+            $report .= "PRINCIPALS IMPORTED:\n";
+            $report .= "=" . str_repeat("=", 98) . "\n\n";
+
+            foreach ($principals as $index => $principal) {
+                $report .= sprintf("PRINCIPAL #%d\n", $index + 1);
+                $report .= "-" . str_repeat("-", 98) . "\n";
+                $report .= sprintf("Employee ID:            %s\n", $principal['employee_id']);
+                $report .= sprintf("Action:                 %s\n", strtoupper($principal['action']));
+                $report .= sprintf("Timestamp:              %s\n", $principal['timestamp']);
+
+                $report .= "\n  ENROLLEE FIELDS:\n";
+                if (isset($principal['enrollee_fields']) && is_array($principal['enrollee_fields'])) {
+                    foreach ($principal['enrollee_fields'] as $key => $value) {
+                        if ($value !== null && $value !== '') {
+                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
+                        }
+                    }
+                }
+
+                $report .= "\n  HEALTH INSURANCE FIELDS:\n";
+                if (isset($principal['health_insurance_fields']) && is_array($principal['health_insurance_fields'])) {
+                    $hasInsuranceData = false;
+                    foreach ($principal['health_insurance_fields'] as $key => $value) {
+                        if ($value !== null && $value !== '') {
+                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
+                            $hasInsuranceData = true;
+                        }
+                    }
+                    if (!$hasInsuranceData) {
+                        $report .= "    (No health insurance data)\n";
+                    }
+                }
+
+                if (!empty($principal['changes'])) {
+                    $report .= "\n  CHANGES MADE:\n";
+                    foreach ($principal['changes'] as $field => $changeData) {
+                        $report .= sprintf("    - %s: '%s' → '%s'\n", 
+                            ucwords(str_replace('_', ' ', $field)), 
+                            $changeData['old'] ?? 'NULL', 
+                            $changeData['new'] ?? 'NULL'
+                        );
+                    }
+                }
+
+                $report .= "\n";
+            }
+        }
+
+        // Dependents Details
+        if (!empty($dependents)) {
+            $report .= "\nDEPENDENTS IMPORTED:\n";
+            $report .= "=" . str_repeat("=", 98) . "\n\n";
+
+            foreach ($dependents as $index => $dependent) {
+                $report .= sprintf("DEPENDENT #%d\n", $index + 1);
+                $report .= "-" . str_repeat("-", 98) . "\n";
+                $report .= sprintf("Principal Employee ID:  %s\n", $dependent['principal_employee_id']);
+                $report .= sprintf("Principal ID:           %s\n", $dependent['principal_id']);
+                $report .= sprintf("Action:                 %s\n", strtoupper($dependent['action']));
+                $report .= sprintf("Timestamp:              %s\n", $dependent['timestamp']);
+
+                $report .= "\n  DEPENDENT FIELDS:\n";
+                if (isset($dependent['dependent_fields']) && is_array($dependent['dependent_fields'])) {
+                    foreach ($dependent['dependent_fields'] as $key => $value) {
+                        if ($value !== null && $value !== '') {
+                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
+                        }
+                    }
+                }
+
+                $report .= "\n  HEALTH INSURANCE FIELDS:\n";
+                if (isset($dependent['health_insurance_fields']) && is_array($dependent['health_insurance_fields'])) {
+                    $hasInsuranceData = false;
+                    foreach ($dependent['health_insurance_fields'] as $key => $value) {
+                        if ($value !== null && $value !== '') {
+                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
+                            $hasInsuranceData = true;
+                        }
+                    }
+                    if (!$hasInsuranceData) {
+                        $report .= "    (No health insurance data)\n";
+                    }
+                }
+
+                if (!empty($dependent['changes'])) {
+                    $report .= "\n  CHANGES MADE:\n";
+                    foreach ($dependent['changes'] as $field => $changeData) {
+                        $report .= sprintf("    - %s: '%s' → '%s'\n", 
+                            ucwords(str_replace('_', ' ', $field)), 
+                            $changeData['old'] ?? 'NULL', 
+                            $changeData['new'] ?? 'NULL'
+                        );
+                    }
+                }
+
+                $report .= "\n";
+            }
+        }
+
+        $report .= "\n" . "=" . str_repeat("=", 98) . "\n";
+        $report .= "END OF IMPORT LOG REPORT\n";
+        $report .= "=" . str_repeat("=", 98) . "\n";
+
+        return $report;
+    }
 }
+

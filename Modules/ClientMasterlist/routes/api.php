@@ -35,6 +35,12 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Import enrollees (with dependents and health insurance)
     Route::post('import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
 
+    // Get import logs for an enrollment
+    Route::get('import-logs', [ImportEnrolleeController::class, 'getImportLogs']);
+
+    // Download import log as text file
+    Route::get('import-logs/{id}/download', [ImportEnrolleeController::class, 'downloadImportLog']);
+
     // Insurance Providers CRUD
     Route::apiResource('insurance-providers', InsuranceProviderController::class);
 
