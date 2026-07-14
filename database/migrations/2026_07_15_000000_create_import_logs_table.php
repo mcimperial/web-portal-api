@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('cm_import_logs', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('enrollment_id')->constrained('tm_enrollment')->onDelete('cascade');
+            $table->foreignId('enrollment_id')->constrained('cm_enrollment')->onDelete('cascade');
             $table->timestamp('import_date')->useCurrent();
             $table->integer('total_principals')->default(0);
             $table->integer('total_dependents')->default(0);
