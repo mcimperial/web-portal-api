@@ -64,7 +64,7 @@ class SmsHelper
             ];
         }
 
-        $gatewayUrl = env('SMS_GATEWAY_URL', 'http://192.159.66.221/goip/sendsms/');
+        $gatewayUrl = env('SMS_GATEWAY_URL', 'http://46.250.238.187/goip/sendsms/');
         $gatewayUsername = env('SMS_GATEWAY_USERNAME', 'root');
         $gatewayPassword = env('SMS_GATEWAY_PASSWORD', 'LACSONSMS');
 
