@@ -19,6 +19,8 @@ use App\Http\Traits\UppercaseInput;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class ImportEnrolleeController extends Controller
 {
@@ -30,6 +32,7 @@ class ImportEnrolleeController extends Controller
     private $importLog = [
         'principals' => [],
         'dependents' => [],
+        'source_file' => null,
         'summary' => [
             'total_principals' => 0,
             'total_dependents' => 0,
@@ -275,13 +278,157 @@ class ImportEnrolleeController extends Controller
         return $normalized;
     }
 
+    /**
+     * Decode enrollees payload from JSON or array input.
+     */
+    private function parseEnrolleesInput(Request $request): array
+    {
+        $enrollees = $request->input('enrollees', []);
+
+        if (is_string($enrollees)) {
+            $decoded = json_decode($enrollees, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return is_array($enrollees) ? $enrollees : [];
+    }
+
+    /**
+     * Build a safe folder segment for Spaces paths.
+     */
+    private function sanitizeImportFolderSegment(?string $value, string $fallback): string
+    {
+        $segment = Str::slug((string) $value, '-');
+
+        return $segment !== '' ? $segment : $fallback;
+    }
+
+    /**
+     * Build the public URL for a Spaces object.
+     */
+    private function buildSpacesPublicUrl(string $fullPath): string
+    {
+        $endpoint = rtrim(config('filesystems.disks.spaces.endpoint'), '/');
+
+        if (str_starts_with($endpoint, 'https://')) {
+            return 'https://llibi-self-enrollment.' . substr($endpoint, 8) . '/' . ltrim($fullPath, '/');
+        }
+
+        return $endpoint . '/' . ltrim($fullPath, '/');
+    }
+
+    /**
+     * Resolve company and provider details from an enrollment.
+     */
+    private function getEnrollmentImportContext(int $enrollmentId): array
+    {
+        $enrollment = Enrollment::find($enrollmentId);
+
+        if (!$enrollment) {
+            throw new \Exception('Enrollment not found: ' . $enrollmentId);
+        }
+
+        $company = Company::find($enrollment->company_id);
+        $provider = InsuranceProvider::find($enrollment->insurance_provider_id);
+
+        return [
+            'company_code' => $company->company_code ?? null,
+            'provider_title' => $provider->title ?? null,
+        ];
+    }
+
+    /**
+     * Resolve folder context for file uploads based on import payload.
+     */
+    private function resolveImportFileContext(?int $enrollmentId, array $enrollees): array
+    {
+        if ($enrollmentId) {
+            return $this->getEnrollmentImportContext($enrollmentId);
+        }
+
+        $companyCodes = [];
+        $providerTitles = [];
+
+        foreach ($enrollees as $enrollee) {
+            if (!is_array($enrollee)) {
+                continue;
+            }
+
+            $companyCode = trim((string) ($enrollee['company_code'] ?? ''));
+            $providerTitle = trim((string) ($enrollee['insurance_provider_title'] ?? ''));
+
+            if ($companyCode !== '') {
+                $companyCodes[] = strtoupper($companyCode);
+            }
+
+            if ($providerTitle !== '') {
+                $providerTitles[] = strtoupper($providerTitle);
+            }
+        }
+
+        $companyCodes = array_values(array_unique($companyCodes));
+        $providerTitles = array_values(array_unique($providerTitles));
+
+        return [
+            'company_code' => count($companyCodes) === 1 ? $companyCodes[0] : 'MULTIPLE-COMPANIES',
+            'provider_title' => count($providerTitles) === 1 ? $providerTitles[0] : 'MULTIPLE-PROVIDERS',
+        ];
+    }
+
+    /**
+     * Store the uploaded import file in Spaces.
+     */
+    private function storeImportSourceFile(Request $request, ?int $enrollmentId, array $enrollees): ?array
+    {
+        if (!$request->hasFile('file')) {
+            return null;
+        }
+
+        $file = $request->file('file');
+
+        if (!$file || !$file->isValid()) {
+            throw new \Exception('Invalid import file upload.');
+        }
+
+        $context = $this->resolveImportFileContext($enrollmentId, $enrollees);
+        $companySegment = $this->sanitizeImportFolderSegment($context['company_code'] ?? null, 'unknown-company');
+        $providerSegment = $this->sanitizeImportFolderSegment($context['provider_title'] ?? null, 'unknown-provider');
+        $extension = strtolower($file->getClientOriginalExtension() ?: $file->extension() ?: 'bin');
+        $baseName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+        $safeBaseName = $this->sanitizeImportFolderSegment($baseName, 'import-file');
+        $fileName = now()->format('Ymd_His') . '_' . Str::random(8) . '_' . $safeBaseName . '.' . $extension;
+        $folder = "self-enrollment/{$companySegment}/{$providerSegment}/imports";
+        $fullPath = $folder . '/' . $fileName;
+
+        Storage::disk('spaces')->put($fullPath, file_get_contents($file), ['visibility' => 'public']);
+
+        $fileMeta = [
+            'original_name' => $file->getClientOriginalName(),
+            'stored_name' => $fileName,
+            'path' => $fullPath,
+            'url' => $this->buildSpacesPublicUrl($fullPath),
+            'mime_type' => $file->getClientMimeType(),
+            'company_code' => $context['company_code'] ?? null,
+            'provider_title' => $context['provider_title'] ?? null,
+            'uploaded_at' => now()->toDateTimeString(),
+        ];
+
+        $this->importLog['source_file'] = $fileMeta;
+
+        Log::info('Import source file uploaded to Spaces', $fileMeta);
+
+        return $fileMeta;
+    }
+
     public function import(Request $request): JsonResponse
     {
         DB::beginTransaction();
 
         try {
-            $enrollees = $request->input('enrollees', []);
+            $enrollees = $this->parseEnrolleesInput($request);
             $enrollmentId = $request->input('enrollment_id');
+
+            $sourceFile = $this->storeImportSourceFile($request, $enrollmentId ? (int) $enrollmentId : null, $enrollees);
 
             // Initialize import log
             $this->importLog['summary']['total_principals'] = count($enrollees);
@@ -532,6 +679,7 @@ class ImportEnrolleeController extends Controller
                 'message' => 'Import successful',
                 'import_log_id' => $importLog->id,
                 'summary' => $this->importLog['summary'],
+                'source_file' => $sourceFile,
             ], 200);
         } catch (\Exception $e) {
 
@@ -566,7 +714,9 @@ class ImportEnrolleeController extends Controller
         DB::beginTransaction();
 
         try {
-            $enrollees = $request->input('enrollees', []);
+            $enrollees = $this->parseEnrolleesInput($request);
+
+            $sourceFile = $this->storeImportSourceFile($request, null, $enrollees);
 
             // Perform bulk date analysis before processing individual records
             $dateFields = [
@@ -676,7 +826,10 @@ class ImportEnrolleeController extends Controller
                 'final_transaction_level' => DB::transactionLevel()
             ]);
 
-            return response()->json(['message' => 'Import successful'], 200);
+            return response()->json([
+                'message' => 'Import successful',
+                'source_file' => $sourceFile,
+            ], 200);
         } catch (\Exception $e) {
 
             Log::error('Exception occurred during importWithCompanyAndProvider', [
