@@ -19,7 +19,7 @@ class SyncController extends Controller
         try {
             DB::connection('mysql_sync')->getPdo();
             $databaseName = DB::connection('mysql_sync')->getDatabaseName();
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Successfully connected to sync database',
@@ -27,7 +27,7 @@ class SyncController extends Controller
             ]);
         } catch (Exception $e) {
             Log::error('Sync database connection failed: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to connect to sync database',
@@ -44,11 +44,11 @@ class SyncController extends Controller
         try {
             $tables = DB::connection('mysql_sync')
                 ->select('SHOW TABLES');
-            
+
             $tableNames = array_map(function($table) {
                 return array_values((array)$table)[0];
             }, $tables);
-            
+
             return response()->json([
                 'success' => true,
                 'tables' => $tableNames,
@@ -56,7 +56,7 @@ class SyncController extends Controller
             ]);
         } catch (Exception $e) {
             Log::error('Failed to get tables: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to retrieve tables',
@@ -81,18 +81,18 @@ class SyncController extends Controller
 
             $perPage = $request->input('per_page', 15);
             $page = $request->input('page', 1);
-            
+
             $data = DB::connection('mysql_sync')
                 ->table($table)
                 ->paginate($perPage, ['*'], 'page', $page);
-            
+
             return response()->json([
                 'success' => true,
                 'data' => $data
             ]);
         } catch (Exception $e) {
             Log::error("Failed to get data from table {$table}: " . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to retrieve table data',
@@ -116,12 +116,12 @@ class SyncController extends Controller
             }
 
             DB::beginTransaction();
-            
+
             // Get data from sync database
             $syncData = DB::connection('mysql_sync')
                 ->table($table)
                 ->get();
-            
+
             $synced = 0;
             $failed = 0;
             $errors = [];
@@ -142,7 +142,7 @@ class SyncController extends Controller
             }
 
             DB::commit();
-            
+
             return response()->json([
                 'success' => true,
                 'message' => "Synced data from table: {$table}",
@@ -153,7 +153,7 @@ class SyncController extends Controller
         } catch (Exception $e) {
             DB::rollBack();
             Log::error("Failed to sync table {$table}: " . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to sync table data',
@@ -169,19 +169,19 @@ class SyncController extends Controller
     {
         try {
             $tables = $request->input('tables', []);
-            
+
             if (empty($tables)) {
                 // Get all tables if none specified
                 $tablesResult = DB::connection('mysql_sync')
                     ->select('SHOW TABLES');
-                
+
                 $tables = array_map(function($table) {
                     return array_values((array)$table)[0];
                 }, $tablesResult);
             }
 
             $results = [];
-            
+
             foreach ($tables as $table) {
                 if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) {
                     $results[$table] = [
@@ -193,13 +193,13 @@ class SyncController extends Controller
 
                 try {
                     DB::beginTransaction();
-                    
+
                     $syncData = DB::connection('mysql_sync')
                         ->table($table)
                         ->get();
-                    
+
                     $synced = 0;
-                    
+
                     foreach ($syncData as $row) {
                         DB::table($table)
                             ->updateOrInsert(
@@ -208,9 +208,9 @@ class SyncController extends Controller
                             );
                         $synced++;
                     }
-                    
+
                     DB::commit();
-                    
+
                     $results[$table] = [
                         'success' => true,
                         'synced' => $synced
@@ -223,7 +223,7 @@ class SyncController extends Controller
                     ];
                 }
             }
-            
+
             return response()->json([
                 'success' => true,
                 'message' => 'Full sync completed',
@@ -231,7 +231,7 @@ class SyncController extends Controller
             ]);
         } catch (Exception $e) {
             Log::error('Failed to perform full sync: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to perform full sync',
@@ -248,7 +248,7 @@ class SyncController extends Controller
         try {
             $mainDbName = DB::connection()->getDatabaseName();
             $syncDbName = DB::connection('mysql_sync')->getDatabaseName();
-            
+
             return response()->json([
                 'success' => true,
                 'status' => [
@@ -274,7 +274,7 @@ class SyncController extends Controller
     {
         try {
             $memberId = $request->query('member_id');
-            
+
             if (!$memberId) {
                 return response()->json([
                     'success' => false,
@@ -294,7 +294,18 @@ class SyncController extends Controller
                 ->where('masterlist.member_id', strtoupper($memberId))
                 ->get([
                     'masterlist.member_id as memberId',
-                    DB::raw("CONCAT(masterlist.first_name, ' ', IFNULL(CONCAT(masterlist.middle_name, '. '), ''), masterlist.last_name) as name"),
+                    DB::raw("
+                        CONCAT(
+                            masterlist.first_name,
+                            ' ',
+                            IF(
+                                NULLIF(TRIM(masterlist.middle_name), '') IS NOT NULL,
+                                CONCAT(TRIM(masterlist.middle_name), '. '),
+                                ''
+                            ),
+                            masterlist.last_name
+                        ) as name
+                    "),
                     'masterlist.company_name as company',
                     'masterlist.rb',
                     'masterlist.rbdep',
@@ -395,7 +406,7 @@ class SyncController extends Controller
             ]);
         } catch (Exception $e) {
             Log::error('Failed to get member data: ' . $e->getMessage());
-            
+
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to retrieve member data',
