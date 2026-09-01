@@ -27,7 +27,8 @@ return [
         'http://localhost:5173',
         'http://localhost:8100',  // For local development
         // Add other origins as needed
-        'https://web-portal.llibi.app'
+        'https://web-portal.llibi.app',
+        'https://employee-portal.llibi.app'
     ],
 
     'supports_credentials' => false,  // Set to false for native apps
