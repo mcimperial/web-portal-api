@@ -133,7 +133,7 @@ class ImportEnrolleeController extends Controller
     /**
      * Save import log to database
      */
-    private function saveImportLog(int $enrollmentId, string $dateFormat = 'auto', string $confidence = '0%', string $status = 'success', string $errorMessage = null): ImportLog
+    private function saveImportLog(?int $enrollmentId, string $dateFormat = 'auto', string $confidence = '0%', string $status = 'success', string $errorMessage = null): ImportLog
     {
         $importLog = ImportLog::create([
             'enrollment_id' => $enrollmentId,
@@ -718,6 +718,9 @@ class ImportEnrolleeController extends Controller
 
             $sourceFile = $this->storeImportSourceFile($request, null, $enrollees);
 
+            // Initialize import log summary
+            $this->importLog['summary']['total_principals'] = count($enrollees);
+
             // Perform bulk date analysis before processing individual records
             $dateFields = [
                 'birth_date',
@@ -746,6 +749,7 @@ class ImportEnrolleeController extends Controller
             }
 
             $principalMap = [];
+            $affectedEnrollmentIds = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
 
             foreach ($enrollees as $enrolleeData) {
@@ -770,6 +774,10 @@ class ImportEnrolleeController extends Controller
                     return response()->json(['message' => $e->getMessage()], 404);
                 }
 
+                if (!in_array($currentEnrollmentId, $affectedEnrollmentIds, true)) {
+                    $affectedEnrollmentIds[] = $currentEnrollmentId;
+                }
+
                 // Remove company_code and insurance_provider_title from enrollee data
                 unset($enrolleeData['company_code'], $enrolleeData['insurance_provider_title']);
 
@@ -791,9 +799,24 @@ class ImportEnrolleeController extends Controller
                 // Process health insurance data
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
 
+                // Determine whether this principal already exists (for logging purposes)
+                $principalExistedBefore = Enrollee::withTrashed()
+                    ->where('employee_id', $employeeId)
+                    ->where('enrollment_id', $currentEnrollmentId)
+                    ->exists();
+
                 // Create or update principal with soft delete handling
                 $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
                 $principalMap[$employeeId] = $principal;
+
+                // Log principal import
+                $this->logPrincipal(
+                    $employeeId,
+                    $principalExistedBefore ? 'updated' : 'created',
+                    $enrolleeData,
+                    [],
+                    $healthInsuranceData
+                );
 
                 // Attach health insurance if data exists
                 if (!empty($healthInsuranceData)) {
@@ -803,6 +826,9 @@ class ImportEnrolleeController extends Controller
                     ]), $dateAnalysis['recommended_format']);
                 }
             }
+
+            // Record affected enrollments for reference in the log details
+            $this->importLog['affected_enrollment_ids'] = $affectedEnrollmentIds;
 
             Log::info('About to commit transaction', [
                 'principals_processed' => count($principalMap),
@@ -826,8 +852,18 @@ class ImportEnrolleeController extends Controller
                 'final_transaction_level' => DB::transactionLevel()
             ]);
 
+            // Save import log to database (multi-provider import, no single enrollment_id)
+            $importLog = $this->saveImportLog(
+                null,
+                $dateAnalysis['recommended_format'],
+                $dateAnalysis['confidence'] ?? '0%',
+                'success'
+            );
+
             return response()->json([
                 'message' => 'Import successful',
+                'import_log_id' => $importLog->id,
+                'summary' => $this->importLog['summary'],
                 'source_file' => $sourceFile,
             ], 200);
         } catch (\Exception $e) {
@@ -836,6 +872,19 @@ class ImportEnrolleeController extends Controller
                 'error' => $e->getMessage(),
                 'transaction_level_before_rollback' => DB::transactionLevel()
             ]);
+
+            // Save import log with error status
+            try {
+                $this->saveImportLog(
+                    null,
+                    'unknown',
+                    '0%',
+                    'failed',
+                    $e->getMessage()
+                );
+            } catch (\Exception $logError) {
+                Log::error('Failed to save error log', ['error' => $logError->getMessage()]);
+            }
 
             // Rollback all transaction levels
             $transactionLevel = DB::transactionLevel();
@@ -1457,9 +1506,10 @@ class ImportEnrolleeController extends Controller
             // Generate text report
             $report = $this->generateImportReport($importLog);
 
-            // Generate filename with enrollment and date info
+            // Generate filename with enrollment (or multi-provider) and date info
             $enrollment = $importLog->enrollment;
-            $filename = "import_log_enrollment-{$enrollment->id}_{$importLog->import_date->format('Y-m-d_His')}.txt";
+            $enrollmentSegment = $enrollment ? "enrollment-{$enrollment->id}" : 'multi-provider';
+            $filename = "import_log_{$enrollmentSegment}_{$importLog->import_date->format('Y-m-d_His')}.txt";
 
             return response($report, 200)
                 ->header('Content-Type', 'text/plain; charset=utf-8')
@@ -1480,14 +1530,20 @@ class ImportEnrolleeController extends Controller
     {
         try {
             $enrollmentId = $request->input('enrollment_id');
+            $multiProvider = $request->boolean('multi_provider');
 
-            if (!$enrollmentId) {
+            $query = ImportLog::query();
+
+            if ($multiProvider) {
+                // Imports done via the company/provider flexible import (no single enrollment)
+                $query->whereNull('enrollment_id');
+            } elseif ($enrollmentId) {
+                $query->where('enrollment_id', $enrollmentId);
+            } else {
                 return response()->json(['message' => 'Enrollment ID is required'], 400);
             }
 
-            $logs = ImportLog::where('enrollment_id', $enrollmentId)
-                ->orderBy('import_date', 'desc')
-                ->get();
+            $logs = $query->orderBy('import_date', 'desc')->get();
 
             return response()->json([
                 'data' => $logs,
@@ -1519,7 +1575,10 @@ class ImportEnrolleeController extends Controller
         $report .= "IMPORT INFORMATION:\n";
         $report .= "-" . str_repeat("-", 98) . "\n";
         $report .= sprintf("Import Log ID:          %s\n", $importLog->id);
-        $report .= sprintf("Enrollment ID:          %s\n", $importLog->enrollment_id);
+        $report .= sprintf(
+            "Enrollment ID:          %s\n",
+            $importLog->enrollment_id ?? 'Multi-Provider (' . implode(', ', $details['affected_enrollment_ids'] ?? []) . ')'
+        );
         $report .= sprintf("Import Date:            %s\n", $importLog->import_date->format('Y-m-d H:i:s'));
         $report .= sprintf("Status:                 %s\n", strtoupper($importLog->status));
         $report .= sprintf("Date Format Detected:   %s\n", $importLog->date_format_detected);
