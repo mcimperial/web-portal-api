@@ -1532,7 +1532,30 @@ class ImportEnrolleeController extends Controller
             $enrollmentId = $request->input('enrollment_id');
             $multiProvider = $request->boolean('multi_provider');
 
-            $query = ImportLog::query();
+            // Exclude the (potentially very large) import_details JSON column from the
+            // listing query. Sorting rows that include this column can exhaust the
+            // MySQL sort buffer ("Out of sort memory") since filesort has to carry
+            // every selected column in memory. Only the small "source_file" portion
+            // (needed by the UI list) is extracted here; the full details are loaded
+            // separately when downloading/viewing a single log (see downloadImportLog).
+            $query = ImportLog::query()->select([
+                'id',
+                'enrollment_id',
+                'import_date',
+                'total_principals',
+                'total_dependents',
+                'principals_created',
+                'principals_updated',
+                'dependents_created',
+                'dependents_updated',
+                'date_format_detected',
+                'date_format_confidence',
+                'status',
+                'error_message',
+                'created_at',
+                'updated_at',
+                DB::raw("JSON_EXTRACT(import_details, '$.source_file') as source_file_json"),
+            ]);
 
             if ($multiProvider) {
                 // Imports done via the company/provider flexible import (no single enrollment)
@@ -1544,6 +1567,12 @@ class ImportEnrolleeController extends Controller
             }
 
             $logs = $query->orderBy('import_date', 'desc')->get();
+
+            $logs->each(function ($log) {
+                $sourceFile = $log->source_file_json ? json_decode($log->source_file_json, true) : null;
+                $log->import_details = ['source_file' => $sourceFile];
+                unset($log->source_file_json);
+            });
 
             return response()->json([
                 'data' => $logs,
