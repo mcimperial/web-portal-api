@@ -1533,11 +1533,13 @@ class ImportEnrolleeController extends Controller
             $multiProvider = $request->boolean('multi_provider');
 
             // Exclude the (potentially very large) import_details JSON column from the
-            // listing query. Sorting rows that include this column can exhaust the
-            // MySQL sort buffer ("Out of sort memory") since filesort has to carry
-            // every selected column in memory. Only the small "source_file" portion
-            // (needed by the UI list) is extracted here; the full details are loaded
-            // separately when downloading/viewing a single log (see downloadImportLog).
+            // listing query. Sorting rows that include this column (or an expression
+            // derived from it, e.g. JSON_EXTRACT) can exhaust the MySQL sort buffer
+            // ("Out of sort memory") because filesort has to carry the full row buffer
+            // (including any JSON text) in memory. To avoid filesort altogether, the
+            // ORDER BY is applied in PHP after fetching only the lightweight columns.
+            // The full details are only loaded when downloading/viewing a single log
+            // (see downloadImportLog).
             $query = ImportLog::query()->select([
                 'id',
                 'enrollment_id',
@@ -1566,7 +1568,12 @@ class ImportEnrolleeController extends Controller
                 return response()->json(['message' => 'Enrollment ID is required'], 400);
             }
 
-            $logs = $query->orderBy('import_date', 'desc')->get();
+            // No ORDER BY / LIMIT at the SQL level (see comment above) — sort and cap
+            // the result set in PHP instead.
+            $logs = $query->get()
+                ->sortByDesc(fn ($log) => $log->import_date)
+                ->take(500)
+                ->values();
 
             $logs->each(function ($log) {
                 $sourceFile = $log->source_file_json ? json_decode($log->source_file_json, true) : null;
@@ -1585,6 +1592,7 @@ class ImportEnrolleeController extends Controller
             return response()->json(['message' => 'Failed to get import logs', 'error' => $e->getMessage()], 500);
         }
     }
+
 
     /**
      * Generate formatted text report from import log
