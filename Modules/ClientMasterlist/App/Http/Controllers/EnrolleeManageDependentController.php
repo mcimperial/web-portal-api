@@ -259,6 +259,7 @@ class EnrolleeManageDependentController extends Controller
         }
 
         if ($validated['enrollment_status'] === 'SUBMITTED') {
+            $validated['submission_date'] = now();
             $this->sendEmailNotification($enrollee->enrollment_id, $enrollee->id, $enrollee->email1);
         }
 
@@ -303,6 +304,10 @@ class EnrolleeManageDependentController extends Controller
         ]);
 
         $validated = $this->uppercaseStrings($validated);
+
+        if (($validated['enrollment_status'] ?? null) === 'SUBMITTED') {
+            $validated['submission_date'] = now();
+        }
 
         $enrollee->fill($validated);
         $enrollee->save();
@@ -483,6 +488,7 @@ class EnrolleeManageDependentController extends Controller
         if (!$isDraft) {
             $oldStatus = $principal->enrollment_status;
             $principal->enrollment_status = 'SUBMITTED';
+            $principal->submission_date = now();
             $principal->save();
 
             // Log the status change to SUBMITTED

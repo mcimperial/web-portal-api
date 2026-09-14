@@ -38,6 +38,7 @@ class ExportEnrolleesController extends Controller
                 'phone1' => 'Phone 1', 'phone2' => 'Phone 2', 'address' => 'Address',
                 'department' => 'Department', 'position' => 'Position',
                 'employment_start_date' => 'Employment Start Date', 'employment_end_date' => 'Employment End Date',
+                'start_date' => 'Start Date', 'submission_date' => 'Submission Date', 'back_date' => 'Back Date',
                 'notes' => 'Notes', 'status' => 'Status', 'plan' => 'Plan', 'premium' => 'Premium',
                 'principal_mbl' => 'Principal MBL', 'principal_room_and_board' => 'Principal Room and Board',
                 'dependent_mbl' => 'Dependent MBL', 'dependent_room_and_board' => 'Dependent Room and Board',
@@ -699,6 +700,9 @@ class ExportEnrolleesController extends Controller
             'is_newly_added' => $this->getIsNewlyAdded($entity, $isPrincipal, $principal, $isDeletedDependent),
             'premium' => $this->calculatePremium($entity, $isPrincipal, $principal),
             'required_document' => $this->getRequiredDocuments($entity, $isPrincipal),
+            'start_date' => $this->getStartDate($entity, $isPrincipal, $principal),
+            'submission_date' => $this->getSubmissionDate($entity, $isPrincipal, $principal),
+            'back_date' => $this->getBackDate($entity, $isPrincipal, $principal),
             default => $this->getDefaultColumnValue($column, $entity)
         };
     }
@@ -902,6 +906,39 @@ class ExportEnrolleesController extends Controller
             return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
         }
         return $entity->$column ?? '';
+    }
+
+    /**
+     * "Start Date" is the record's created_at timestamp (i.e. when the principal
+     * was first created in the system).
+     */
+    private function getStartDate($entity, bool $isPrincipal, $principal): string
+    {
+        $source = $isPrincipal ? $entity : $principal;
+        if (!$source || !$source->created_at) return '';
+        return \Carbon\Carbon::parse($source->created_at)->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * "Submission Date" is stamped with date & time only when the enrollee
+     * submits their enrollment (enrollment_status becomes SUBMITTED).
+     */
+    private function getSubmissionDate($entity, bool $isPrincipal, $principal): string
+    {
+        $source = $isPrincipal ? $entity : $principal;
+        if (!$source || !$source->submission_date) return '';
+        return \Carbon\Carbon::parse($source->submission_date)->format('Y-m-d H:i:s');
+    }
+
+    /**
+     * "Back Date" is stamped with date & time when an employment_end_date is
+     * first added to the principal (see ImportEnrolleeController for the rules).
+     */
+    private function getBackDate($entity, bool $isPrincipal, $principal): string
+    {
+        $source = $isPrincipal ? $entity : $principal;
+        if (!$source || !$source->back_date) return '';
+        return \Carbon\Carbon::parse($source->back_date)->format('Y-m-d H:i:s');
     }
 
     private function getEnrollmentReference($entity, bool $isPrincipal, $principal)

@@ -968,15 +968,41 @@ class ImportEnrolleeController extends Controller
         $enrolleeData['status'] = 'ACTIVE';
         $shouldSoftDelete = false;
 
-        // Check if employment_end_date exists (either sanitized or original)
-        if ((isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) ||
-            ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)))
-        ) {
+        // Look up any existing principal first so we can check whether it already
+        // has an employment_end_date (needed for the back_date / resigned rules below)
+        $principalQuery = Enrollee::with(['healthInsurance'])
+            ->withTrashed()
+            ->where('employee_id', $employeeId)
+            ->where('enrollment_id', $enrollmentId);
+
+        $existingPrincipal = $principalQuery->first();
+
+        $existingHadEndDate = $existingPrincipal && !empty($existingPrincipal->employment_end_date);
+
+        $newEndDateProvided = (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) ||
+            ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)));
+
+        if ($existingHadEndDate) {
+            // The principal already has an employment_end_date on record.
+            // Don't adjust its mapped data (leave employment_end_date as-is)
+            // and don't update the back_date.
+            unset($enrolleeData['employment_end_date']);
+
+            Log::info('Skipping employment_end_date update and back_date; principal already has an employment_end_date', [
+                'employee_id' => $employeeId,
+                'existing_employment_end_date' => $existingPrincipal->employment_end_date,
+            ]);
+        } elseif ($newEndDateProvided) {
+            // employment_end_date is being mapped/added for the first time
             if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
+                // Date is today or in the past — mark as resigned and stamp the back_date
                 $enrolleeData['status'] = 'INACTIVE';
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
+                $enrolleeData['back_date'] = now();
                 //$shouldSoftDelete = true;
             }
+            // If the uploaded employment_end_date is a future/advance date, don't update
+            // the resigned status and don't add the back_date — leave default ACTIVE.
 
             //$healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
         } else {
@@ -994,13 +1020,6 @@ class ImportEnrolleeController extends Controller
                 $enrolleeData['enrollment_status'] = 'APPROVED';
             }
         }
-
-        $principalQuery = Enrollee::with(['healthInsurance'])
-            ->withTrashed()
-            ->where('employee_id', $employeeId)
-            ->where('enrollment_id', $enrollmentId);
-
-        $existingPrincipal = $principalQuery->first();
 
         $isRenewal = $existingPrincipal && $existingPrincipal->healthInsurance
             ? $existingPrincipal->healthInsurance->is_renewal

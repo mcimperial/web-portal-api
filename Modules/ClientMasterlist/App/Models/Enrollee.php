@@ -27,6 +27,8 @@ class Enrollee extends Model
         'position',
         'employment_start_date',
         'employment_end_date',
+        'submission_date',
+        'back_date',
         'first_name',
         'last_name',
         'middle_name',
@@ -50,6 +52,8 @@ class Enrollee extends Model
 
     protected $casts = [
         'with_dependents' => 'boolean',
+        'submission_date' => 'datetime',
+        'back_date' => 'datetime',
     ];
 
     protected static function boot()
