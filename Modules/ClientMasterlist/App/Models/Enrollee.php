@@ -46,6 +46,8 @@ class Enrollee extends Model
         'with_dependents',
         'max_dependents',
         'notes',
+        'unmapped_columns',
+        'unmapped_columns_by',
         'deleted_by',
         'status',
     ];
@@ -99,5 +101,11 @@ class Enrollee extends Model
     public function healthInsurance()
     {
         return $this->hasOne(HealthInsurance::class, 'principal_id');
+    }
+
+    // User who imported the unmapped column data for this principal
+    public function unmappedColumnsBy()
+    {
+        return $this->belongsTo(\App\Models\User::class, 'unmapped_columns_by');
     }
 }

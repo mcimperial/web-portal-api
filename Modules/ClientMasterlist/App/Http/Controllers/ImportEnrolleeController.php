@@ -2,7 +2,6 @@
 
 namespace Modules\ClientMasterlist\App\Http\Controllers;
 
-
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Routing\Controller;
@@ -42,6 +41,80 @@ class ImportEnrolleeController extends Controller
             'dependents_updated' => 0,
         ]
     ];
+
+    /**
+     * Make sure we have a live DB connection before starting a
+     * potentially long-running bulk import, and raise the session-level
+     * timeouts so MySQL doesn't close the connection mid-import
+     * ("MySQL server has gone away").
+     */
+    private function ensureStableDbConnection(): void
+    {
+        try {
+            // Force (re)connection now rather than lazily mid-transaction.
+            DB::connection()->getPdo();
+            DB::statement('SET SESSION wait_timeout = 28800, interactive_timeout = 28800');
+        } catch (\Throwable $e) {
+            Log::warning('Unable to prepare DB connection for bulk import', [
+                'error' => $e->getMessage(),
+            ]);
+
+            try {
+                DB::reconnect();
+            } catch (\Throwable $reconnectError) {
+                Log::error('Failed to reconnect to database before import', [
+                    'error' => $reconnectError->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Determine whether an exception represents a lost MySQL connection
+     * (error 2006 "MySQL server has gone away" or 2013 "Lost connection").
+     */
+    private function isConnectionLostError(\Throwable $e): bool
+    {
+        $message = $e->getMessage();
+
+        return str_contains($message, 'server has gone away')
+            || str_contains($message, 'Lost connection')
+            || str_contains($message, '2006')
+            || str_contains($message, '2013');
+    }
+
+    private function connectionLostMessage(): string
+    {
+        return 'Import failed because the database connection was lost during processing (the file may be too large or the import took too long). Please try again, or split the file into smaller batches.';
+    }
+
+    /**
+     * Roll back all open transaction levels, guarding against the rollback
+     * itself throwing when the underlying connection has already been
+     * dropped by MySQL. Attempts a reconnect afterwards so the connection
+     * is left in a usable state for subsequent requests.
+     */
+    private function safeRollback(): void
+    {
+        try {
+            $transactionLevel = DB::transactionLevel();
+            for ($i = 0; $i < $transactionLevel; $i++) {
+                DB::rollBack();
+            }
+        } catch (\Throwable $rollbackError) {
+            Log::error('Failed to rollback transaction (connection may already be lost)', [
+                'error' => $rollbackError->getMessage(),
+            ]);
+
+            try {
+                DB::reconnect();
+            } catch (\Throwable $reconnectError) {
+                Log::error('Failed to reconnect to database after rollback failure', [
+                    'error' => $reconnectError->getMessage(),
+                ]);
+            }
+        }
+    }
 
     /**
      * Add principal log entry with field mapping
@@ -135,6 +208,8 @@ class ImportEnrolleeController extends Controller
      */
     private function saveImportLog(?int $enrollmentId, string $dateFormat = 'auto', string $confidence = '0%', string $status = 'success', string $errorMessage = null): ImportLog
     {
+        $importDetails = $this->buildStorableImportDetails();
+
         $importLog = ImportLog::create([
             'enrollment_id' => $enrollmentId,
             'import_date' => now(),
@@ -144,7 +219,7 @@ class ImportEnrolleeController extends Controller
             'principals_updated' => $this->importLog['summary']['principals_updated'],
             'dependents_created' => $this->importLog['summary']['dependents_created'],
             'dependents_updated' => $this->importLog['summary']['dependents_updated'],
-            'import_details' => $this->importLog,
+            'import_details' => $importDetails,
             'date_format_detected' => $dateFormat,
             'date_format_confidence' => $confidence,
             'status' => $status,
@@ -161,6 +236,74 @@ class ImportEnrolleeController extends Controller
         ]);
 
         return $importLog;
+    }
+
+    /**
+     * Prepare the import log payload for storage in the `import_details` JSON
+     * column. Large bulk imports (thousands of principals) can produce a
+     * multi-megabyte JSON blob, and inserting that in a single query can
+     * exceed MySQL's `max_allowed_packet`, which causes the connection to be
+     * forcibly dropped ("MySQL server has gone away", error 2006) — even
+     * though the row itself would otherwise be valid.
+     *
+     * To avoid that, once the encoded payload grows past a safe threshold we
+     * write the full detail to a log file on disk and store only a truncated
+     * preview (plus a pointer to the full file) in the database row.
+     */
+    private function buildStorableImportDetails(): array
+    {
+        $fullDetails = $this->importLog;
+
+        // Conservative threshold well under typical max_allowed_packet values
+        // (commonly 4MB-64MB) to leave headroom for the rest of the query.
+        $maxBytes = 2 * 1024 * 1024; // 2MB
+
+        $encoded = json_encode($fullDetails);
+
+        if ($encoded !== false && strlen($encoded) <= $maxBytes) {
+            return $fullDetails;
+        }
+
+        // Persist the full, untruncated log to disk so nothing is lost.
+        $fileName = 'import-logs/full-log-' . now()->format('Y-m-d_His') . '-' . Str::random(8) . '.json';
+
+        try {
+            Storage::disk('local')->put($fileName, $encoded !== false ? $encoded : json_encode([
+                'error' => 'Failed to encode full import log',
+            ]));
+        } catch (\Throwable $e) {
+            Log::error('Failed to write full import log to disk', ['error' => $e->getMessage()]);
+            $fileName = null;
+        }
+
+        // Cap the number of per-record entries kept inline in the DB so the
+        // JSON column stays small regardless of how large the import was.
+        $maxInlineEntries = 200;
+
+        $principals = $fullDetails['principals'] ?? [];
+        $dependents = $fullDetails['dependents'] ?? [];
+
+        $truncatedPrincipals = array_slice($principals, 0, $maxInlineEntries);
+        $truncatedDependents = array_slice($dependents, 0, $maxInlineEntries);
+
+        Log::warning('Import log details truncated before saving to database due to size', [
+            'encoded_size_bytes' => $encoded !== false ? strlen($encoded) : null,
+            'max_bytes' => $maxBytes,
+            'total_principals_logged' => count($principals),
+            'total_dependents_logged' => count($dependents),
+            'inline_principals_kept' => count($truncatedPrincipals),
+            'inline_dependents_kept' => count($truncatedDependents),
+            'full_log_file' => $fileName,
+        ]);
+
+        return array_merge($fullDetails, [
+            'principals' => $truncatedPrincipals,
+            'dependents' => $truncatedDependents,
+            'truncated' => true,
+            'truncated_principals_omitted' => max(0, count($principals) - count($truncatedPrincipals)),
+            'truncated_dependents_omitted' => max(0, count($dependents) - count($truncatedDependents)),
+            'full_log_file' => $fileName,
+        ]);
     }
 
     /**
@@ -259,19 +402,36 @@ class ImportEnrolleeController extends Controller
             return in_array($upperNormalized, ['TRUE', 'YES']) ? 1 : 0;
         }
 
-        // Handle numeric values (including decimal precision issues)
-        if (is_numeric($normalized)) {
-            // If it's a whole number, convert to int, otherwise float with consistent precision
-            if ((float) $normalized == (int) $normalized) {
+        // Handle numeric values (including decimal precision issues).
+        // NOTE: is_numeric() also accepts scientific notation like "39E5864",
+        // which is a common false-positive for alphanumeric IDs (e.g. employee
+        // IDs such as "39E5864"). Casting such a value to (int) overflows and
+        // triggers "float-string is not representable as int" errors on PHP
+        // 8.1+, plus silently corrupts the ID. Only treat plain decimal
+        // numbers (no exponent notation) as numeric here.
+        if (preg_match('/^-?\d+(\.\d+)?$/', $normalized) === 1) {
+            $floatVal = (float) $normalized;
+
+            // Guard against values outside the safe integer range (or
+            // non-finite results) before casting to int, to avoid the
+            // "float-string is not representable as int" error.
+            if ((float) $normalized == (int) $normalized
+                && is_finite($floatVal)
+                && abs($floatVal) <= PHP_INT_MAX
+            ) {
                 return (int) $normalized;
             } else {
                 // Round to 2 decimal places to avoid precision issues
-                return round((float) $normalized, 2);
+                return round($floatVal, 2);
             }
         }
 
-        // Convert to uppercase for string comparison (since we use uppercaseStrings)
-        if (is_string($value) && !is_numeric($normalized)) {
+        // Convert to uppercase for string comparison (since we use uppercaseStrings).
+        // Use the same strict decimal-number check as above (not is_numeric)
+        // so IDs like "39E5864" are treated as plain strings and uppercased,
+        // rather than being skipped because is_numeric() considers them
+        // scientific notation.
+        if (is_string($value) && preg_match('/^-?\d+(\.\d+)?$/', $normalized) !== 1) {
             $normalized = strtoupper($normalized);
         }
 
@@ -422,6 +582,12 @@ class ImportEnrolleeController extends Controller
 
     public function import(Request $request): JsonResponse
     {
+        // Bulk imports can run long enough for MySQL to close an idle
+        // connection ("MySQL server has gone away"). Bump the session
+        // timeouts and make sure we have a live connection before starting
+        // the transaction.
+        $this->ensureStableDbConnection();
+
         DB::beginTransaction();
 
         try {
@@ -696,13 +862,16 @@ class ImportEnrolleeController extends Controller
                 Log::error('Failed to save error log', ['error' => $logError->getMessage()]);
             }
 
-            // Rollback all transaction levels
-            $transactionLevel = DB::transactionLevel();
-            for ($i = 0; $i < $transactionLevel; $i++) {
-                DB::rollBack();
-            }
+            // Rollback all transaction levels. If the connection was already
+            // dropped by MySQL ("server has gone away"), the rollback itself
+            // will throw — guard against that so we still return a clean
+            // JSON response instead of crashing.
+            $this->safeRollback();
 
-            return response()->json(['message' => 'Import failed', 'error' => $e->getMessage()], 500);
+            return response()->json([
+                'message' => $this->isConnectionLostError($e) ? $this->connectionLostMessage() : 'Import failed',
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 
@@ -711,6 +880,17 @@ class ImportEnrolleeController extends Controller
      */
     public function importWithCompanyAndProvider(Request $request): JsonResponse
     {
+        // Bulk imports can process many principals + dependents, each with
+        // several DB queries and log writes. Give this endpoint more time
+        // than the default 30s so large imports don't hit a fatal timeout
+        // (which also prevents CORS headers from being sent back).
+        set_time_limit(300);
+
+        // Bump the session timeouts and ensure the connection is alive
+        // before starting a potentially long-running transaction, to
+        // reduce the chance of a "MySQL server has gone away" error.
+        $this->ensureStableDbConnection();
+
         DB::beginTransaction();
 
         try {
@@ -778,8 +958,58 @@ class ImportEnrolleeController extends Controller
                     $affectedEnrollmentIds[] = $currentEnrollmentId;
                 }
 
+                // Fast skip: if the principal already has an employment_end_date on
+                // record, don't touch it at all. Bail out before any date
+                // sanitization, health-insurance processing, or nested
+                // transactions run, which is where most of the per-row cost of a
+                // bulk import comes from.
+                $existingPrincipalForSkipCheck = Enrollee::withTrashed()
+                    ->where('employee_id', $employeeId)
+                    ->where('enrollment_id', $currentEnrollmentId)
+                    ->first(['id', 'employee_id', 'enrollment_id', 'employment_end_date', 'unmapped_columns']);
+
+                if ($existingPrincipalForSkipCheck && !empty($existingPrincipalForSkipCheck->employment_end_date)) {
+                    $principalMap[$employeeId] = $existingPrincipalForSkipCheck;
+
+                    // Even though we're skipping all other field updates for this
+                    // already-resigned principal, still persist any unmapped
+                    // Excel columns supplied for this row so that data isn't
+                    // silently dropped.
+                    if (!empty($enrolleeData['unmapped_columns'])) {
+                        $existingPrincipalForSkipCheck->update([
+                            'unmapped_columns' => $enrolleeData['unmapped_columns'],
+                            'unmapped_columns_by' => auth()->id(),
+                        ]);
+                    }
+
+                    $this->logPrincipal(
+                        $employeeId,
+                        'skipped',
+                        $enrolleeData,
+                        [],
+                        []
+                    );
+
+                    Log::info('Skipping principal entirely; employment_end_date already set', [
+                        'employee_id' => $employeeId,
+                        'enrollment_id' => $currentEnrollmentId,
+                        'existing_employment_end_date' => $existingPrincipalForSkipCheck->employment_end_date,
+                    ]);
+
+                    continue;
+                }
+
                 // Remove company_code and insurance_provider_title from enrollee data
                 unset($enrolleeData['company_code'], $enrolleeData['insurance_provider_title']);
+
+                // If the frontend included leftover (unmapped) Excel columns as
+                // delimited text, track which user imported them so the data
+                // can be scoped/filtered per user.
+                if (!empty($enrolleeData['unmapped_columns'])) {
+                    $enrolleeData['unmapped_columns_by'] = auth()->id();
+                } else {
+                    unset($enrolleeData['unmapped_columns'], $enrolleeData['unmapped_columns_by']);
+                }
 
                 // Separate health insurance fields from enrollee data
                 $healthInsuranceData = [];
@@ -886,22 +1116,16 @@ class ImportEnrolleeController extends Controller
                 Log::error('Failed to save error log', ['error' => $logError->getMessage()]);
             }
 
-            // Rollback all transaction levels
-            $transactionLevel = DB::transactionLevel();
+            // Rollback all transaction levels. If the connection was already
+            // dropped by MySQL ("server has gone away"), the rollback itself
+            // will throw — guard against that so we still return a clean
+            // JSON response instead of crashing.
+            $this->safeRollback();
 
-            for ($i = 0; $i < $transactionLevel; $i++) {
-                DB::rollBack();
-                Log::info('Rolled back transaction level', [
-                    'level' => $i + 1,
-                    'remaining_levels' => DB::transactionLevel()
-                ]);
-            }
-
-            Log::info('All transactions rolled back for importWithCompanyAndProvider', [
-                'final_transaction_level' => DB::transactionLevel()
-            ]);
-
-            return response()->json(['message' => 'Import failed', 'error' => $e->getMessage()], 500);
+            return response()->json([
+                'message' => $this->isConnectionLostError($e) ? $this->connectionLostMessage() : 'Import failed',
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 
@@ -962,7 +1186,16 @@ class ImportEnrolleeController extends Controller
             }
         }
 
+        // Preserve original casing for the free-text unmapped columns field;
+        // it isn't a controlled-vocabulary field like the rest of the data.
+        $unmappedColumnsOriginal = $enrolleeData['unmapped_columns'] ?? null;
+        unset($enrolleeData['unmapped_columns']);
+
         $enrolleeData = $this->uppercaseStrings($enrolleeData);
+
+        if ($unmappedColumnsOriginal !== null) {
+            $enrolleeData['unmapped_columns'] = $unmappedColumnsOriginal;
+        }
 
         // Determine status and soft deletion based on employment_end_date
         $enrolleeData['status'] = 'ACTIVE';
@@ -993,16 +1226,19 @@ class ImportEnrolleeController extends Controller
                 'existing_employment_end_date' => $existingPrincipal->employment_end_date,
             ]);
         } elseif ($newEndDateProvided) {
-            // employment_end_date is being mapped/added for the first time
+            // employment_end_date is being mapped/added for the first time.
+            // Always stamp the back_date since a new employment_end_date is
+            // being recorded, regardless of whether it's in the past or future.
+            $enrolleeData['back_date'] = now();
+
             if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
-                // Date is today or in the past — mark as resigned and stamp the back_date
+                // Date is today or in the past — mark as resigned
                 $enrolleeData['status'] = 'INACTIVE';
                 $enrolleeData['enrollment_status'] = 'RESIGNED';
-                $enrolleeData['back_date'] = now();
                 //$shouldSoftDelete = true;
             }
             // If the uploaded employment_end_date is a future/advance date, don't update
-            // the resigned status and don't add the back_date — leave default ACTIVE.
+            // the resigned status — leave default ACTIVE. The back_date is still stamped above.
 
             //$healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
         } else {
@@ -1055,8 +1291,10 @@ class ImportEnrolleeController extends Controller
                 }
             }
 
-            // Debug: Log all field comparisons even when there are no changes
-            if (!$hasChanges) {
+            // Debug: Log all field comparisons even when there are no changes.
+            // Only enabled when APP_DEBUG is on to avoid the overhead of building
+            // and writing this verbose log on every unchanged row during large imports.
+            if (!$hasChanges && config('app.debug')) {
                 $allComparisons = [];
                 foreach ($enrolleeData as $key => $value) {
                     if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
@@ -1619,6 +1857,27 @@ class ImportEnrolleeController extends Controller
     private function generateImportReport(ImportLog $importLog): string
     {
         $details = $importLog->import_details ?? [];
+
+        // If the inline details were truncated to keep the DB row small, load
+        // the full log from disk (if still available) so the downloaded
+        // report contains every principal/dependent, not just the preview.
+        if (!empty($details['truncated']) && !empty($details['full_log_file'])) {
+            try {
+                if (Storage::disk('local')->exists($details['full_log_file'])) {
+                    $fullDetails = json_decode(Storage::disk('local')->get($details['full_log_file']), true);
+                    if (is_array($fullDetails)) {
+                        $details = $fullDetails;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Failed to load full import log from disk for report generation', [
+                    'import_log_id' => $importLog->id,
+                    'full_log_file' => $details['full_log_file'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         $summary = $details['summary'] ?? [];
         $principals = $details['principals'] ?? [];
         $dependents = $details['dependents'] ?? [];
