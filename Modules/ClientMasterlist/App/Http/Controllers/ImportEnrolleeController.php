@@ -11,6 +11,7 @@ use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\InsuranceProvider;
 use Modules\ClientMasterlist\App\Models\ImportLog;
+use Modules\ClientMasterlist\App\Models\PrincipalUnmappedColumn;
 use App\Models\Company;
 
 use App\Http\Traits\DateSanitizer;
@@ -86,6 +87,58 @@ class ImportEnrolleeController extends Controller
     private function connectionLostMessage(): string
     {
         return 'Import failed because the database connection was lost during processing (the file may be too large or the import took too long). Please try again, or split the file into smaller batches.';
+    }
+
+    /**
+     * Parse the delimited "unmapped_columns" text (e.g.
+     * "Column A: value || Column B: value") into individual
+     * column_name/column_value pairs and persist them to the
+     * cm_principal_unmapped_columns table for the given principal.
+     *
+     * Any previously stored rows for the principal are replaced so the
+     * table always reflects the most recent import.
+     */
+    private function syncUnmappedColumnValues(Enrollee $principal, ?string $unmappedColumnsText): void
+    {
+        if (empty(trim((string) $unmappedColumnsText))) {
+            return;
+        }
+
+        $rows = [];
+        $pairs = explode('||', $unmappedColumnsText);
+
+        foreach ($pairs as $pair) {
+            $pair = trim($pair);
+
+            if ($pair === '') {
+                continue;
+            }
+
+            // Split on the first ": " only, since the value itself may
+            // legitimately contain a colon.
+            $parts = explode(':', $pair, 2);
+            $columnName = trim($parts[0] ?? '');
+            $columnValue = trim($parts[1] ?? '');
+
+            if ($columnName === '') {
+                continue;
+            }
+
+            $rows[] = [
+                'principal_id' => $principal->id,
+                'column_name' => $columnName,
+                'column_value' => $columnValue,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        }
+
+        if (empty($rows)) {
+            return;
+        }
+
+        PrincipalUnmappedColumn::where('principal_id', $principal->id)->delete();
+        PrincipalUnmappedColumn::insert($rows);
     }
 
     /**
@@ -658,6 +711,17 @@ class ImportEnrolleeController extends Controller
                     // If no existing principal found, keep the original employee_id with generated number
                 }
 
+                // If the frontend included leftover (unmapped) Excel columns as
+                // delimited text, track which user imported them so the data
+                // can be scoped/filtered per user. Only relevant for principal
+                // rows; the Dependent model has no unmapped_columns column, so
+                // mass-assignment will simply ignore it for dependent rows.
+                if (!empty($enrolleeData['unmapped_columns'])) {
+                    $enrolleeData['unmapped_columns_by'] = auth()->id();
+                } else {
+                    unset($enrolleeData['unmapped_columns'], $enrolleeData['unmapped_columns_by']);
+                }
+
                 // Separate health insurance fields from enrollee data
                 $healthInsuranceData = [];
 
@@ -699,6 +763,11 @@ class ImportEnrolleeController extends Controller
                     }
 
                     $principalMap[$employeeId] = $principal;
+
+                    // Persist normalized unmapped column name/value pairs
+                    if (!empty($enrolleeData['unmapped_columns'])) {
+                        $this->syncUnmappedColumnValues($principal, $enrolleeData['unmapped_columns']);
+                    }
 
                     // Log principal import
                     $this->logPrincipal(
@@ -980,6 +1049,8 @@ class ImportEnrolleeController extends Controller
                             'unmapped_columns' => $enrolleeData['unmapped_columns'],
                             'unmapped_columns_by' => auth()->id(),
                         ]);
+
+                        $this->syncUnmappedColumnValues($existingPrincipalForSkipCheck, $enrolleeData['unmapped_columns']);
                     }
 
                     $this->logPrincipal(
@@ -1038,6 +1109,11 @@ class ImportEnrolleeController extends Controller
                 // Create or update principal with soft delete handling
                 $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $currentEnrollmentId, $employeeId, $dateAnalysis['recommended_format']);
                 $principalMap[$employeeId] = $principal;
+
+                // Persist normalized unmapped column name/value pairs
+                if (!empty($enrolleeData['unmapped_columns'])) {
+                    $this->syncUnmappedColumnValues($principal, $enrolleeData['unmapped_columns']);
+                }
 
                 // Log principal import
                 $this->logPrincipal(

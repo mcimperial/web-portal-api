@@ -44,7 +44,8 @@ class ExportEnrolleesController extends Controller
                 'dependent_mbl' => 'Dependent MBL', 'dependent_room_and_board' => 'Dependent Room and Board',
                 'is_renewal' => 'Is Renewal', 'is_company_paid' => 'Is Company Paid',
                 'coverage_start_date' => 'Coverage Start Date', 'coverage_end_date' => 'Coverage End Date',
-                'certificate_number' => 'Certificate Number', 'certificate_date_issued' => 'Certificate Date Issued'
+                'certificate_number' => 'Certificate Number', 'certificate_date_issued' => 'Certificate Date Issued',
+                'unmapped_columns' => 'Unmapped Columns'
             ]
         ],
         'MAXI-SCVP' => [
@@ -165,6 +166,7 @@ class ExportEnrolleesController extends Controller
         
         $columns = $this->determineColumns($request, $exportType, $isForAttachment);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
+        $columns = $this->expandUnmappedColumns($columns, $enrollees);
         
         // Use DEFAULT labels when use_selected_columns is checked
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
@@ -187,6 +189,7 @@ class ExportEnrolleesController extends Controller
 
         $columns = $this->determineColumns($request, $exportType, true);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
+        $columns = $this->expandUnmappedColumns($columns, $enrollees);
 
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
         $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
@@ -265,7 +268,7 @@ class ExportEnrolleesController extends Controller
 
     private function buildRelationships(array $filters): array
     {
-        $relationships = ['healthInsurance', 'enrollment.insuranceProvider'];
+        $relationships = ['healthInsurance', 'enrollment.insuranceProvider', 'unmappedColumnValues'];
         
         if (($filters['enrollment_status'] ?? '') === 'APPROVED') {
             // For APPROVED status, only load approved dependents
@@ -470,6 +473,64 @@ class ExportEnrolleesController extends Controller
         return [$columns, $checks['isRenewal']];
     }
 
+    /**
+     * Replace the generic "unmapped_columns" placeholder with one dynamic
+     * column per distinct column_name found in the exported principals'
+     * unmapped column data (cm_principal_unmapped_columns), so each
+     * unmapped field becomes its own header in the CSV, e.g. "Column A",
+     * "Column B", using column_name as the header and column_value as the
+     * cell value for each principal row.
+     */
+    private function expandUnmappedColumns(array $columns, $enrollees): array
+    {
+        $index = array_search('unmapped_columns', $columns, true);
+        if ($index === false) {
+            return $columns;
+        }
+
+        // Remove the placeholder column.
+        array_splice($columns, $index, 1);
+
+        // Collect unique column_name values across all exported principals,
+        // preserving first-seen order.
+        $names = [];
+        foreach ($enrollees as $enrollee) {
+            if (!$enrollee->relationLoaded('unmappedColumnValues')) {
+                continue;
+            }
+            foreach ($enrollee->unmappedColumnValues as $row) {
+                $name = trim((string) $row->column_name);
+                if ($name !== '' && !in_array($name, $names, true)) {
+                    $names[] = $name;
+                }
+            }
+        }
+
+        sort($names);
+
+        // Re-insert the dynamic columns where the placeholder used to be.
+        array_splice($columns, $index, 0, $names);
+
+        return $columns;
+    }
+
+    /**
+     * Look up the value for a dynamic unmapped column (matched by
+     * column_name) for the given principal entity. Returns null if the
+     * entity has no such relation/value so callers can fall back to
+     * normal column resolution.
+     */
+    private function getUnmappedColumnValue(string $column, $entity): ?string
+    {
+        if (!method_exists($entity, 'unmappedColumnValues') || !$entity->relationLoaded('unmappedColumnValues')) {
+            return null;
+        }
+
+        $match = $entity->unmappedColumnValues->firstWhere('column_name', $column);
+
+        return $match ? (string) $match->column_value : null;
+    }
+
     private function normalizeColumns($columns): array
     {
         if (is_string($columns)) {
@@ -619,7 +680,12 @@ class ExportEnrolleesController extends Controller
     {
         // Use DEFAULT labels if specifically requested (when use_selected_columns is checked)
         $config = $useDefaultLabels ? self::EXPORT_CONFIGS['DEFAULT'] : $this->getConfig($exportType);
-        return array_map(fn($col) => $config['labels'][$col] ?? $col, $columns);
+        return array_map(function ($col) use ($config) {
+            if ($col === 'unmapped_columns') {
+                return $config['labels']['unmapped_columns'] ?? 'Unmapped Columns';
+            }
+            return $config['labels'][$col] ?? $col;
+        }, $columns);
     }
 
     private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false): array
@@ -905,6 +971,13 @@ class ExportEnrolleesController extends Controller
         if (in_array($column, self::INSURANCE_FIELDS)) {
             return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
         }
+
+        // Dynamic unmapped-column (imported extra columns) resolution.
+        $unmappedValue = $this->getUnmappedColumnValue($column, $entity);
+        if ($unmappedValue !== null) {
+            return $unmappedValue;
+        }
+
         return $entity->$column ?? '';
     }
 
