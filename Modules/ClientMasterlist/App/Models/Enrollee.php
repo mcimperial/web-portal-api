@@ -108,4 +108,10 @@ class Enrollee extends Model
     {
         return $this->belongsTo(\App\Models\User::class, 'unmapped_columns_by');
     }
+
+    // Principal has many normalized unmapped column name/value rows
+    public function unmappedColumnValues()
+    {
+        return $this->hasMany(PrincipalUnmappedColumn::class, 'principal_id');
+    }
 }
