@@ -1000,8 +1000,12 @@ class ImportEnrolleeController extends Controller
             $principalMap = [];
             $affectedEnrollmentIds = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
+            $uploadDate = now();
+            $uploadMonthYear = $uploadDate->format('Y-m');
+            $uploadDateString = $uploadDate->toDateString();
 
             foreach ($enrollees as $enrolleeData) {
+                $forceCoverageEndDateNow = false;
                 $employeeId = $enrolleeData['employee_id'] ?? null;
                 $enrolleeCompanyCode = $enrolleeData['company_code'] ?? null;
                 $enrolleeInsuranceProviderTitle = $enrolleeData['insurance_provider_title'] ?? null;
@@ -1073,6 +1077,41 @@ class ImportEnrolleeController extends Controller
                 // Remove company_code and insurance_provider_title from enrollee data
                 unset($enrolleeData['company_code'], $enrolleeData['insurance_provider_title']);
 
+                // Multi-provider special rule:
+                // If mapped employment_end_date month/year is earlier than the
+                // upload month/year, move that mapped date to back_date, then
+                // set employee_end_date and coverage_end_date to upload date (today).
+                if (!empty($enrolleeData['employment_end_date'])) {
+                    $mappedEmploymentEndDate = $this->sanitizeDateWithFormat(
+                        $enrolleeData['employment_end_date'],
+                        $dateAnalysis['recommended_format']
+                    );
+
+                    if (!empty($mappedEmploymentEndDate)) {
+                        $mappedEndMonthYear = date('Y-m', strtotime($mappedEmploymentEndDate));
+                        $isPriorMonthYear = $mappedEndMonthYear < $uploadMonthYear;
+                        $isSameMonthYearPastDay = $mappedEndMonthYear === $uploadMonthYear
+                            && $mappedEmploymentEndDate < $uploadDateString;
+
+                        if ($isPriorMonthYear || $isSameMonthYearPastDay) {
+                            $enrolleeData['back_date'] = $mappedEmploymentEndDate;
+                            $enrolleeData['employment_end_date'] = $uploadDateString;
+                            $forceCoverageEndDateNow = true;
+
+                            Log::info('Multi-provider end-date conversion applied', [
+                                'employee_id' => $employeeId,
+                                'enrollment_id' => $currentEnrollmentId,
+                                'mapped_employment_end_date' => $mappedEmploymentEndDate,
+                                'back_date_set_to' => $mappedEmploymentEndDate,
+                                'employment_end_date_set_to' => $uploadDateString,
+                                'coverage_end_date_set_to' => $uploadDateString,
+                                'upload_month_year' => $uploadMonthYear,
+                                'mapped_month_year' => $mappedEndMonthYear,
+                            ]);
+                        }
+                    }
+                }
+
                 // If the frontend included leftover (unmapped) Excel columns as
                 // delimited text, track which user imported them so the data
                 // can be scoped/filtered per user.
@@ -1093,7 +1132,9 @@ class ImportEnrolleeController extends Controller
                 }
 
                 // Handle employment end date for health insurance
-                if (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) {
+                if ($forceCoverageEndDateNow) {
+                    $healthInsuranceData['coverage_end_date'] = $uploadDateString;
+                } elseif (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) {
                     $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
                 }
 
@@ -1287,6 +1328,12 @@ class ImportEnrolleeController extends Controller
         $existingPrincipal = $principalQuery->first();
 
         $existingHadEndDate = $existingPrincipal && !empty($existingPrincipal->employment_end_date);
+        $existingHasBackDate = $existingPrincipal && !empty($existingPrincipal->back_date);
+
+        // Never overwrite back_date once it has already been set on an existing principal.
+        if ($existingHasBackDate) {
+            unset($enrolleeData['back_date']);
+        }
 
         $newEndDateProvided = (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) ||
             ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)));
@@ -1303,9 +1350,16 @@ class ImportEnrolleeController extends Controller
             ]);
         } elseif ($newEndDateProvided) {
             // employment_end_date is being mapped/added for the first time.
-            // Always stamp the back_date since a new employment_end_date is
-            // being recorded, regardless of whether it's in the past or future.
-            $enrolleeData['back_date'] = now();
+            // Stamp back_date only when the employment_end_date month/year is
+            // earlier than the current month/year.
+            if (!empty($enrolleeData['employment_end_date'])) {
+                $endDateMonthYear = date('Y-m', strtotime($enrolleeData['employment_end_date']));
+                $currentMonthYear = date('Y-m');
+
+                if ($endDateMonthYear < $currentMonthYear && !$existingHasBackDate) {
+                    $enrolleeData['back_date'] = now();
+                }
+            }
 
             if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
                 // Date is today or in the past — mark as resigned
@@ -1314,7 +1368,7 @@ class ImportEnrolleeController extends Controller
                 //$shouldSoftDelete = true;
             }
             // If the uploaded employment_end_date is a future/advance date, don't update
-            // the resigned status — leave default ACTIVE. The back_date is still stamped above.
+            // the resigned status — leave default ACTIVE.
 
             //$healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
         } else {

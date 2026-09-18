@@ -368,6 +368,28 @@ class SendNotificationController extends Controller
                 }
             }
         }
+        else if ($notification->notification_type === 'REPORT: ATTACHMENT (EMPLOYEE END DATE IS TODAY - IMPORTED)' && !$placeholderMessage) {
+            if ($csvAttachment && is_array($csvAttachment) && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                $csvAttachments = [$csvAttachment];
+            } else if (!$csvAttachment) {
+                $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+
+                if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                    $csvAttachment = $this->generateCsvAttachment($statusResult);
+
+                    if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                        $csvAttachments = [$csvAttachment];
+                    } else if ($csvAttachment) {
+                        if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                            @unlink($csvAttachment['path']);
+                        }
+                        if (isset($csvAttachment['temp_path'])) {
+                            @unlink($csvAttachment['temp_path']);
+                        }
+                    }
+                }
+            }
+        }
 
         $replacements = $this->getVariableReplacements($notification, $data);
         
@@ -922,6 +944,20 @@ class SendNotificationController extends Controller
                     'date_to' => $dateRange['to'],
                     'columns' => $columns
                 ];
+            case 'REPORT: ATTACHMENT (EMPLOYEE END DATE IS TODAY - IMPORTED)':
+                return [
+                    'type' => 'csv_generation',
+                    'enrollment_id' => $enrollmentId,
+                    'enrollment_status' => 'RESIGNED',
+                    'export_enrollment_type' => 'REGULAR',
+                    'is_renewal' => false,
+                    'with_dependents' => true,
+                    'use_certification_date' => false,
+                    'date_from' => $dateRange['from'],
+                    'date_to' => $dateRange['to'],
+                    'employee_end_date_equals_import_date' => true,
+                    'columns' => $columns
+                ];
 
             case 'CLOSE ENROLLMENT':
                 // Set the enrollment status to INACTIVE
@@ -1457,6 +1493,9 @@ class SendNotificationController extends Controller
     private function generateCsvAttachment($statusResult)
     {
         try {
+            if (!empty($statusResult['employee_end_date_equals_import_date'])) {
+                return $this->generateEmployeeEndDateImportCsvAttachment($statusResult);
+            }
 
             // Create a request object with the parameters
             $request = new Request([
@@ -1511,6 +1550,84 @@ class SendNotificationController extends Controller
             Log::error("Failed to generate CSV attachment: " . $e->getMessage(), [
                 'exception' => $e->getTraceAsString()
             ]);
+            return null;
+        }
+    }
+
+    /**
+     * Generate CSV for imported enrollees whose employee_end_date equals the import date (today).
+     */
+    private function generateEmployeeEndDateImportCsvAttachment($statusResult)
+    {
+        try {
+            $enrollmentId = $statusResult['enrollment_id'] ?? null;
+            if (!$enrollmentId) {
+                return null;
+            }
+
+            $dateTo = $statusResult['date_to'] ?? now()->format('Y-m-d H:i:s');
+            $targetDate = \Carbon\Carbon::parse($dateTo)->format('Y-m-d');
+
+            $query = Enrollee::with(['healthInsurance'])
+                ->where('enrollment_id', $enrollmentId)
+                ->where('enrollment_status', 'RESIGNED')
+                ->whereNotNull('back_date')
+                ->whereDate('employment_end_date', $targetDate)
+                ->whereNull('deleted_at');
+
+            if (!empty($statusResult['date_from'])) {
+                $query->where('updated_at', '>=', $statusResult['date_from']);
+            }
+
+            if (!empty($statusResult['date_to'])) {
+                $query->where('updated_at', '<=', $statusResult['date_to']);
+            }
+
+            $enrollees = $query->get();
+
+            $tmpPath = tempnam(sys_get_temp_dir(), 'csv_attachment_');
+            $csvPath = $tmpPath . '.csv';
+            $file = fopen($csvPath, 'w');
+
+            fputcsv($file, [
+                'EMPLOYEE ID',
+                'EMPLOYEE NAME',
+                'BACK DATE',
+                'EMPLOYEE END DATE',
+                'COVERAGE END DATE',
+                'ENROLLMENT STATUS',
+                'UPDATED AT',
+            ]);
+
+            foreach ($enrollees as $enrollee) {
+                fputcsv($file, [
+                    $enrollee->employee_id ?? '',
+                    trim(($enrollee->first_name ?? '') . ' ' . ($enrollee->last_name ?? '')),
+                    $enrollee->back_date ? \Carbon\Carbon::parse($enrollee->back_date)->format('Y-m-d H:i:s') : '',
+                    $enrollee->employment_end_date ? \Carbon\Carbon::parse($enrollee->employment_end_date)->format('Y-m-d') : '',
+                    $enrollee->healthInsurance && $enrollee->healthInsurance->coverage_end_date
+                        ? \Carbon\Carbon::parse($enrollee->healthInsurance->coverage_end_date)->format('Y-m-d')
+                        : '',
+                    $enrollee->enrollment_status ?? '',
+                    $enrollee->updated_at ? \Carbon\Carbon::parse($enrollee->updated_at)->format('Y-m-d H:i:s') : '',
+                ]);
+            }
+
+            fclose($file);
+
+            return [
+                'path' => $csvPath,
+                'name' => 'ENROLLEES_END_DATE_IMPORT_' . date('Ymd_His') . '.csv',
+                'temp_path' => $tmpPath,
+                'has_data' => $enrollees->count() > 0,
+                'data_rows' => $enrollees->count(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Failed to generate employee_end_date import CSV attachment', [
+                'error' => $e->getMessage(),
+                'exception' => $e->getTraceAsString(),
+            ]);
+
             return null;
         }
     }
