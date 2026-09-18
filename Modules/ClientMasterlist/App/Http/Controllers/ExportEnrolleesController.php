@@ -343,7 +343,8 @@ class ExportEnrolleesController extends Controller
             $query->where('enrollment_id', $filters['enrollment_id']);
         }
 
-        if (($filters['enrollment_status'] ?? '') !== 'APPROVED') {
+        $enrollmentStatus = $filters['enrollment_status'] ?? '';
+        if ($enrollmentStatus !== 'APPROVED' && $enrollmentStatus !== 'RESIGNED') {
             $query->where('status', 'ACTIVE')->whereNull('deleted_at');
         }
 
