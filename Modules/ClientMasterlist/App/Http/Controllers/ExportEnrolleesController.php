@@ -421,6 +421,8 @@ class ExportEnrolleesController extends Controller
                 $query->whereIn('enrollment_status', ['FOR-RENEWAL', 'PENDING']);
             } elseif ($enrollmentStatus === 'APPROVED') {
                 $query->whereIn('enrollment_status', ['APPROVED', 'RESIGNED']);
+            } elseif ($enrollmentStatus === 'RESIGNED') {
+                $query->whereIn('enrollment_status', ['RESIGNED', 'INACTIVE', 'ACTIVE']);
             } elseif ($enrollmentStatus) {
                 $query->where('enrollment_status', $enrollmentStatus);
             }
