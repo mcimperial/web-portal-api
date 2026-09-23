@@ -383,6 +383,7 @@ class EnrolleeController extends Controller
             'position' => 'nullable|string|max:255',
             'employment_start_date' => 'nullable|date',
             'employment_end_date' => 'nullable|date',
+            'back_date' => 'nullable|date',
             'notes' => 'nullable|string',
             'enrollment_status' => 'required|string',
             'status' => 'required|string|in:ACTIVE,INACTIVE',
