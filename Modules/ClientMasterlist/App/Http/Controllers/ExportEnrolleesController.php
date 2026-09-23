@@ -1007,14 +1007,14 @@ class ExportEnrolleesController extends Controller
     }
 
     /**
-     * "Back Date" is stamped with date & time when an employment_end_date is
+     * "Back Date" is stamped when an employment_end_date is
      * first added to the principal (see ImportEnrolleeController for the rules).
      */
     private function getBackDate($entity, bool $isPrincipal, $principal): string
     {
         $source = $isPrincipal ? $entity : $principal;
         if (!$source || !$source->back_date) return '';
-        return \Carbon\Carbon::parse($source->back_date)->format('Y-m-d H:i:s');
+        return \Carbon\Carbon::parse($source->back_date)->format('Y-m-d');
     }
 
     private function getEnrollmentReference($entity, bool $isPrincipal, $principal)
