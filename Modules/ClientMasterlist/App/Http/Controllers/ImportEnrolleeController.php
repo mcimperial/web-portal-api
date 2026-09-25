@@ -11,6 +11,7 @@ use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\InsuranceProvider;
 use Modules\ClientMasterlist\App\Models\ImportLog;
+use Modules\ClientMasterlist\App\Models\ImportTempData;
 use Modules\ClientMasterlist\App\Models\PrincipalUnmappedColumn;
 use App\Models\Company;
 
@@ -19,8 +20,10 @@ use App\Http\Traits\UppercaseInput;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
 
 class ImportEnrolleeController extends Controller
 {
@@ -507,6 +510,239 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Decode optional import column headers payload from JSON or array input.
+     */
+    private function parseImportColumnsInput(Request $request): array
+    {
+        $columns = $request->input('import_columns', []);
+
+        if (is_string($columns)) {
+            $decoded = json_decode($columns, true);
+            $columns = is_array($decoded) ? $decoded : [];
+        }
+
+        if (!is_array($columns)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($columns as $column) {
+            $name = trim((string) $column);
+
+            if ($name !== '') {
+                $normalized[] = $name;
+            }
+        }
+
+        return array_values(array_unique($normalized));
+    }
+
+    /**
+     * Persist import payload rows into temporary storage for one enrollment.
+     *
+     * Keeps only one import date worth of rows by deleting previous rows first.
+     */
+    private function storeTempImportRowsForEnrollment(int $enrollmentId, array $rows, array $importColumns = []): void
+    {
+        $importDate = now()->toDateString();
+
+        ImportTempData::where('enrollment_id', $enrollmentId)->delete();
+
+        if (empty($rows)) {
+            return;
+        }
+
+        $detectedColumns = $importColumns;
+
+        if (empty($detectedColumns)) {
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                $detectedColumns = array_values(array_unique(array_merge($detectedColumns, array_keys($row))));
+            }
+        }
+
+        $payload = [];
+        $now = now();
+
+        foreach (array_values($rows) as $index => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $payload[] = [
+                'enrollment_id' => $enrollmentId,
+                'import_date' => $importDate,
+                'row_number' => $index + 1,
+                'column_names' => json_encode($detectedColumns),
+                'row_data' => json_encode($row),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (!empty($payload)) {
+            $this->insertTempImportPayloadInBatches($payload, $enrollmentId);
+        }
+    }
+
+    /**
+     * Insert temp-import payload in manageable batches to avoid
+     * max_allowed_packet errors from very large multi-row SQL statements.
+     */
+    private function insertTempImportPayloadInBatches(array $payload, int $enrollmentId): void
+    {
+        $batchSize = 100;
+
+        foreach (array_chunk($payload, $batchSize) as $batch) {
+            try {
+                ImportTempData::insert($batch);
+            } catch (QueryException $e) {
+                if (!$this->isPacketTooLargeError($e)) {
+                    throw $e;
+                }
+
+                Log::warning('Temp import batch exceeded max_allowed_packet; retrying row-by-row', [
+                    'enrollment_id' => $enrollmentId,
+                    'batch_row_count' => count($batch),
+                    'error' => $e->getMessage(),
+                ]);
+
+                foreach ($batch as $rowPayload) {
+                    try {
+                        ImportTempData::insert([$rowPayload]);
+                    } catch (QueryException $rowException) {
+                        if (!$this->isPacketTooLargeError($rowException)) {
+                            throw $rowException;
+                        }
+
+                        Log::error('Single temp import row exceeds max_allowed_packet', [
+                            'enrollment_id' => $enrollmentId,
+                            'row_number' => $rowPayload['row_number'] ?? null,
+                            'error' => $rowException->getMessage(),
+                        ]);
+
+                        throw new \Exception(
+                            'Import row ' . ($rowPayload['row_number'] ?? 'N/A') . ' is too large for current MySQL max_allowed_packet. '
+                            . 'Please reduce oversized cell content or increase max_allowed_packet.'
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Detect MySQL packet-size errors (1153 / max_allowed_packet).
+     */
+    private function isPacketTooLargeError(\Throwable $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        return str_contains($message, 'max_allowed_packet')
+            || str_contains($message, 'packet bigger')
+            || str_contains($message, 'error 1153')
+            || str_contains($message, 'got a packet bigger');
+    }
+
+    /**
+     * Persist temporary import rows grouped by enrollment.
+     */
+    private function storeTempImportRowsByEnrollment(array $rowsByEnrollment, array $importColumns = []): void
+    {
+        foreach ($rowsByEnrollment as $enrollmentId => $rows) {
+            $currentEnrollmentId = (int) $enrollmentId;
+
+            if ($currentEnrollmentId <= 0) {
+                continue;
+            }
+
+            $this->storeTempImportRowsForEnrollment($currentEnrollmentId, $rows, $importColumns);
+        }
+    }
+
+    /**
+     * Identify whether a relation value should be treated as principal data.
+     */
+    private function isPrincipalRelation(?string $relation): bool
+    {
+        $normalized = strtoupper(trim((string) $relation));
+
+        return in_array($normalized, ['', 'PRINCIPAL', 'EMPLOYEE', 'EMPLOYEES'], true);
+    }
+
+    /**
+     * Prepare fields used for temp-vs-existing comparison.
+     */
+    private function getComparisonFields(): array
+    {
+        return [
+            'first_name',
+            'last_name',
+            'middle_name',
+            'suffix',
+            'birth_date',
+            'gender',
+            'email1',
+            'email2',
+            'phone1',
+            'phone2',
+            'address',
+            'department',
+            'position',
+            'employment_start_date',
+            'employment_end_date',
+            'enrollment_status',
+            'status',
+        ];
+    }
+
+    /**
+     * Normalize date-like values to Y-m-d where possible.
+     */
+    private function normalizeComparableValue(string $field, $value)
+    {
+        $normalized = $this->normalizeValue($value);
+
+        if (is_null($normalized)) {
+            return null;
+        }
+
+        if (in_array($field, ['birth_date', 'employment_start_date', 'employment_end_date'], true)) {
+            $timestamp = strtotime((string) $normalized);
+
+            if ($timestamp !== false) {
+                return date('Y-m-d', $timestamp);
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Determine whether a value should be treated as null/empty for
+     * temp-column availability checks.
+     */
+    private function isNullLikeValue($value): bool
+    {
+        if (is_null($value)) {
+            return true;
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+
+            return $trimmed === ''
+                || strtoupper($trimmed) === 'NULL';
+        }
+
+        return false;
+    }
+
+    /**
      * Build a safe folder segment for Spaces paths.
      */
     private function sanitizeImportFolderSegment(?string $value, string $fallback): string
@@ -645,7 +881,14 @@ class ImportEnrolleeController extends Controller
 
         try {
             $enrollees = $this->parseEnrolleesInput($request);
+            $importColumns = $this->parseImportColumnsInput($request);
             $enrollmentId = $request->input('enrollment_id');
+
+            if (!$enrollmentId) {
+                throw new \Exception('Enrollment ID is required for import.');
+            }
+
+            $this->storeTempImportRowsForEnrollment((int) $enrollmentId, $enrollees, $importColumns);
 
             $sourceFile = $this->storeImportSourceFile($request, $enrollmentId ? (int) $enrollmentId : null, $enrollees);
 
@@ -964,6 +1207,7 @@ class ImportEnrolleeController extends Controller
 
         try {
             $enrollees = $this->parseEnrolleesInput($request);
+            $importColumns = $this->parseImportColumnsInput($request);
 
             $sourceFile = $this->storeImportSourceFile($request, null, $enrollees);
 
@@ -999,6 +1243,7 @@ class ImportEnrolleeController extends Controller
 
             $principalMap = [];
             $affectedEnrollmentIds = [];
+            $tempRowsByEnrollment = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
             $uploadDate = now();
             $uploadMonthYear = $uploadDate->format('Y-m');
@@ -1030,6 +1275,12 @@ class ImportEnrolleeController extends Controller
                 if (!in_array($currentEnrollmentId, $affectedEnrollmentIds, true)) {
                     $affectedEnrollmentIds[] = $currentEnrollmentId;
                 }
+
+                if (!isset($tempRowsByEnrollment[$currentEnrollmentId])) {
+                    $tempRowsByEnrollment[$currentEnrollmentId] = [];
+                }
+
+                $tempRowsByEnrollment[$currentEnrollmentId][] = $enrolleeData;
 
                 // Fast skip: if the principal already has an employment_end_date on
                 // record, don't touch it at all. Bail out before any date
@@ -1176,6 +1427,8 @@ class ImportEnrolleeController extends Controller
 
             // Record affected enrollments for reference in the log details
             $this->importLog['affected_enrollment_ids'] = $affectedEnrollmentIds;
+
+            $this->storeTempImportRowsByEnrollment($tempRowsByEnrollment, $importColumns);
 
             Log::info('About to commit transaction', [
                 'principals_processed' => count($principalMap),
@@ -1980,6 +2233,284 @@ class ImportEnrolleeController extends Controller
         }
     }
 
+    /**
+     * Compare temporary import rows vs existing principals for the same
+     * enrollment, always matched by employee_id.
+     */
+    public function compareTempImportData(Request $request): JsonResponse
+    {
+        try {
+            $incomingSearch = $request->input('search');
+
+            if (is_array($incomingSearch)) {
+                $request->merge([
+                    'search' => trim(implode(' ', array_map(fn ($value) => (string) $value, $incomingSearch))),
+                ]);
+            } elseif (!is_null($incomingSearch) && !is_string($incomingSearch) && !is_numeric($incomingSearch)) {
+                $request->merge([
+                    'search' => (string) $incomingSearch,
+                ]);
+            }
+
+            $request->validate([
+                'enrollment_id' => 'required|integer|exists:cm_enrollment,id',
+                'import_date' => 'sometimes|date',
+                'enrollment_status' => 'sometimes|string',
+                'search' => 'sometimes|nullable|string',
+                'search_by' => 'sometimes|in:all,employee_id,name,department,certificate_number',
+                'show_temp_columns' => 'sometimes|array',
+                'show_temp_columns.*' => 'string',
+            ]);
+
+            $enrollmentId = (int) $request->input('enrollment_id');
+
+            $availableImportDates = ImportTempData::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->select('import_date')
+                ->distinct()
+                ->orderByDesc('import_date')
+                ->pluck('import_date')
+                ->map(function ($date) {
+                    $dateString = (string) $date;
+
+                    if ($dateString === '') {
+                        return $dateString;
+                    }
+
+                    return substr($dateString, 0, 10);
+                })
+                ->filter(fn ($date) => $date !== '')
+                ->unique()
+                ->values();
+
+            if ($availableImportDates->isEmpty()) {
+                return response()->json([
+                    'message' => 'No temporary import data found for this enrollment. Import data first.',
+                ], 404);
+            }
+
+            $selectedImportDate = trim((string) $request->input('import_date', ''));
+
+            if ($selectedImportDate === '' || !$availableImportDates->contains($selectedImportDate)) {
+                $selectedImportDate = (string) $availableImportDates->first();
+            }
+
+            $sourceRows = ImportTempData::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->whereDate('import_date', $selectedImportDate)
+                ->orderBy('row_number')
+                ->get();
+
+            $sourceColumns = [];
+            $sourceColumnHasValue = [];
+            $tempRowsByEmployeeId = [];
+
+            foreach ($sourceRows as $sourceRow) {
+                $columnNames = is_array($sourceRow->column_names) ? $sourceRow->column_names : [];
+                $sourceColumns = array_values(array_unique(array_merge($sourceColumns, $columnNames)));
+
+                $rowData = is_array($sourceRow->row_data) ? $sourceRow->row_data : [];
+                $sourceColumns = array_values(array_unique(array_merge($sourceColumns, array_keys($rowData))));
+
+                foreach ($rowData as $columnName => $columnValue) {
+                    if (!array_key_exists($columnName, $sourceColumnHasValue)) {
+                        $sourceColumnHasValue[$columnName] = false;
+                    }
+
+                    if (!$this->isNullLikeValue($columnValue)) {
+                        $sourceColumnHasValue[$columnName] = true;
+                    }
+                }
+
+                $employeeId = strtoupper(trim((string) ($rowData['employee_id'] ?? '')));
+
+                if ($employeeId !== '') {
+                    $tempRowsByEmployeeId[$employeeId] = $rowData;
+                }
+            }
+
+            $sourceColumns = array_values(array_filter(
+                $sourceColumns,
+                fn ($columnName) => !empty($sourceColumnHasValue[$columnName])
+            ));
+
+            $showTempColumns = collect($request->input('show_temp_columns', []))
+                ->map(fn ($column) => trim((string) $column))
+                ->filter(fn ($column) => $column !== '')
+                ->filter(fn ($column) => in_array($column, $sourceColumns, true))
+                ->unique()
+                ->values()
+                ->all();
+
+            if (empty($showTempColumns)) {
+                $showTempColumns = ['employee_id'];
+            }
+
+            $selectedEnrollmentStatus = strtoupper(trim((string) $request->input('enrollment_status', '')));
+            $rawSearch = $request->input('search', '');
+            $search = trim(is_scalar($rawSearch) ? (string) $rawSearch : '');
+            $searchBy = trim((string) $request->input('search_by', 'all'));
+
+            if (!in_array($searchBy, ['all', 'employee_id', 'name', 'department', 'certificate_number'], true)) {
+                $searchBy = 'all';
+            }
+
+            $statusOptions = Enrollee::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->whereNotNull('enrollment_status')
+                ->select('enrollment_status')
+                ->distinct()
+                ->orderBy('enrollment_status')
+                ->pluck('enrollment_status')
+                ->values();
+
+            $existingQuery = Enrollee::query()
+                ->with(['healthInsurance:id,principal_id,certificate_number'])
+                ->where('enrollment_id', $enrollmentId);
+
+            if ($selectedEnrollmentStatus !== '') {
+                $existingQuery->where('enrollment_status', $selectedEnrollmentStatus);
+            }
+
+            if ($search !== '') {
+                $existingQuery->where(function ($query) use ($search, $searchBy) {
+                    $searchLike = '%' . $search . '%';
+
+                    if ($searchBy === 'employee_id') {
+                        $query->where('employee_id', 'LIKE', $searchLike);
+                        return;
+                    }
+
+                    if ($searchBy === 'name') {
+                        $query->where('first_name', 'LIKE', $searchLike)
+                            ->orWhere('last_name', 'LIKE', $searchLike)
+                            ->orWhere(DB::raw("CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))"), 'LIKE', $searchLike)
+                            ->orWhere(DB::raw("CONCAT(COALESCE(last_name, ''), ', ', COALESCE(first_name, ''))"), 'LIKE', $searchLike);
+                        return;
+                    }
+
+                    if ($searchBy === 'department') {
+                        $query->where('department', 'LIKE', $searchLike);
+                        return;
+                    }
+
+                    if ($searchBy === 'certificate_number') {
+                        $query->whereHas('healthInsurance', function ($healthInsuranceQuery) use ($searchLike) {
+                            $healthInsuranceQuery->where('certificate_number', 'LIKE', $searchLike);
+                        });
+                        return;
+                    }
+
+                    $query->where('employee_id', 'LIKE', $searchLike)
+                        ->orWhere('first_name', 'LIKE', $searchLike)
+                        ->orWhere('last_name', 'LIKE', $searchLike)
+                        ->orWhere('department', 'LIKE', $searchLike)
+                        ->orWhere(DB::raw("CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))"), 'LIKE', $searchLike)
+                        ->orWhere(DB::raw("CONCAT(COALESCE(last_name, ''), ', ', COALESCE(first_name, ''))"), 'LIKE', $searchLike)
+                        ->orWhereHas('healthInsurance', function ($healthInsuranceQuery) use ($searchLike) {
+                            $healthInsuranceQuery->where('certificate_number', 'LIKE', $searchLike);
+                        });
+                });
+            }
+
+            $existingRows = $existingQuery->get([
+                'id',
+                'employee_id',
+                'first_name',
+                'last_name',
+                'middle_name',
+                'suffix',
+                'department',
+                'employment_start_date',
+                'employment_end_date',
+                'back_date',
+                'status',
+                'enrollment_status',
+            ]);
+
+            $results = [];
+
+            foreach ($existingRows as $existingRow) {
+                $employeeId = strtoupper(trim((string) ($existingRow->employee_id ?? '')));
+                $sourceData = $employeeId !== '' ? ($tempRowsByEmployeeId[$employeeId] ?? null) : null;
+                $tempVisibleData = [];
+                foreach ($showTempColumns as $column) {
+                    $tempVisibleData[$column] = $sourceData[$column] ?? null;
+                }
+
+                $fullNameParts = array_filter([
+                    $existingRow->last_name,
+                    $existingRow->first_name,
+                    $existingRow->middle_name,
+                    $existingRow->suffix,
+                ], fn ($value) => !empty(trim((string) $value)));
+
+                $fullName = implode(', ', array_filter([
+                    !empty($existingRow->last_name) ? $existingRow->last_name : null,
+                    trim(implode(' ', array_filter([
+                        $existingRow->first_name,
+                        $existingRow->middle_name,
+                        $existingRow->suffix,
+                    ], fn ($value) => !empty(trim((string) $value))))) ?: null,
+                ]));
+
+                if ($fullName === '') {
+                    $fullName = implode(' ', $fullNameParts);
+                }
+
+                $results[] = [
+                    'employee_id' => $existingRow->employee_id,
+                    'full_name' => $fullName,
+                    'department' => $existingRow->department,
+                    'employment_start_date' => optional($existingRow->employment_start_date)->format('Y-m-d') ?: $existingRow->employment_start_date,
+                    'employment_end_date' => optional($existingRow->employment_end_date)->format('Y-m-d') ?: $existingRow->employment_end_date,
+                    'back_date' => optional($existingRow->back_date)->format('Y-m-d') ?: $existingRow->back_date,
+                    'certificate_number' => $existingRow->healthInsurance->certificate_number ?? null,
+                    'enrollment_status' => $existingRow->enrollment_status,
+                    'match_status' => $sourceData ? 'MATCH' : 'UNMATCHED',
+                    'is_matched' => (bool) $sourceData,
+                    'temp_data' => $tempVisibleData,
+                ];
+            }
+
+            $matchedCount = count(array_filter($results, fn ($row) => $row['is_matched'] === true));
+            $unmatchedCount = count($results) - $matchedCount;
+
+            $summary = [
+                'temp_rows_considered' => count($tempRowsByEmployeeId),
+                'existing_rows_considered' => $existingRows->count(),
+                'matched' => $matchedCount,
+                'unmatched' => $unmatchedCount,
+            ];
+
+            return response()->json([
+                'source_enrollment_id' => $enrollmentId,
+                'available_import_dates' => $availableImportDates,
+                'selected_import_date' => $selectedImportDate,
+                'selected_enrollment_status' => $selectedEnrollmentStatus,
+                'search' => $search,
+                'search_by' => $searchBy,
+                'available_enrollment_statuses' => $statusOptions,
+                'available_temp_columns' => $sourceColumns,
+                'show_temp_columns' => $showTempColumns,
+                'source_total_rows' => $sourceRows->count(),
+                'source_rows_with_employee_id' => count($tempRowsByEmployeeId),
+                'summary' => $summary,
+                'results' => $results,
+            ], 200);
+        } catch (\Illuminate\Validation\ValidationException $validationException) {
+            throw $validationException;
+        } catch (\Exception $e) {
+            Log::error('Failed to compare temp import data', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to compare temp import data',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
 
     /**
      * Generate formatted text report from import log
