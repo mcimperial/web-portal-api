@@ -38,6 +38,9 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Get import logs for an enrollment
     Route::get('import-logs', [ImportEnrolleeController::class, 'getImportLogs']);
 
+    // Compare latest temp import rows against existing data in other enrollments
+    Route::post('import-temp/compare', [ImportEnrolleeController::class, 'compareTempImportData']);
+
     // Download import log as text file
     Route::get('import-logs/{id}/download', [ImportEnrolleeController::class, 'downloadImportLog']);
 
