@@ -916,6 +916,149 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Normalize status-like values for case-insensitive comparisons.
+     */
+    private function normalizeStatusValue($value): string
+    {
+        if (is_null($value)) {
+            return '';
+        }
+
+        $normalized = strtoupper(trim((string) $value));
+        $normalized = str_replace(['_', '-'], ' ', $normalized);
+
+        return preg_replace('/\s+/', ' ', $normalized) ?? '';
+    }
+
+    /**
+     * Get normalized notes token from a temp row.
+     */
+    private function normalizeTempNotesToken(array $tempRow): string
+    {
+        $rawNotes = $tempRow['notes']
+            ?? $tempRow['note']
+            ?? $tempRow['remarks']
+            ?? $tempRow['remark']
+            ?? null;
+
+        if (is_null($rawNotes)) {
+            return '';
+        }
+
+        $normalized = strtoupper(trim((string) $rawNotes));
+        $normalized = str_replace(['_', '-'], ' ', $normalized);
+
+        return preg_replace('/\s+/', ' ', $normalized) ?? '';
+    }
+
+    /**
+     * Determine whether a temp notes mapping matches one of the allowed values.
+     */
+    private function isTempNotesMapped(array $tempRow, array $allowedMappings): bool
+    {
+        $normalizedNotes = $this->normalizeTempNotesToken($tempRow);
+
+        if ($normalizedNotes === '') {
+            return false;
+        }
+
+        $allowed = array_map(fn ($value) => $this->normalizeStatusValue($value), $allowedMappings);
+
+        return in_array($normalizedNotes, $allowed, true);
+    }
+
+    /**
+     * Existing is ACTIVE/APPROVED only when enrollment_status is APPROVED.
+     */
+    private function isExistingApprovedMember($enrollmentStatus): bool
+    {
+        return $this->normalizeStatusValue($enrollmentStatus) === 'APPROVED';
+    }
+
+    /**
+     * Existing NOT ENROLLED statuses are pending/submitted/submitted-personal-information/for-approval.
+     */
+    private function isExistingNotEnrolledMember($enrollmentStatus): bool
+    {
+        $normalized = $this->normalizeStatusValue($enrollmentStatus);
+
+        return in_array($normalized, [
+            'PENDING',
+            'SUBMITTED',
+            'SUBMITTED PERSONAL INFORMATION',
+            'FOR APPROVAL',
+        ], true);
+    }
+
+    /**
+     * Determine whether a status combination should be counted as resigned.
+     */
+    private function isResignedMember($enrollmentStatus, $status): bool
+    {
+        $enrollmentNormalized = $this->normalizeStatusValue($enrollmentStatus);
+        $statusNormalized = $this->normalizeStatusValue($status);
+
+        return str_contains($enrollmentNormalized, 'RESIGN')
+            || str_contains($statusNormalized, 'RESIGN');
+    }
+
+    /**
+     * Determine whether a status combination should be counted as not enrolled.
+     */
+    private function isNotEnrolledMember($enrollmentStatus, $status): bool
+    {
+        $enrollmentNormalized = $this->normalizeStatusValue($enrollmentStatus);
+        $statusNormalized = $this->normalizeStatusValue($status);
+
+        return str_contains($enrollmentNormalized, 'NOT ENROLL')
+            || str_contains($statusNormalized, 'NOT ENROLL');
+    }
+
+    /**
+     * Temp ACTIVE/APPROVED is mapped via notes=enrolled.
+     */
+    private function isTempApprovedMember(array $tempRow): bool
+    {
+        return $this->isTempNotesMapped($tempRow, ['enrolled']);
+    }
+
+    /**
+     * Temp NOT ENROLLED mappings come from notes value.
+     */
+    private function isTempNotEnrolledMember(array $tempRow): bool
+    {
+        return $this->isTempNotesMapped($tempRow, ['not_enrolled', 'awaiting_enrollment', 'opted_out']);
+    }
+
+    /**
+     * Temp row resigned rule: employee_end_date/employment_end_date <= today.
+     */
+    private function isTempRowResigned(array $tempRow, string $todayDate): bool
+    {
+        if ($this->isResignedMember($tempRow['enrollment_status'] ?? null, $tempRow['status'] ?? null)) {
+            return true;
+        }
+
+        $endDateRaw = $tempRow['employee_end_date'] ?? $tempRow['employment_end_date'] ?? null;
+
+        if (is_null($endDateRaw)) {
+            return false;
+        }
+
+        if (!is_string($endDateRaw) && !is_numeric($endDateRaw)) {
+            return false;
+        }
+
+        $normalizedEndDate = $this->parseDateStringToYmd((string) $endDateRaw);
+
+        if (is_null($normalizedEndDate)) {
+            return false;
+        }
+
+        return $normalizedEndDate <= $todayDate;
+    }
+
+    /**
      * Build a safe folder segment for Spaces paths.
      */
     private function sanitizeImportFolderSegment(?string $value, string $fallback): string
@@ -2643,6 +2786,71 @@ class ImportEnrolleeController extends Controller
                 ];
             }
 
+            $existingEmployeeIds = [];
+
+            foreach ($existingRows as $existingRow) {
+                $employeeId = strtoupper(trim((string) ($existingRow->employee_id ?? '')));
+
+                if ($employeeId !== '') {
+                    $existingEmployeeIds[$employeeId] = true;
+                }
+            }
+
+            $tempEmployeeIds = array_keys($tempRowsByEmployeeId);
+            $todayDate = now()->toDateString();
+
+            $tempApprovedCount = 0;
+            $tempResignedCount = 0;
+            $tempNotEnrolledCount = 0;
+
+            foreach ($tempRowsByEmployeeId as $tempRow) {
+                if ($this->isTempApprovedMember($tempRow)) {
+                    $tempApprovedCount++;
+                }
+
+                if ($this->isTempRowResigned($tempRow, $todayDate)) {
+                    $tempResignedCount++;
+                }
+
+                if ($this->isTempNotEnrolledMember($tempRow)) {
+                    $tempNotEnrolledCount++;
+                }
+            }
+
+            $existingApprovedCount = 0;
+            $existingResignedCount = 0;
+            $existingNotEnrolledCount = 0;
+
+            foreach ($existingRows as $existingRow) {
+                if ($this->isExistingApprovedMember($existingRow->enrollment_status ?? null)) {
+                    $existingApprovedCount++;
+                }
+
+                if ($this->isResignedMember($existingRow->enrollment_status ?? null, $existingRow->status ?? null)) {
+                    $existingResignedCount++;
+                }
+
+                if ($this->isExistingNotEnrolledMember($existingRow->enrollment_status ?? null)) {
+                    $existingNotEnrolledCount++;
+                }
+            }
+
+            $notInLookerTempCount = 0;
+
+            foreach (array_keys($existingEmployeeIds) as $existingEmployeeId) {
+                if (!isset($tempRowsByEmployeeId[$existingEmployeeId])) {
+                    $notInLookerTempCount++;
+                }
+            }
+
+            $notInExistingSystemCount = 0;
+
+            foreach ($tempEmployeeIds as $tempEmployeeId) {
+                if (!isset($existingEmployeeIds[$tempEmployeeId])) {
+                    $notInExistingSystemCount++;
+                }
+            }
+
             $matchedCount = count(array_filter($results, fn ($row) => $row['is_matched'] === true));
             $unmatchedCount = count($results) - $matchedCount;
 
@@ -2651,6 +2859,33 @@ class ImportEnrolleeController extends Controller
                 'existing_rows_considered' => $existingRows->count(),
                 'matched' => $matchedCount,
                 'unmatched' => $unmatchedCount,
+            ];
+
+            $tally = [
+                'total_members' => [
+                    'looker_temp' => count($tempEmployeeIds),
+                    'existing' => $existingRows->count(),
+                ],
+                'active_approved' => [
+                    'looker_temp' => $tempApprovedCount,
+                    'existing' => $existingApprovedCount,
+                ],
+                'resigned' => [
+                    'looker_temp' => $tempResignedCount,
+                    'existing' => $existingResignedCount,
+                ],
+                'not_enrolled' => [
+                    'looker_temp' => $tempNotEnrolledCount,
+                    'existing' => $existingNotEnrolledCount,
+                ],
+                'not_in_looker_temp' => [
+                    'looker_temp' => 0,
+                    'existing' => $notInLookerTempCount,
+                ],
+                'not_in_existing_system' => [
+                    'looker_temp' => $notInExistingSystemCount,
+                    'existing' => 0,
+                ],
             ];
 
             return response()->json([
@@ -2666,6 +2901,7 @@ class ImportEnrolleeController extends Controller
                 'source_total_rows' => $sourceRows->count(),
                 'source_rows_with_employee_id' => count($tempRowsByEmployeeId),
                 'summary' => $summary,
+                'tally' => $tally,
                 'results' => $results,
             ], 200);
         } catch (\Illuminate\Validation\ValidationException $validationException) {
