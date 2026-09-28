@@ -547,7 +547,9 @@ class ImportEnrolleeController extends Controller
     {
         $importDate = now()->toDateString();
 
-        ImportTempData::where('enrollment_id', $enrollmentId)->delete();
+        ImportTempData::where('enrollment_id', $enrollmentId)
+            ->whereDate('import_date', $importDate)
+            ->delete();
 
         if (empty($rows)) {
             return;
@@ -573,12 +575,18 @@ class ImportEnrolleeController extends Controller
                 continue;
             }
 
+            $normalizedRow = [];
+
+            foreach ($row as $columnName => $columnValue) {
+                $normalizedRow[$columnName] = $this->normalizeTempStorageValue((string) $columnName, $columnValue);
+            }
+
             $payload[] = [
                 'enrollment_id' => $enrollmentId,
                 'import_date' => $importDate,
                 'row_number' => $index + 1,
                 'column_names' => json_encode($detectedColumns),
-                'row_data' => json_encode($row),
+                'row_data' => json_encode($normalizedRow),
                 'created_at' => $now,
                 'updated_at' => $now,
             ];
@@ -723,6 +731,66 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Normalize temp-import row values before persisting in JSON storage.
+     * Date-like columns are converted to Y-m-d.
+     */
+    private function normalizeTempStorageValue(string $column, $value)
+    {
+        if (is_null($value)) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d');
+        }
+
+        if (!$this->isDateLikeColumnName($column)) {
+            return $value;
+        }
+
+        if (!is_string($value) && !is_numeric($value)) {
+            return $value;
+        }
+
+        $raw = trim((string) $value);
+
+        if ($raw === '' || strtoupper($raw) === 'NULL') {
+            return null;
+        }
+
+        if (!preg_match('/^\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?)?$/', $raw)
+            && !preg_match('/^\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?)?$/', $raw)) {
+            return $value;
+        }
+
+        $normalizedDate = $this->parseDateStringToYmd($raw);
+
+        if (is_null($normalizedDate)) {
+            return $value;
+        }
+
+        return $normalizedDate;
+    }
+
+    /**
+     * Detect whether a temp column name likely represents a date field.
+     */
+    private function isDateLikeColumnName(string $column): bool
+    {
+        $normalized = strtolower(trim($column));
+
+        if ($normalized === '') {
+            return false;
+        }
+
+        if (in_array($normalized, ['dob', 'birthdate'], true)) {
+            return true;
+        }
+
+        return str_contains($normalized, 'date');
+    }
+
+    /**
      * Determine whether a value should be treated as null/empty for
      * temp-column availability checks.
      */
@@ -740,6 +808,111 @@ class ImportEnrolleeController extends Controller
         }
 
         return false;
+    }
+
+    /**
+     * Normalize temp display values: only date-like columns are forced to Y-m-d.
+     */
+    private function normalizeTempDisplayValue(string $column, $value)
+    {
+        if (is_null($value)) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d');
+        }
+
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        $trimmed = trim($value);
+
+        if ($trimmed === '' || strtoupper($trimmed) === 'NULL') {
+            return null;
+        }
+
+        if (!$this->isDateLikeColumnName($column)) {
+            return $trimmed;
+        }
+
+        $normalizedDate = $this->parseDateStringToYmd($trimmed);
+
+        if (!is_null($normalizedDate)) {
+            return $normalizedDate;
+        }
+
+        return $trimmed;
+    }
+
+    /**
+     * Parse supported date strings and return strict Y-m-d.
+     */
+    private function parseDateStringToYmd(string $raw): ?string
+    {
+        $candidate = trim($raw);
+
+        if ($candidate === '') {
+            return null;
+        }
+
+        $formats = [
+            'Y-m-d',
+            'Y/n/j',
+            'Y.m.d',
+            'Y-m-d H:i',
+            'Y-m-d H:i:s',
+            'Y/n/j H:i',
+            'Y/n/j H:i:s',
+            'Y.m.d H:i',
+            'Y.m.d H:i:s',
+            'Y-m-d\\TH:i',
+            'Y-m-d\\TH:i:s',
+            'Y-m-d\\TH:i:sP',
+            'd/m/Y',
+            'j/n/Y',
+            'd-m-Y',
+            'j-n-Y',
+            'd.m.Y',
+            'j.n.Y',
+            'd/m/Y H:i',
+            'd/m/Y H:i:s',
+            'j/n/Y H:i',
+            'j/n/Y H:i:s',
+            'd-m-Y H:i',
+            'd-m-Y H:i:s',
+            'j-n-Y H:i',
+            'j-n-Y H:i:s',
+            'm/d/Y',
+            'n/j/Y',
+            'm-d-Y',
+            'n-j-Y',
+            'm.d.Y',
+            'n.j.Y',
+            'm/d/Y H:i',
+            'm/d/Y H:i:s',
+            'n/j/Y H:i',
+            'n/j/Y H:i:s',
+        ];
+
+        foreach ($formats as $format) {
+            $parsed = \DateTime::createFromFormat('!' . $format, $candidate);
+
+            if ($parsed === false) {
+                continue;
+            }
+
+            $errors = \DateTime::getLastErrors();
+            $errorCount = is_array($errors) ? ($errors['error_count'] ?? 0) : 0;
+            $warningCount = is_array($errors) ? ($errors['warning_count'] ?? 0) : 0;
+
+            if ($errorCount === 0 && $warningCount === 0) {
+                return $parsed->format('Y-m-d');
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -2435,7 +2608,8 @@ class ImportEnrolleeController extends Controller
                 $sourceData = $employeeId !== '' ? ($tempRowsByEmployeeId[$employeeId] ?? null) : null;
                 $tempVisibleData = [];
                 foreach ($showTempColumns as $column) {
-                    $tempVisibleData[$column] = $sourceData[$column] ?? null;
+                    $rawTempValue = $sourceData[$column] ?? null;
+                    $tempVisibleData[$column] = $this->normalizeTempDisplayValue($column, $rawTempValue);
                 }
 
                 $fullNameParts = array_filter([
@@ -2453,10 +2627,6 @@ class ImportEnrolleeController extends Controller
                         $existingRow->suffix,
                     ], fn ($value) => !empty(trim((string) $value))))) ?: null,
                 ]));
-
-                if ($fullName === '') {
-                    $fullName = implode(' ', $fullNameParts);
-                }
 
                 $results[] = [
                     'employee_id' => $existingRow->employee_id,
