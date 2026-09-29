@@ -86,19 +86,11 @@ class SendNotificationController extends Controller
 
                 $enrollees = $enrolleeQuery->get();
 
-                // Apply plan_check filter: GOLD or PLATINUM checks the plan field in health_insurance
-                $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
-                if ($planCheck === 'GOLD') {
-                    $enrollees = $enrollees->filter(function ($enrollee) {
-                        $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                        return str_contains($plan, 'GOLD');
-                    });
-                } elseif ($planCheck === 'PLATINUM') {
-                    $enrollees = $enrollees->filter(function ($enrollee) {
-                        $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                        return str_contains($plan, 'PLATINUM');
-                    });
-                }
+                $enrollees = $this->filterEnrolleesByPlanCheck(
+                    $enrollees,
+                    $notification,
+                    $this->resolveCompanyCode($notification, $enrollmentId)
+                );
 
                 // For APPROVED BY HMO W/ PENDING DEPS, additionally filter out principals
                 // whose ALL non-skipped dependents are already completed (no PENDING deps)
@@ -155,6 +147,9 @@ class SendNotificationController extends Controller
             ], 404);
         }
 
+        $requestType = strtolower((string) $request->input('type', 'manual'));
+        $planCheck = trim((string) ($notification->plan_check ?? ''));
+
         // Ensure at least one recipient field (TO, CC, or BCC) is provided
         $hasTo = !empty(trim($data['to'] ?? ''));
         $hasCc = !empty(trim($data['cc'] ?? ''));
@@ -186,6 +181,25 @@ class SendNotificationController extends Controller
 
             // If use_saved is true, ignore 'to' and 'cc' from request and use saved values
             $data['enrollee_id'] = $data['attach_enrollee_id'] ?? ($data['enrollee_id'] ?? null);
+            $data['_request_type'] = $requestType;
+            $data['_plan_check'] = $planCheck;
+
+            if ($requestType !== 'scheduled' && $planCheck !== '') {
+                if ($this->isIdList($data['to'])) {
+                    $planMismatchIds = $this->getPlanCheckMismatchEnrolleeIds($data['to'], $notification);
+                    if (!empty($planMismatchIds)) {
+                        return response()->json([
+                            'success' => false,
+                            'message' => $this->getPlanCheckMismatchMessage($notification, $planMismatchIds),
+                        ], 422);
+                    }
+                } elseif (empty($data['enrollee_id'])) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Manual sending with plan_check requires selected enrollee(s) so the plan can be validated.',
+                    ], 422);
+                }
+            }
 
             // If send_as_multiple is set and there are multiple emails, handle in a separate function
             if (!empty($data['send_as_multiple'])) {
@@ -213,6 +227,16 @@ class SendNotificationController extends Controller
      */
     private function sendToMultipleEmails($data, $notification)
     {
+        if (($notification->plan_check ?? '') !== '' && !empty($data['enrollee_id'])) {
+            $enrollee = Enrollee::with(['healthInsurance', 'enrollment.company'])->find($data['enrollee_id']);
+            if ($enrollee && !$this->enrolleeMatchesPlanCheck($enrollee, $notification)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $this->getPlanCheckMismatchMessage($notification, [$enrollee->id]),
+                ], 422);
+            }
+        }
+
         $toRaw = rtrim(trim($data['to']), ',');
         $to = array_filter(array_map('trim', explode(',', $toRaw)), function ($email) {
             return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
@@ -256,6 +280,26 @@ class SendNotificationController extends Controller
      */
     private function sendSingleEmail($data, $notification)
     {
+        $requestType = strtolower((string) ($data['_request_type'] ?? 'manual'));
+        $planCheck = strtoupper(trim((string) ($data['_plan_check'] ?? ($notification->plan_check ?? ''))));
+
+        if ($requestType !== 'scheduled' && $planCheck !== '') {
+            if (empty($data['enrollee_id'])) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Manual sending with plan_check requires selected enrollee(s) so the plan can be validated.',
+                ], 422);
+            }
+
+            $enrolleeToValidate = Enrollee::with(['healthInsurance', 'enrollment.company'])->find($data['enrollee_id']);
+            if (!$enrolleeToValidate || !$this->enrolleeMatchesPlanCheck($enrolleeToValidate, $notification)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $this->getPlanCheckMismatchMessage($notification, [$data['enrollee_id']]),
+                ], 422);
+            }
+        }
+
         $toRaw = rtrim(trim($data['to']), ',');
         $to = array_filter(array_map('trim', explode(',', $toRaw)), function ($email) {
             return !empty($email) && filter_var($email, FILTER_VALIDATE_EMAIL);
@@ -654,6 +698,15 @@ class SendNotificationController extends Controller
                 'message' => 'No valid enrollee IDs provided.',
             ], 422);
         }
+
+        $planMismatchIds = $this->getPlanCheckMismatchEnrolleeIds($toRaw, $notification);
+        if (!empty($planMismatchIds)) {
+            return response()->json([
+                'success' => false,
+                'message' => $this->getPlanCheckMismatchMessage($notification, $planMismatchIds),
+            ], 422);
+        }
+
         $results = [];
         foreach ($ids as $enrolleeId) {
             $enrollee = \Modules\ClientMasterlist\App\Models\Enrollee::find($enrolleeId);
@@ -1014,21 +1067,11 @@ class SendNotificationController extends Controller
 
         $enrollees = $enrollees->get();
 
-        // Apply plan_check filter: only include enrollees whose health insurance plan matches
-        if ($notification) {
-            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
-            if ($planCheck === 'GOLD') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'GOLD');
-                });
-            } elseif ($planCheck === 'PLATINUM') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'PLATINUM');
-                });
-            }
-        }
+        $enrollees = $this->filterEnrolleesByPlanCheck(
+            $enrollees,
+            $notification,
+            $this->resolveCompanyCode($notification, $enrollmentId)
+        );
 
         if ($enrollees->count() > 0) {
             $enrolleeIds = $enrollees->pluck('id')->toArray();
@@ -1125,21 +1168,11 @@ class SendNotificationController extends Controller
             })
             ->get();
 
-        // Apply plan_check filter: only include enrollees whose health insurance plan matches
-        if ($notification) {
-            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
-            if ($planCheck === 'GOLD') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'GOLD');
-                });
-            } elseif ($planCheck === 'PLATINUM') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'PLATINUM');
-                });
-            }
-        }
+        $enrollees = $this->filterEnrolleesByPlanCheck(
+            $enrollees,
+            $notification,
+            $this->resolveCompanyCode($notification, $enrollmentId)
+        );
 
         if ($enrollees->count() === 0) {
             Log::info("APPROVED BY HMO W/ PENDING DEPS: No matching enrollees found for enrollment {$enrollmentId}");
@@ -1216,21 +1249,11 @@ class SendNotificationController extends Controller
 
         $enrollees = $enrollees->get();
 
-        // Apply plan_check filter: only include enrollees whose health insurance plan matches
-        if ($notification) {
-            $planCheck = strtoupper(trim($notification->plan_check ?? 'NONE'));
-            if ($planCheck === 'GOLD') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'GOLD');
-                });
-            } elseif ($planCheck === 'PLATINUM') {
-                $enrollees = $enrollees->filter(function ($enrollee) {
-                    $plan = strtoupper(trim($enrollee->healthInsurance?->plan ?? ''));
-                    return str_contains($plan, 'PLATINUM');
-                });
-            }
-        }
+        $enrollees = $this->filterEnrolleesByPlanCheck(
+            $enrollees,
+            $notification,
+            $this->resolveCompanyCode($notification, $enrollmentId)
+        );
 
         if ($enrollees->count() > 0) {
             $filteredIds = [];
@@ -2777,6 +2800,137 @@ class SendNotificationController extends Controller
             'annual' => $annual,
             'monthly' => $monthly,
         ];
+    }
+
+    /**
+     * Send SMS notification to enrollee's mobile number
+     */
+    private function resolveCompanyCode($notification = null, $enrollmentId = null): ?string
+    {
+        $companyCode = null;
+
+        if ($notification && isset($notification->enrollment) && $notification->enrollment && isset($notification->enrollment->company)) {
+            $companyCode = $notification->enrollment->company->company_code ?? null;
+        }
+
+        if (!$companyCode && $enrollmentId) {
+            $enrollment = \Modules\ClientMasterlist\App\Models\Enrollment::with('company')->find($enrollmentId);
+            $companyCode = $enrollment->company->company_code ?? null;
+        }
+
+        return strtoupper(trim((string) ($companyCode ?? '')));
+    }
+
+    /**
+     * Apply plan_check filtering with company-specific rules.
+     */
+    private function filterEnrolleesByPlanCheck($enrollees, $notification = null, ?string $companyCode = null)
+    {
+        if (!$notification || !method_exists($enrollees, 'filter')) {
+            return $enrollees;
+        }
+
+        $planCheck = strtoupper(trim((string) ($notification->plan_check ?? '')));
+        $companyCode = strtoupper(trim((string) ($companyCode ?? '')));
+
+        if ($companyCode === 'OYSTERPH') {
+            $effectivePlanCheck = $planCheck === '' ? 'COMPETITIVE' : $planCheck;
+
+            return $enrollees->filter(function ($enrollee) use ($effectivePlanCheck) {
+                $plan = strtoupper(trim((string) ($enrollee->healthInsurance?->plan ?? '')));
+
+                if ($effectivePlanCheck === 'BEST IN CLASS') {
+                    return str_contains($plan, 'BEST IN CLASS');
+                }
+
+                return $plan === '' || str_contains($plan, 'COMPETITIVE');
+            });
+        }
+
+        if ($planCheck === '') {
+            return $enrollees;
+        }
+
+        return $enrollees->filter(function ($enrollee) use ($planCheck) {
+            $plan = strtoupper(trim((string) ($enrollee->healthInsurance?->plan ?? '')));
+
+            if ($planCheck === 'GOLD') {
+                return str_contains($plan, 'GOLD');
+            }
+
+            if ($planCheck === 'PLATINUM') {
+                return str_contains($plan, 'PLATINUM');
+            }
+
+            if ($planCheck === 'COMPETITIVE') {
+                return $plan === '' || str_contains($plan, 'COMPETITIVE');
+            }
+
+            if ($planCheck === 'BEST IN CLASS') {
+                return str_contains($plan, 'BEST IN CLASS');
+            }
+
+            return true;
+        });
+    }
+
+    /**
+     * Check whether a single enrollee matches the notification plan_check.
+     */
+    private function enrolleeMatchesPlanCheck($enrollee, $notification): bool
+    {
+        $companyCode = $this->resolveCompanyCode($notification, $enrollee->enrollment_id ?? null);
+
+        return $this->filterEnrolleesByPlanCheck(
+            collect([$enrollee]),
+            $notification,
+            $companyCode
+        )->isNotEmpty();
+    }
+
+    /**
+     * Return enrollee IDs that do not match the notification plan_check.
+     */
+    private function getPlanCheckMismatchEnrolleeIds(string $toRaw, $notification): array
+    {
+        $ids = array_filter(array_map('trim', explode(',', $toRaw)), function ($id) {
+            return is_numeric($id);
+        });
+
+        if (!$notification || empty($ids)) {
+            return [];
+        }
+
+        $mismatchIds = [];
+        foreach ($ids as $enrolleeId) {
+            $enrollee = Enrollee::with(['healthInsurance', 'enrollment.company'])->find($enrolleeId);
+            if (!$enrollee) {
+                continue;
+            }
+
+            if (!$this->enrolleeMatchesPlanCheck($enrollee, $notification)) {
+                $mismatchIds[] = $enrolleeId;
+            }
+        }
+
+        return $mismatchIds;
+    }
+
+    /**
+     * Build a consistent mismatch error message for plan_check validation.
+     */
+    private function getPlanCheckMismatchMessage($notification, array $mismatchIds): string
+    {
+        $planCheck = strtoupper(trim((string) ($notification->plan_check ?? '')));
+        $expected = match ($planCheck) {
+            'COMPETITIVE' => 'OYSTERPH - COMPETITIVE',
+            'BEST IN CLASS' => 'OYSTERPH - BEST IN CLASS',
+            'GOLD' => 'GP - GOLD',
+            'PLATINUM' => 'GP - PLATINUM',
+            default => $planCheck ?: 'selected plan',
+        };
+
+        return 'Selected enrollee(s) do not match the plan_check requirement (' . $expected . '). Mismatched enrollee ID(s): ' . implode(', ', $mismatchIds) . '.';
     }
 
     /**
