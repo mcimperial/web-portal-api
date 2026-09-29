@@ -978,16 +978,20 @@ class ImportEnrolleeController extends Controller
     /**
      * Existing NOT ENROLLED statuses are pending/submitted/submitted-personal-information/for-approval.
      */
-    private function isExistingNotEnrolledMember($enrollmentStatus): bool
+    private function isExistingNotEnrolledMember($enrollmentStatus, $status = null): bool
     {
-        $normalized = $this->normalizeStatusValue($enrollmentStatus);
+        $normalizedEnrollment = $this->normalizeStatusValue($enrollmentStatus);
+        $normalizedStatus = $this->normalizeStatusValue($status);
 
-        return in_array($normalized, [
+        $allowedNotEnrolled = [
             'PENDING',
             'SUBMITTED',
-            'SUBMITTED PERSONAL INFORMATION',
+            'SUBMITTED-PERSONAL-INFORMATION',
             'FOR APPROVAL',
-        ], true);
+        ];
+
+        return in_array($normalizedEnrollment, $allowedNotEnrolled, true)
+            || in_array($normalizedStatus, $allowedNotEnrolled, true);
     }
 
     /**
@@ -1031,6 +1035,84 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Determine whether a temp row matches active search/filter criteria.
+     */
+    private function tempRowMatchesSearch(array $tempRow, string $search, string $searchBy): bool
+    {
+        $needle = strtolower(trim($search));
+
+        if ($needle === '') {
+            return true;
+        }
+
+        $contains = function ($value) use ($needle): bool {
+            if (is_null($value)) {
+                return false;
+            }
+
+            return str_contains(strtolower(trim((string) $value)), $needle);
+        };
+
+        $matchesAny = function (array $values) use ($contains): bool {
+            foreach ($values as $value) {
+                if ($contains($value)) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        $nameValues = [
+            $tempRow['full_name'] ?? null,
+            $tempRow['name'] ?? null,
+            trim(implode(' ', array_filter([
+                $tempRow['first_name'] ?? null,
+                $tempRow['middle_name'] ?? null,
+                $tempRow['last_name'] ?? null,
+                $tempRow['suffix'] ?? null,
+            ], fn ($value) => !empty(trim((string) $value))))),
+            trim(implode(', ', array_filter([
+                $tempRow['last_name'] ?? null,
+                trim(implode(' ', array_filter([
+                    $tempRow['first_name'] ?? null,
+                    $tempRow['middle_name'] ?? null,
+                    $tempRow['suffix'] ?? null,
+                ], fn ($value) => !empty(trim((string) $value))))) ?: null,
+            ]))),
+        ];
+
+        $certificateValues = [
+            $tempRow['certificate_number'] ?? null,
+            $tempRow['certificate_no'] ?? null,
+            $tempRow['certificate no'] ?? null,
+            $tempRow['cert_no'] ?? null,
+            $tempRow['cert_number'] ?? null,
+        ];
+
+        if ($searchBy === 'employee_id') {
+            return $contains($tempRow['employee_id'] ?? null);
+        }
+
+        if ($searchBy === 'name') {
+            return $matchesAny($nameValues);
+        }
+
+        if ($searchBy === 'department') {
+            return $contains($tempRow['department'] ?? null);
+        }
+
+        if ($searchBy === 'certificate_number') {
+            return $matchesAny($certificateValues);
+        }
+
+        return $contains($tempRow['employee_id'] ?? null)
+            || $matchesAny($nameValues)
+            || $contains($tempRow['department'] ?? null)
+            || $matchesAny($certificateValues);
+    }
+
+    /**
      * Temp row resigned rule: employee_end_date/employment_end_date <= today.
      */
     private function isTempRowResigned(array $tempRow, string $todayDate): bool
@@ -1056,6 +1138,46 @@ class ImportEnrolleeController extends Controller
         }
 
         return $normalizedEndDate <= $todayDate;
+    }
+
+    /**
+     * Resolve tally status bucket for an existing/system member.
+     */
+    private function getExistingTallyStatusBucket($enrollmentStatus, $status): string
+    {
+        if ($this->isExistingApprovedMember($enrollmentStatus)) {
+            return 'ACTIVE_APPROVED';
+        }
+
+        if ($this->isResignedMember($enrollmentStatus, $status)) {
+            return 'RESIGNED';
+        }
+
+        if ($this->isExistingNotEnrolledMember($enrollmentStatus, $status)) {
+            return 'NOT_ENROLLED';
+        }
+
+        return 'OTHER';
+    }
+
+    /**
+     * Resolve tally status bucket for a looker/temp member.
+     */
+    private function getTempTallyStatusBucket(array $tempRow, string $todayDate): string
+    {
+        if ($this->isTempApprovedMember($tempRow)) {
+            return 'ACTIVE_APPROVED';
+        }
+
+        if ($this->isTempRowResigned($tempRow, $todayDate)) {
+            return 'RESIGNED';
+        }
+
+        if ($this->isTempNotEnrolledMember($tempRow)) {
+            return 'NOT_ENROLLED';
+        }
+
+        return 'OTHER';
     }
 
     /**
@@ -2680,13 +2802,15 @@ class ImportEnrolleeController extends Controller
                 ->pluck('enrollment_status')
                 ->values();
 
-            $existingQuery = Enrollee::query()
+            $existingBaseQuery = Enrollee::query()
                 ->with(['healthInsurance:id,principal_id,certificate_number'])
                 ->where('enrollment_id', $enrollmentId);
 
             if ($selectedEnrollmentStatus !== '') {
-                $existingQuery->where('enrollment_status', $selectedEnrollmentStatus);
+                $existingBaseQuery->where('enrollment_status', $selectedEnrollmentStatus);
             }
+
+            $existingQuery = clone $existingBaseQuery;
 
             if ($search !== '') {
                 $existingQuery->where(function ($query) use ($search, $searchBy) {
@@ -2744,6 +2868,16 @@ class ImportEnrolleeController extends Controller
                 'enrollment_status',
             ]);
 
+            $existingRowsForTally = $search === ''
+                ? (clone $existingBaseQuery)->get([
+                    'id',
+                    'employee_id',
+                    'status',
+                    'enrollment_status',
+                ])
+                : $existingRows;
+
+            $todayDate = now()->toDateString();
             $results = [];
 
             foreach ($existingRows as $existingRow) {
@@ -2771,6 +2905,19 @@ class ImportEnrolleeController extends Controller
                     ], fn ($value) => !empty(trim((string) $value))))) ?: null,
                 ]));
 
+                $existingStatusBucket = $this->getExistingTallyStatusBucket(
+                    $existingRow->enrollment_status ?? null,
+                    $existingRow->status ?? null
+                );
+
+                $tempStatusBucket = is_array($sourceData)
+                    ? $this->getTempTallyStatusBucket($sourceData, $todayDate)
+                    : null;
+
+                $statusMatch = is_array($sourceData)
+                    ? $existingStatusBucket === $tempStatusBucket
+                    : null;
+
                 $results[] = [
                     'employee_id' => $existingRow->employee_id,
                     'full_name' => $fullName,
@@ -2782,13 +2929,16 @@ class ImportEnrolleeController extends Controller
                     'enrollment_status' => $existingRow->enrollment_status,
                     'match_status' => $sourceData ? 'MATCH' : 'UNMATCHED',
                     'is_matched' => (bool) $sourceData,
+                    'status_match' => $statusMatch,
+                    'existing_status_bucket' => $existingStatusBucket,
+                    'temp_status_bucket' => $tempStatusBucket,
                     'temp_data' => $tempVisibleData,
                 ];
             }
 
             $existingEmployeeIds = [];
 
-            foreach ($existingRows as $existingRow) {
+            foreach ($existingRowsForTally as $existingRow) {
                 $employeeId = strtoupper(trim((string) ($existingRow->employee_id ?? '')));
 
                 if ($employeeId !== '') {
@@ -2796,14 +2946,24 @@ class ImportEnrolleeController extends Controller
                 }
             }
 
-            $tempEmployeeIds = array_keys($tempRowsByEmployeeId);
-            $todayDate = now()->toDateString();
+            $tempRowsForTally = $search === ''
+                ? $tempRowsByEmployeeId
+                : array_filter(
+                    $tempRowsByEmployeeId,
+                    fn ($tempRow) => $this->tempRowMatchesSearch(
+                        is_array($tempRow) ? $tempRow : [],
+                        $search,
+                        $searchBy
+                    )
+                );
+
+            $tempEmployeeIds = array_keys($tempRowsForTally);
 
             $tempApprovedCount = 0;
             $tempResignedCount = 0;
             $tempNotEnrolledCount = 0;
 
-            foreach ($tempRowsByEmployeeId as $tempRow) {
+            foreach ($tempRowsForTally as $tempRow) {
                 if ($this->isTempApprovedMember($tempRow)) {
                     $tempApprovedCount++;
                 }
@@ -2821,7 +2981,7 @@ class ImportEnrolleeController extends Controller
             $existingResignedCount = 0;
             $existingNotEnrolledCount = 0;
 
-            foreach ($existingRows as $existingRow) {
+            foreach ($existingRowsForTally as $existingRow) {
                 if ($this->isExistingApprovedMember($existingRow->enrollment_status ?? null)) {
                     $existingApprovedCount++;
                 }
@@ -2830,7 +2990,10 @@ class ImportEnrolleeController extends Controller
                     $existingResignedCount++;
                 }
 
-                if ($this->isExistingNotEnrolledMember($existingRow->enrollment_status ?? null)) {
+                if ($this->isExistingNotEnrolledMember(
+                    $existingRow->enrollment_status ?? null,
+                    $existingRow->status ?? null
+                )) {
                     $existingNotEnrolledCount++;
                 }
             }
@@ -2838,7 +3001,7 @@ class ImportEnrolleeController extends Controller
             $notInLookerTempCount = 0;
 
             foreach (array_keys($existingEmployeeIds) as $existingEmployeeId) {
-                if (!isset($tempRowsByEmployeeId[$existingEmployeeId])) {
+                if (!isset($tempRowsForTally[$existingEmployeeId])) {
                     $notInLookerTempCount++;
                 }
             }
@@ -2864,7 +3027,7 @@ class ImportEnrolleeController extends Controller
             $tally = [
                 'total_members' => [
                     'looker_temp' => count($tempEmployeeIds),
-                    'existing' => $existingRows->count(),
+                    'existing' => $existingRowsForTally->count(),
                 ],
                 'active_approved' => [
                     'looker_temp' => $tempApprovedCount,
