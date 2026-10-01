@@ -857,6 +857,34 @@ class ImportEnrolleeController extends Controller
             return null;
         }
 
+        if (preg_match('/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{2})(?:[T\s](\d{1,2}:\d{2}(?::\d{2})?))?$/', $candidate, $matches) === 1) {
+            $firstSegmentAsYear = (int) $matches[1];
+            $month = (int) $matches[2];
+            $twoDigitYear = (int) $matches[3];
+
+            if ($firstSegmentAsYear >= 1 && $firstSegmentAsYear <= 31 && $month >= 1 && $month <= 12) {
+                $day = $firstSegmentAsYear;
+                $timePart = isset($matches[4]) && $matches[4] !== '' ? ' ' . $matches[4] : '';
+                $reconstructed = sprintf('%d-%d-%02d%s', $day, $month, $twoDigitYear, $timePart);
+
+                foreach (['j-n-y H:i:s', 'j-n-y H:i', 'j-n-y'] as $legacyFormat) {
+                    $parsedLegacy = \DateTime::createFromFormat('!' . $legacyFormat, $reconstructed);
+
+                    if ($parsedLegacy === false) {
+                        continue;
+                    }
+
+                    $legacyErrors = \DateTime::getLastErrors();
+                    $legacyErrorCount = is_array($legacyErrors) ? ($legacyErrors['error_count'] ?? 0) : 0;
+                    $legacyWarningCount = is_array($legacyErrors) ? ($legacyErrors['warning_count'] ?? 0) : 0;
+
+                    if ($legacyErrorCount === 0 && $legacyWarningCount === 0) {
+                        return $parsedLegacy->format('Y-m-d');
+                    }
+                }
+            }
+        }
+
         $yearFirstFormats = [
             'Y-m-d',
             'Y/n/j',
