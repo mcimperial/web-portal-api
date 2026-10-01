@@ -857,7 +857,7 @@ class ImportEnrolleeController extends Controller
             return null;
         }
 
-        $formats = [
+        $yearFirstFormats = [
             'Y-m-d',
             'Y/n/j',
             'Y.m.d',
@@ -870,6 +870,9 @@ class ImportEnrolleeController extends Controller
             'Y-m-d\\TH:i',
             'Y-m-d\\TH:i:s',
             'Y-m-d\\TH:i:sP',
+        ];
+
+        $dayMonthYearFourDigitFormats = [
             'd/m/Y',
             'j/n/Y',
             'd-m-Y',
@@ -884,6 +887,26 @@ class ImportEnrolleeController extends Controller
             'd-m-Y H:i:s',
             'j-n-Y H:i',
             'j-n-Y H:i:s',
+        ];
+
+        $dayMonthYearTwoDigitFormats = [
+            'd/m/y',
+            'j/n/y',
+            'd-m-y',
+            'j-n-y',
+            'd.m.y',
+            'j.n.y',
+            'd/m/y H:i',
+            'd/m/y H:i:s',
+            'j/n/y H:i',
+            'j/n/y H:i:s',
+            'd-m-y H:i',
+            'd-m-y H:i:s',
+            'j-n-y H:i',
+            'j-n-y H:i:s',
+        ];
+
+        $monthDayYearFourDigitFormats = [
             'm/d/Y',
             'n/j/Y',
             'm-d-Y',
@@ -895,6 +918,30 @@ class ImportEnrolleeController extends Controller
             'n/j/Y H:i',
             'n/j/Y H:i:s',
         ];
+
+        $monthDayYearTwoDigitFormats = [
+            'm/d/y',
+            'n/j/y',
+            'm-d-y',
+            'n-j-y',
+            'm.d.y',
+            'n.j.y',
+            'm/d/y H:i',
+            'm/d/y H:i:s',
+            'n/j/y H:i',
+            'n/j/y H:i:s',
+        ];
+
+        $isYearFirstCandidate = preg_match('/^\d{4}[-\/.]/', $candidate) === 1;
+        $hasFourDigitTrailingYear = preg_match('/[-\/.]\d{4}(?:[T\s]|$)/', $candidate) === 1;
+
+        if ($isYearFirstCandidate) {
+            $formats = $yearFirstFormats;
+        } elseif ($hasFourDigitTrailingYear) {
+            $formats = array_merge($dayMonthYearFourDigitFormats, $monthDayYearFourDigitFormats);
+        } else {
+            $formats = array_merge($dayMonthYearTwoDigitFormats, $monthDayYearTwoDigitFormats);
+        }
 
         foreach ($formats as $format) {
             $parsed = \DateTime::createFromFormat('!' . $format, $candidate);
