@@ -269,39 +269,21 @@ class ExportEnrolleesController extends Controller
     private function buildRelationships(array $filters): array
     {
         $relationships = ['healthInsurance', 'enrollment.insuranceProvider', 'unmappedColumnValues'];
-        
-        if (($filters['enrollment_status'] ?? '') === 'APPROVED') {
-            // For APPROVED status, only load approved dependents
-            $relationships['dependents'] = fn($query) => $this->applyDependentFilters($query, $filters, ['APPROVED']);
-        } else {
-            // For all other statuses, load ALL active dependents (including SKIPPED/OVERAGE)
-            // This is critical for detecting skip hierarchy requirements
-            $relationships['dependents'] = function($query) use ($filters) {
-                $query->where('status', 'ACTIVE')
-                      ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
-                
-                // Only apply date filters if needed, but don't filter by enrollment_status
-                if (isset($filters['date_from']) || isset($filters['date_to'])) {
-                    $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
-                        $this->applyHealthInsuranceDateFilters($subQ, $filters);
-                    });
-                }
-                
-                Log::info('Loading ALL dependents for skip detection');
-            };
-        }  
+
+        $selectedEnrollmentStatus = $filters['enrollment_status'] ?? null;
+        $dependentStatuses = $selectedEnrollmentStatus ? [$selectedEnrollmentStatus] : null;
+
+        $relationships['dependents'] = fn($query) => $this->applyDependentFilters($query, $filters, $dependentStatuses);
+
         return $relationships;
     }
 
     private function applyDependentFilters($query, array $filters, ?array $statuses = null)
     {
-        // IMPORTANT: Don't filter by enrollment_status here if we need to detect SKIPPED/OVERAGE
-        // Only filter by status for APPROVED exports to maintain data integrity
-        if ($statuses && in_array('APPROVED', $statuses)) {
+        if ($statuses && count($statuses) > 0) {
             $query->whereIn('enrollment_status', $statuses);
         }
-        // For other cases, load ALL dependents so we can properly detect SKIPPED/OVERAGE
-        
+
         $query->where('status', 'ACTIVE')
               ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
 
@@ -313,7 +295,7 @@ class ExportEnrolleesController extends Controller
 
         Log::info('Applied dependent filters', [
             'statuses' => $statuses,
-            'will_filter_enrollment_status' => $statuses && in_array('APPROVED', $statuses)
+            'will_filter_enrollment_status' => $statuses && count($statuses) > 0
         ]);
     }
 
@@ -404,29 +386,12 @@ class ExportEnrolleesController extends Controller
 
         if ($exportType === 'RENEWAL') {
             $query->whereHas('healthInsurance', fn($subQ) => $subQ->where('is_renewal', true));
-            
-            if ($enrollmentStatus === 'PENDING') {
-                $query->where('enrollment_status', 'FOR-RENEWAL');
-            } elseif ($enrollmentStatus) {
-                $query->where('enrollment_status', $enrollmentStatus);
-            }
         } elseif ($exportType === 'REGULAR') {
             $query->whereHas('healthInsurance', fn($subQ) => $subQ->where('is_renewal', false));
-            
-            if ($enrollmentStatus) {
-                $query->where('enrollment_status', $enrollmentStatus);
-            }
-        } else {
-            // Handle ALL export type
-            if ($enrollmentStatus === 'PENDING') {
-                $query->whereIn('enrollment_status', ['FOR-RENEWAL', 'PENDING']);
-            } elseif ($enrollmentStatus === 'APPROVED') {
-                $query->whereIn('enrollment_status', ['APPROVED', 'RESIGNED']);
-            } elseif ($enrollmentStatus === 'RESIGNED') {
-                $query->whereIn('enrollment_status', ['RESIGNED', 'INACTIVE', 'ACTIVE']);
-            } elseif ($enrollmentStatus) {
-                $query->where('enrollment_status', $enrollmentStatus);
-            }
+        }
+
+        if ($enrollmentStatus) {
+            $query->where('enrollment_status', $enrollmentStatus);
         }
     }
 
