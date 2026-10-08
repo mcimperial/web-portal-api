@@ -148,7 +148,7 @@ class SendNotificationController extends Controller
         }
 
         $requestType = strtolower((string) $request->input('type', 'manual'));
-        $planCheck = trim((string) ($notification->plan_check ?? ''));
+        $planCheck = $this->normalizePlanCheck($notification->plan_check ?? null);
 
         // Ensure at least one recipient field (TO, CC, or BCC) is provided
         $hasTo = !empty(trim($data['to'] ?? ''));
@@ -227,7 +227,7 @@ class SendNotificationController extends Controller
      */
     private function sendToMultipleEmails($data, $notification)
     {
-        if (($notification->plan_check ?? '') !== '' && !empty($data['enrollee_id'])) {
+        if ($this->normalizePlanCheck($notification->plan_check ?? null) !== '' && !empty($data['enrollee_id'])) {
             $enrollee = Enrollee::with(['healthInsurance', 'enrollment.company'])->find($data['enrollee_id']);
             if ($enrollee && !$this->enrolleeMatchesPlanCheck($enrollee, $notification)) {
                 return response()->json([
@@ -281,7 +281,7 @@ class SendNotificationController extends Controller
     private function sendSingleEmail($data, $notification)
     {
         $requestType = strtolower((string) ($data['_request_type'] ?? 'manual'));
-        $planCheck = strtoupper(trim((string) ($data['_plan_check'] ?? ($notification->plan_check ?? ''))));
+        $planCheck = $this->normalizePlanCheck($data['_plan_check'] ?? ($notification->plan_check ?? null));
 
         if ($requestType !== 'scheduled' && $planCheck !== '') {
             if (empty($data['enrollee_id'])) {
@@ -2830,7 +2830,7 @@ class SendNotificationController extends Controller
             return $enrollees;
         }
 
-        $planCheck = strtoupper(trim((string) ($notification->plan_check ?? '')));
+        $planCheck = $this->normalizePlanCheck($notification->plan_check ?? null);
         $companyCode = strtoupper(trim((string) ($companyCode ?? '')));
 
         if ($companyCode === 'OYSTERPH') {
@@ -2921,7 +2921,7 @@ class SendNotificationController extends Controller
      */
     private function getPlanCheckMismatchMessage($notification, array $mismatchIds): string
     {
-        $planCheck = strtoupper(trim((string) ($notification->plan_check ?? '')));
+        $planCheck = $this->normalizePlanCheck($notification->plan_check ?? null);
         $expected = match ($planCheck) {
             'COMPETITIVE' => 'OYSTERPH - COMPETITIVE',
             'BEST IN CLASS' => 'OYSTERPH - BEST IN CLASS',
@@ -2931,6 +2931,21 @@ class SendNotificationController extends Controller
         };
 
         return 'Selected enrollee(s) do not match the plan_check requirement (' . $expected . '). Mismatched enrollee ID(s): ' . implode(', ', $mismatchIds) . '.';
+    }
+
+    /**
+     * Normalize plan_check values.
+     * Treat NONE/BLANK/NULL (and empty values) as no plan check.
+     */
+    private function normalizePlanCheck($value): string
+    {
+        $normalized = strtoupper(trim((string) ($value ?? '')));
+
+        if ($normalized === '' || in_array($normalized, ['NONE', 'BLANK', 'NULL'], true)) {
+            return '';
+        }
+
+        return $normalized;
     }
 
     /**
