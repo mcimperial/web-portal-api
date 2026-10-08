@@ -699,12 +699,14 @@ class SendNotificationController extends Controller
             ], 422);
         }
 
-        $planMismatchIds = $this->getPlanCheckMismatchEnrolleeIds($toRaw, $notification);
-        if (!empty($planMismatchIds)) {
-            return response()->json([
-                'success' => false,
-                'message' => $this->getPlanCheckMismatchMessage($notification, $planMismatchIds),
-            ], 422);
+        if ($this->normalizePlanCheck($notification->plan_check ?? null) !== '') {
+            $planMismatchIds = $this->getPlanCheckMismatchEnrolleeIds($toRaw, $notification);
+            if (!empty($planMismatchIds)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $this->getPlanCheckMismatchMessage($notification, $planMismatchIds),
+                ], 422);
+            }
         }
 
         $results = [];
@@ -2833,22 +2835,20 @@ class SendNotificationController extends Controller
         $planCheck = $this->normalizePlanCheck($notification->plan_check ?? null);
         $companyCode = strtoupper(trim((string) ($companyCode ?? '')));
 
-        if ($companyCode === 'OYSTERPH') {
-            $effectivePlanCheck = $planCheck === '' ? 'COMPETITIVE' : $planCheck;
+        if ($planCheck === '') {
+            return $enrollees;
+        }
 
-            return $enrollees->filter(function ($enrollee) use ($effectivePlanCheck) {
+        if ($companyCode === 'OYSTERPH') {
+            return $enrollees->filter(function ($enrollee) use ($planCheck) {
                 $plan = strtoupper(trim((string) ($enrollee->healthInsurance?->plan ?? '')));
 
-                if ($effectivePlanCheck === 'BEST IN CLASS') {
+                if ($planCheck === 'BEST IN CLASS') {
                     return str_contains($plan, 'BEST IN CLASS');
                 }
 
                 return $plan === '' || str_contains($plan, 'COMPETITIVE');
             });
-        }
-
-        if ($planCheck === '') {
-            return $enrollees;
         }
 
         return $enrollees->filter(function ($enrollee) use ($planCheck) {
@@ -2897,7 +2897,7 @@ class SendNotificationController extends Controller
             return is_numeric($id);
         });
 
-        if (!$notification || empty($ids)) {
+        if (!$notification || empty($ids) || $this->normalizePlanCheck($notification->plan_check ?? null) === '') {
             return [];
         }
 
