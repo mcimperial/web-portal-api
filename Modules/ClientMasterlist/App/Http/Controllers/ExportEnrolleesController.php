@@ -892,6 +892,13 @@ class ExportEnrolleesController extends Controller
                     $targetValue = isset($row[$targetIndex]) ? strtoupper(trim((string) $row[$targetIndex])) : '';
                 }
 
+                if (!$isPrincipal && $targetKey === 'plan' && $principal) {
+                    $principalPlan = strtoupper(trim($this->getDefaultColumnValue('plan', $principal)));
+                    if ($principalPlan !== '') {
+                        $targetValue = $principalPlan;
+                    }
+                }
+
                 if ($targetValue === '' && $targetKey === 'relation') {
                     $derivedRelation = $isPrincipal
                         ? 'PRINCIPAL'
