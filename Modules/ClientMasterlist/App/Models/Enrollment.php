@@ -20,6 +20,7 @@ class Enrollment extends Model
         'with_skip_hierarchy',
         'account_code',
         'plan_code',
+        'export_compare_configuration',
         'premium',
         'premium_computation',
         'premium_variable',

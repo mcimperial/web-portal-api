@@ -162,9 +162,12 @@ class ExportEnrolleesController extends Controller
         $isForAttachment = $request->query('for_attachment', false);
 
         $enrollees = $this->buildBaseQuery($filters)->get();
-        $exportType = $this->getExportType($filters['enrollment_id']);
+        $exportContext = $this->getExportContext($filters['enrollment_id']);
+        $exportType = $exportContext['export_type'];
+        $compareRules = $exportContext['compare_rules'];
         
         $columns = $this->determineColumns($request, $exportType, $isForAttachment);
+        $columns = $this->ensureCompareColumnsIncluded($columns, $compareRules);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
         $columns = $this->expandUnmappedColumns($columns, $enrollees);
         
@@ -173,7 +176,7 @@ class ExportEnrolleesController extends Controller
         $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
         // Use DEFAULT column values when use_selected_columns is checked
         $useDefaultValues = (bool) $request->query('use_selected_columns');
-        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal);
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules);
         $csv = $this->generateCsv($headers, $rows);
 
         return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
@@ -185,16 +188,19 @@ class ExportEnrolleesController extends Controller
         $withDependents = $request->query('with_dependents', false);
 
         $enrollees = $this->buildBaseQuery($filters)->get();
-        $exportType = $this->getExportType($filters['enrollment_id']);
+        $exportContext = $this->getExportContext($filters['enrollment_id']);
+        $exportType = $exportContext['export_type'];
+        $compareRules = $exportContext['compare_rules'];
 
         $columns = $this->determineColumns($request, $exportType, true);
+        $columns = $this->ensureCompareColumnsIncluded($columns, $compareRules);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
         $columns = $this->expandUnmappedColumns($columns, $enrollees);
 
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
         $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
         $useDefaultValues = (bool) $request->query('use_selected_columns');
-        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal);
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules);
         $csv = $this->generateCsv($headers, $rows);
 
         // Update SUBMITTED enrollees to FOR-APPROVAL after export
@@ -222,12 +228,21 @@ class ExportEnrolleesController extends Controller
         ];
     }
 
-    private function getExportType($enrollmentId): string
+    private function getExportContext($enrollmentId): array
     {
-        if (empty($enrollmentId)) return 'DEFAULT';
-        
+        if (empty($enrollmentId)) {
+            return [
+                'export_type' => 'DEFAULT',
+                'compare_rules' => [],
+            ];
+        }
+
         $enrollment = Enrollment::find($enrollmentId);
-        return $enrollment?->export_type ? strtoupper($enrollment->export_type) : 'DEFAULT';
+
+        return [
+            'export_type' => $enrollment?->export_type ? strtoupper($enrollment->export_type) : 'DEFAULT',
+            'compare_rules' => $this->parseCompareConfiguration($enrollment?->export_compare_configuration),
+        ];
     }
 
     private function isCustomExportType(string $exportType): bool
@@ -518,6 +533,73 @@ class ExportEnrolleesController extends Controller
         return array_values(array_unique(array_filter($columns, fn($v) => is_string($v) && trim($v) !== '')));
     }
 
+    private function normalizeCompareColumnIdentifier(string $column): string
+    {
+        $normalized = trim($column);
+        $normalized = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', $normalized) ?? $normalized;
+        $normalized = str_replace(['-', ' '], '_', $normalized);
+        $normalized = preg_replace('/_+/', '_', $normalized) ?? $normalized;
+        return strtoupper($normalized);
+    }
+
+    private function toCompareSourceColumnKey(string $column): string
+    {
+        $normalized = strtolower(trim($column));
+        $normalized = str_replace(['-', ' '], '_', $normalized);
+        $parts = array_values(array_filter(explode('_', $normalized), fn($part) => $part !== ''));
+
+        if (empty($parts)) {
+            return '';
+        }
+
+        $first = array_shift($parts);
+        $rest = array_map(fn($part) => ucfirst($part), $parts);
+
+        return $first . implode('', $rest);
+    }
+
+    private function toEntityColumnKey(string $column): string
+    {
+        $normalized = strtolower(trim($column));
+        $normalized = preg_replace('/([a-z0-9])([A-Z])/', '$1_$2', $normalized) ?? $normalized;
+        $normalized = str_replace(['-', ' '], '_', $normalized);
+        $normalized = preg_replace('/_+/', '_', $normalized) ?? $normalized;
+        return $normalized;
+    }
+
+    private function ensureCompareColumnsIncluded(array $columns, array $compareRules): array
+    {
+        if (empty($compareRules)) {
+            return $columns;
+        }
+
+        $columns = $this->normalizeColumns($columns);
+
+        $existing = [];
+        foreach ($columns as $column) {
+            $existing[$this->normalizeCompareColumnIdentifier((string) $column)] = true;
+        }
+
+        foreach ($compareRules as $rule) {
+            $source = trim((string) ($rule['source'] ?? ''));
+            if ($source === '') {
+                continue;
+            }
+
+            $normalizedSource = $this->normalizeCompareColumnIdentifier($source);
+            if (!isset($existing[$normalizedSource])) {
+                $sourceColumnKey = $this->toCompareSourceColumnKey($source);
+                if ($sourceColumnKey === '') {
+                    continue;
+                }
+                $columns[] = $sourceColumnKey;
+                $existing[$normalizedSource] = true;
+            }
+        }
+
+        return $columns;
+    }
+
     private function addRequiredColumns(array $columns): array
     {
         $requiredColumns = ['effective_date', 'enrollment_status', 'relation'];
@@ -656,7 +738,7 @@ class ExportEnrolleesController extends Controller
         }, $columns);
     }
 
-    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false): array
+    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false, array $compareRules = []): array
     {
         $rows = [];
         $colCount = count($columns);
@@ -666,6 +748,7 @@ class ExportEnrolleesController extends Controller
         foreach ($enrollees as $enrollee) {
             // Add principal row
             $row = $this->generateEntityRow($enrollee, $columns, $withDependents, true, null, $isCustom, false);
+            $row = $this->applyCompareConfigurationToRow($columns, $row, $compareRules, true, $enrollee, null);
             $rows[] = $this->normalizeRowLength($row, $colCount);
 
             // Add dependent rows if needed
@@ -675,6 +758,7 @@ class ExportEnrolleesController extends Controller
                 if (count($activeDependents) > 0) {
                     foreach ($activeDependents as $dependent) {
                         $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, false);
+                        $depRow = $this->applyCompareConfigurationToRow($columns, $depRow, $compareRules, false, $dependent, $enrollee);
                         $rows[] = $this->normalizeRowLength($depRow, $colCount);
                     }
                 }
@@ -688,6 +772,7 @@ class ExportEnrolleesController extends Controller
 
                     foreach ($deletedDependents as $dependent) {
                         $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, true);
+                        $depRow = $this->applyCompareConfigurationToRow($columns, $depRow, $compareRules, false, $dependent, $enrollee);
                         $rows[] = $this->normalizeRowLength($depRow, $colCount);
                     }
                 }
@@ -714,6 +799,217 @@ class ExportEnrolleesController extends Controller
             return array_slice($row, 0, $expectedLength);
         }
         return $row;
+    }
+
+    private function parseCompareConfiguration(?string $config): array
+    {
+        if (!$config || trim($config) === '') {
+            return [];
+        }
+
+        preg_match_all('/COL\s*=\s*([^{}]+)\{([^{}]*)\}/i', $config, $matches, PREG_SET_ORDER);
+        if (!$matches) {
+            return [];
+        }
+
+        $rules = [];
+
+        foreach ($matches as $match) {
+            $columnSpec = trim((string) ($match[1] ?? ''));
+            $rawMappings = trim((string) ($match[2] ?? ''));
+
+            if ($columnSpec === '' || $rawMappings === '') {
+                continue;
+            }
+
+            $sourceColumn = $columnSpec;
+            $targetColumn = null;
+
+            if (str_contains($columnSpec, '-')) {
+                [$sourceRaw, $targetRaw] = array_pad(explode('-', $columnSpec, 2), 2, null);
+                $sourceColumn = trim((string) $sourceRaw);
+                $targetColumn = trim((string) $targetRaw);
+            }
+
+            if ($sourceColumn === '') {
+                continue;
+            }
+
+            $values = $this->parseCompareMappings($rawMappings);
+
+            if (empty($values)) {
+                continue;
+            }
+
+            $rules[] = [
+                'source' => $this->normalizeCompareColumnIdentifier($sourceColumn),
+                'target' => $targetColumn ? $this->normalizeCompareColumnIdentifier($targetColumn) : null,
+                'values' => $values,
+            ];
+        }
+
+        return $rules;
+    }
+
+    private function applyCompareConfigurationToRow(array $columns, array $row, array $rules, bool $isPrincipal, $entity, $principal = null): array
+    {
+        if (empty($rules) || empty($columns) || empty($row)) {
+            return $row;
+        }
+
+        $columnIndexMap = [];
+        foreach ($columns as $index => $columnName) {
+            $normalized = $this->normalizeCompareColumnIdentifier((string) $columnName);
+            if ($normalized !== '') {
+                $columnIndexMap[$normalized] = $index;
+            }
+        }
+
+        foreach ($rules as $rule) {
+            $sourceColumn = $rule['source'] ?? null;
+            $targetColumn = $rule['target'] ?? null;
+            $values = $rule['values'] ?? [];
+
+            if (!$sourceColumn || !isset($columnIndexMap[$sourceColumn])) {
+                continue;
+            }
+
+            $sourceIndex = $columnIndexMap[$sourceColumn];
+            $sourceValue = isset($row[$sourceIndex]) ? trim((string) $row[$sourceIndex]) : '';
+
+            if ($sourceValue !== '') {
+                continue;
+            }
+
+            $resolved = '';
+
+            if ($targetColumn) {
+                $targetKey = $this->toEntityColumnKey($targetColumn);
+                $targetValue = '';
+
+                if (isset($columnIndexMap[$targetColumn])) {
+                    $targetIndex = $columnIndexMap[$targetColumn];
+                    $targetValue = isset($row[$targetIndex]) ? strtoupper(trim((string) $row[$targetIndex])) : '';
+                }
+
+                if ($targetValue === '' && $targetKey === 'relation') {
+                    $derivedRelation = $isPrincipal
+                        ? 'PRINCIPAL'
+                        : strtoupper(trim((string) ($entity->relation ?? 'PRINCIPAL')));
+                    $targetValue = $derivedRelation;
+                }
+
+                if ($targetValue === '') {
+                    $targetValue = strtoupper(trim($this->getDefaultColumnValue($targetKey, $entity)));
+                }
+
+                if ($targetValue === '' && !$isPrincipal && $principal) {
+                    $targetKey = $this->toEntityColumnKey($targetColumn);
+                    $targetValue = strtoupper(trim($this->getDefaultColumnValue($targetKey, $principal)));
+                }
+
+                $resolved = $this->resolveCompareRuleValue($values, $targetValue, $isPrincipal);
+
+                if ($resolved === '' && $targetKey === 'relation' && $targetValue !== '') {
+                    $resolved = $targetValue;
+                }
+            }
+
+            if ($resolved === '' && isset($values['VAL'])) {
+                $resolved = (string) $values['VAL'];
+            }
+
+            if ($resolved !== '') {
+                $row[$sourceIndex] = $resolved;
+            }
+        }
+
+        return $row;
+    }
+
+    private function parseCompareMappings(string $rawMappings): array
+    {
+        $values = [];
+        $tokens = preg_split('/\s*,\s*/', $rawMappings) ?: [];
+
+        foreach ($tokens as $token) {
+            $token = trim((string) $token);
+            if ($token === '') {
+                continue;
+            }
+
+            if (!str_contains($token, ':')) {
+                continue;
+            }
+
+            [$left, $right] = array_pad(explode(':', $token, 2), 2, '');
+            $left = trim((string) $left);
+            $right = trim((string) $right);
+
+            if ($left === '') {
+                continue;
+            }
+
+            $normalizedKey = strtoupper(trim((string) $left));
+            if ($normalizedKey === '') {
+                continue;
+            }
+
+            $values[$normalizedKey] = $right;
+        }
+
+        return $values;
+    }
+
+    private function resolveCompareRuleValue(array $values, string $targetValue, bool $isPrincipal): string
+    {
+        $memberSuffix = $isPrincipal ? '_P' : '_D';
+        $normalizedTarget = strtoupper(trim($targetValue));
+        $canonicalValues = [];
+        foreach ($values as $key => $value) {
+            $canonicalValues[$this->canonicalCompareValueKey((string) $key)] = (string) $value;
+        }
+
+        $candidates = [];
+
+        if ($normalizedTarget !== '') {
+            $candidates[] = $normalizedTarget . $memberSuffix;
+            $candidates[] = $normalizedTarget;
+
+            if ($normalizedTarget === 'CHILD') {
+                $candidates[] = 'CHILDREN' . $memberSuffix;
+                $candidates[] = 'CHILDREN';
+            } elseif ($normalizedTarget === 'CHILDREN') {
+                $candidates[] = 'CHILD' . $memberSuffix;
+                $candidates[] = 'CHILD';
+            }
+        }
+
+        // Business rule: blank plan defaults to COMPETITIVE per member type
+        if ($normalizedTarget === '' && $isPrincipal) {
+            $candidates[] = 'COMPETITIVE_P';
+        } elseif ($normalizedTarget === '' && !$isPrincipal) {
+            $candidates[] = 'COMPETITIVE_D';
+        }
+
+        foreach ($candidates as $candidate) {
+            $canonicalCandidate = $this->canonicalCompareValueKey($candidate);
+            if (isset($canonicalValues[$canonicalCandidate])) {
+                return $canonicalValues[$canonicalCandidate];
+            }
+        }
+
+        return '';
+    }
+
+    private function canonicalCompareValueKey(string $key): string
+    {
+        $normalized = strtoupper(trim($key));
+        $normalized = str_replace(['\u{00A0}', "\xC2\xA0"], ' ', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s*_\s*/', '_', $normalized) ?? $normalized;
+        $normalized = preg_replace('/\s*-\s*/', '-', $normalized) ?? $normalized;
+        return trim($normalized);
     }
 
     // =========================================================================
