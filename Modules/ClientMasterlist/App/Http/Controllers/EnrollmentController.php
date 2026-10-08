@@ -41,6 +41,7 @@ class EnrollmentController extends Controller
             'note' => 'nullable|string',
             'account_code' => 'nullable|string',
             'plan_code' => 'nullable|string',
+            'export_compare_configuration' => 'nullable|string',
             'premium' => 'nullable|numeric',
             'premium_computation' => 'nullable|string',
             'premium_variable' => 'nullable|string',
@@ -65,6 +66,9 @@ class EnrollmentController extends Controller
         }
         if (isset($validated['insurance_provider_id'])) {
             $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
+        }
+        if (array_key_exists('export_compare_configuration', $validated)) {
+            $validated['export_compare_configuration'] = $request->input('export_compare_configuration');
         }
         $enrollment = Enrollment::create($validated);
         
@@ -155,6 +159,7 @@ class EnrollmentController extends Controller
             'note' => 'nullable|string',
             'account_code' => 'nullable|string',
             'plan_code' => 'nullable|string',
+            'export_compare_configuration' => 'nullable|string',
             'premium' => 'nullable|numeric',
             'premium_computation' => 'nullable|string',
             'premium_variable' => 'nullable|string',
@@ -179,6 +184,9 @@ class EnrollmentController extends Controller
         }
         if (isset($validated['insurance_provider_id'])) {
             $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
+        }
+        if (array_key_exists('export_compare_configuration', $validated)) {
+            $validated['export_compare_configuration'] = $request->input('export_compare_configuration');
         }
         $enrollment->update($validated);
         

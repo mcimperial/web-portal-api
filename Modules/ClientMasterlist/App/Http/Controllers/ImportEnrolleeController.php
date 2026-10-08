@@ -282,14 +282,14 @@ class ImportEnrolleeController extends Controller
             'error_message' => $errorMessage,
         ]);
 
-        Log::info('Import log saved to database', [
+        /* Log::info('Import log saved to database', [
             'import_log_id' => $importLog->id,
             'enrollment_id' => $enrollmentId,
             'principals_created' => $this->importLog['summary']['principals_created'],
             'principals_updated' => $this->importLog['summary']['principals_updated'],
             'dependents_created' => $this->importLog['summary']['dependents_created'],
             'dependents_updated' => $this->importLog['summary']['dependents_updated'],
-        ]);
+        ]); */
 
         return $importLog;
     }
