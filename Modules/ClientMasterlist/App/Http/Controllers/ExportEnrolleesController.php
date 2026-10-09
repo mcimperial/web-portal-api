@@ -158,7 +158,7 @@ class ExportEnrolleesController extends Controller
     public function exportEnrollees(Request $request)
     {
         $filters = $this->extractFilters($request);
-        $withDependents = $request->query('with_dependents', false);
+        $withDependents = $filters['with_dependents'];
         $isForAttachment = $request->query('for_attachment', false);
 
         $enrollees = $this->buildBaseQuery($filters)->get();
@@ -185,7 +185,7 @@ class ExportEnrolleesController extends Controller
     public function exportAndUpdateEnrollees(Request $request)
     {
         $filters = $this->extractFilters($request);
-        $withDependents = $request->query('with_dependents', false);
+        $withDependents = $filters['with_dependents'];
 
         $enrollees = $this->buildBaseQuery($filters)->get();
         $exportContext = $this->getExportContext($filters['enrollment_id']);
@@ -217,6 +217,11 @@ class ExportEnrolleesController extends Controller
 
     private function extractFilters(Request $request): array
     {
+        $withDependents = filter_var(
+            $request->query('with_dependents', $request->query('include_dependents', false)),
+            FILTER_VALIDATE_BOOLEAN
+        );
+
         return [
             'use_selected_columns' => $request->query('use_selected_columns'),
             'enrollment_id' => $request->query('enrollment_id'),
@@ -225,6 +230,7 @@ class ExportEnrolleesController extends Controller
             'date_from' => $request->query('date_from'),
             'date_to' => $request->query('date_to'),
             'use_certification_date' => $request->query('use_certification_date'),
+            'with_dependents' => $withDependents,
         ];
     }
 
@@ -286,7 +292,10 @@ class ExportEnrolleesController extends Controller
         $relationships = ['healthInsurance', 'enrollment.insuranceProvider', 'unmappedColumnValues'];
 
         $selectedEnrollmentStatus = $filters['enrollment_status'] ?? null;
-        $dependentStatuses = $selectedEnrollmentStatus ? [$selectedEnrollmentStatus] : null;
+        $withDependents = (bool) ($filters['with_dependents'] ?? false);
+        $dependentStatuses = (!$withDependents && $selectedEnrollmentStatus)
+            ? [$selectedEnrollmentStatus]
+            : null;
 
         $relationships['dependents'] = fn($query) => $this->applyDependentFilters($query, $filters, $dependentStatuses);
 
