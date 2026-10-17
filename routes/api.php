@@ -19,7 +19,11 @@ use App\Http\Controllers\Api\AccessManagementController;
 
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/user', [UserController::class, 'current']);
-    Route::apiResource('company', CompanyController::class)->middleware('rbac:settings,update');
+    Route::get('company', [CompanyController::class, 'index'])->middleware('rbac:enrollments,view');
+    Route::get('company/{company}', [CompanyController::class, 'show'])->middleware('rbac:enrollments,view');
+    Route::post('company', [CompanyController::class, 'store'])->middleware('rbac:settings,update');
+    Route::patch('company/{company}', [CompanyController::class, 'update'])->middleware('rbac:settings,update');
+    Route::delete('company/{company}', [CompanyController::class, 'destroy'])->middleware('rbac:settings,update');
 
     Route::prefix('v1/access')->group(function () {
         Route::get('permissions/catalog', [AccessManagementController::class, 'permissionCatalog'])
