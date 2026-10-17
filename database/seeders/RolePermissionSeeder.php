@@ -15,19 +15,19 @@ class RolePermissionSeeder extends Seeder
     public function run(): void
     {
         // Create roles
-        $roleGuest = Role::create(['name' => 'guest']);
-        $roleUser = Role::create(['name' => 'user']);
-        $roleManager = Role::create(['name' => 'admin']);
+        $roleGuest = Role::firstOrCreate(['name' => 'guest']);
+        $roleUser = Role::firstOrCreate(['name' => 'user']);
+        $roleManager = Role::firstOrCreate(['name' => 'admin']);
 
         // Create permissions
-        $permissionUseEnrollmentPortal = Permission::create(['name' => 'use enrollment portal']);
-        $permissionViewReport = Permission::create(['name' => 'view report']);
-        $permissionExtractReport = Permission::create(['name' => 'extract report']);
-        $permissionManageEverything = Permission::create(['name' => 'manage everything']);
+        $permissionUseEnrollmentPortal = Permission::firstOrCreate(['name' => 'use enrollment portal']);
+        $permissionViewReport = Permission::firstOrCreate(['name' => 'view report']);
+        $permissionExtractReport = Permission::firstOrCreate(['name' => 'extract report']);
+        $permissionManageEverything = Permission::firstOrCreate(['name' => 'manage everything']);
 
         // Assign permissions to roles
         $roleGuest->givePermissionTo($permissionUseEnrollmentPortal);
         $roleUser->givePermissionTo([$permissionViewReport, $permissionExtractReport]);
-        $roleManager->givePermissionTo(Permission::all());
+        $roleManager->givePermissionTo([$permissionManageEverything]);
     }
 }

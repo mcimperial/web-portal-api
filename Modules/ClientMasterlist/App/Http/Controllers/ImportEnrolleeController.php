@@ -1384,6 +1384,11 @@ class ImportEnrolleeController extends Controller
 
     public function import(Request $request): JsonResponse
     {
+        // This endpoint can process large spreadsheets with many DB writes,
+        // file uploads, and log records. Give it enough time to finish so the
+        // browser doesn't see a timeout/network failure.
+        set_time_limit(300);
+
         // Bulk imports can run long enough for MySQL to close an idle
         // connection ("MySQL server has gone away"). Bump the session
         // timeouts and make sure we have a live connection before starting

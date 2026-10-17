@@ -5,8 +5,10 @@ namespace Modules\ClientMasterlist\App\Http\Controllers;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Modules\ClientMasterlist\App\Models\BillingRecord;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use Modules\ClientMasterlist\App\Models\Enrollment;
+use Modules\ClientMasterlist\App\Support\Exports\EnrolleeExportDefinition;
 use App\Http\Traits\UppercaseInput;
 use App\Models\Company;
 
@@ -15,196 +17,57 @@ class ExportEnrolleesController extends Controller
     use UppercaseInput;
 
     // =========================================================================
-    // EXPORT CONFIGURATION
-    // =========================================================================
-
-    private const EXPORT_CONFIGS = [
-        'DEFAULT' => [
-            'columns' => [
-                'enrollment_status', 'relation', 'premium', 'employee_id', 'first_name', 
-                'last_name', 'middle_name', 'suffix', 'birth_date', 'marital_status', 
-                'gender', 'email1', 'phone1', 'department', 'position', 'effective_date'
-            ],
-            'labels' => [
-                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
-                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
-                'effective_date' => 'Effective Date', 'required_document' => 'Required Document',
-                'enrollment_status' => 'Enrollment Status', 'relation' => 'Relation',
-                'is_newly_added' => 'Renewal Status',
-                'employee_id' => 'Employee ID', 'first_name' => 'First Name',
-                'last_name' => 'Last Name', 'middle_name' => 'Middle Name',
-                'suffix' => 'Suffix', 'birth_date' => 'Birth Date', 'gender' => 'Gender',
-                'marital_status' => 'Marital Status', 'email1' => 'Email 1', 'email2' => 'Email 2',
-                'phone1' => 'Phone 1', 'phone2' => 'Phone 2', 'address' => 'Address',
-                'department' => 'Department', 'position' => 'Position',
-                'employment_start_date' => 'Employment Start Date', 'employment_end_date' => 'Employment End Date',
-                'start_date' => 'Start Date', 'submission_date' => 'Submission Date', 'back_date' => 'Back Date',
-                'notes' => 'Notes', 'status' => 'Status', 'plan' => 'Plan', 'premium' => 'Premium',
-                'principal_mbl' => 'Principal MBL', 'principal_room_and_board' => 'Principal Room and Board',
-                'dependent_mbl' => 'Dependent MBL', 'dependent_room_and_board' => 'Dependent Room and Board',
-                'is_renewal' => 'Is Renewal', 'is_company_paid' => 'Is Company Paid',
-                'coverage_start_date' => 'Coverage Start Date', 'coverage_end_date' => 'Coverage End Date',
-                'certificate_number' => 'Certificate Number', 'certificate_date_issued' => 'Certificate Date Issued',
-                'unmapped_columns' => 'Unmapped Columns'
-            ]
-        ],
-        'MAXI-SCVP' => [
-            'columns' => [
-                'maxicare_account_code', 'maxicare_employee_id', 'maxicare_first_name',
-                'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
-                'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
-                'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
-                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
-                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
-                'maxicare_plan_code'
-            ],
-            'labels' => [
-                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
-                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
-                'maxicare_account_code' => 'Account Code', 'maxicare_employee_id' => 'Employee No',
-                'maxicare_first_name' => 'First Name', 'maxicare_last_name' => 'Last Name',
-                'maxicare_middle_name' => 'Middle Name', 'maxicare_extension' => 'Extension',
-                'maxicare_gender' => 'Gender', 'maxicare_member_type' => 'Member Type',
-                'maxicare_relation' => 'Relationship', 'maxicare_address_line_1' => 'Address Line 1',
-                'maxicare_city' => 'City', 'maxicare_province' => 'Province',
-                'maxicare_civil_status' => 'Civil Status', 'maxicare_birth_date' => 'Birth Date',
-                'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
-                'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
-                'maxicare_plan_code' => 'Plan Code'
-            ]
-        ],
-        'MAXI-SCVP-W-PLAN' => [
-            'columns' => [
-                'maxicare_account_code', 'maxicare_employee_id', 'maxicare_first_name',
-                'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
-                'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
-                'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
-                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
-                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
-                'maxicare_plan_code', 'maxicare_plan_description', 'maxicare_plan_type_d'
-            ],
-            'labels' => [
-                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
-                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
-                'maxicare_account_code' => 'Account Code', 'maxicare_employee_id' => 'Employee No',
-                'maxicare_first_name' => 'First Name', 'maxicare_last_name' => 'Last Name',
-                'maxicare_middle_name' => 'Middle Name', 'maxicare_extension' => 'Extension',
-                'maxicare_gender' => 'Gender', 'maxicare_member_type' => 'Member Type',
-                'maxicare_relation' => 'Relationship', 'maxicare_address_line_1' => 'Address Line 1',
-                'maxicare_city' => 'City', 'maxicare_province' => 'Province',
-                'maxicare_civil_status' => 'Civil Status', 'maxicare_birth_date' => 'Birth Date',
-                'maxicare_mobile_no' => 'Mobile No', 'maxicare_email' => 'Email',
-                'maxicare_effective_date' => 'Effective Date', 'maxicare_philhealth' => 'PhilHealth',
-                'maxicare_plan_code' => 'Plan Code',
-                'maxicare_plan_description' => 'Plan Description',
-                'maxicare_plan_type_d' => 'Plan Type (Principal/Dependent)'
-            ]
-        ],
-        'MAXI-ACVP' => [
-            'columns' => [
-                'maxicare_employee_id', 'maxicare_last_name', 'maxicare_first_name',
-                'maxicare_middle_name', 'maxicare_extension', 'maxicare_gender',
-                'maxicare_street', 'maxicare_city', 'maxicare_province', 'maxicare_postal_code',
-                'maxicare_email', 'maxicare_mobile_no', 'maxicare_member_type',
-                'maxicare_birth_date', 'relation', 'marital_status',
-                'maxicare_effective_date', 'maxicare_date_hired', 'maxicare_date_regularization',
-                'maxicare_is_philhealth_member', 'maxicare_philhealth_conditions',
-                'maxicare_position', 'maxicare_plan_type', 'maxicare_branch_name',
-                'maxicare_philhealth_no', 'maxicare_senior_citizen_id_no',
-                'maxicare_client_remarks', 'maxicare_phic'
-            ],
-            'labels' => [
-                'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
-                'attachment_for_skip_hierarchy' => 'Attachment for Skip Hierarchy',
-                'maxicare_employee_id' => 'EmpNo', 'maxicare_last_name' => 'LastName',
-                'maxicare_first_name' => 'FirstName', 'maxicare_middle_name' => 'MiddleName',
-                'maxicare_extension' => 'Extension', 'maxicare_gender' => 'Gender',
-                'maxicare_street' => 'Street', 'maxicare_city' => 'City',
-                'maxicare_province' => 'Province', 'maxicare_postal_code' => 'ZipCode',
-                'maxicare_email' => 'Email', 'maxicare_mobile_no' => 'MobileNo',
-                'maxicare_member_type' => 'MemberType', 'maxicare_birth_date' => 'BirthDate',
-                'relation' => 'RelationshipID', 'marital_status' => 'CivilStat',
-                'maxicare_effective_date' => 'EffectiveDate', 'maxicare_date_hired' => 'DateHired',
-                'maxicare_date_regularization' => 'RegDate',
-                'maxicare_is_philhealth_member' => 'If Enrollee is a Philhealth member',
-                'maxicare_philhealth_conditions' => 'Philhealth conditions',
-                'maxicare_position' => 'POSITION', 'maxicare_plan_type' => 'PLAN TYPE',
-                'maxicare_branch_name' => 'BRANCH NAME', 'maxicare_philhealth_no' => 'PHILHEALTH NO.',
-                'maxicare_senior_citizen_id_no' => 'SENIOR CITIZEN ID. NO.',
-                'maxicare_client_remarks' => 'Client Remarks', 'maxicare_phic' => 'PHIC'
-            ]
-        ]
-    ];
-
-    private const INSURANCE_FIELDS = [
-        'plan', 'premium', 'principal_mbl', 'principal_room_and_board',
-        'dependent_mbl', 'dependent_room_and_board', 'is_renewal', 'is_company_paid',
-        'coverage_start_date', 'coverage_end_date', 'certificate_number', 'certificate_date_issued'
-    ];
-
-    private const RELATION_CODE_MAP = [
-        'SPOUSE' => 'SP', 'CHILD' => 'C', 'PARENT' => 'PR', 'SIBLING' => 'SL',
-        'DOMESTIC PARTNER' => 'O', 'COMMON-LAW PARTNER' => 'O'
-    ];
-
-    private const CIVIL_STATUS_CODE_MAP = [
-        'SINGLE' => 'S', 'SINGLE PARENT' => 'SP', 'MARRIED' => 'M'
-    ];
-
-    // =========================================================================
     // MAIN EXPORT METHODS
     // =========================================================================
 
     public function exportEnrollees(Request $request)
     {
-        $filters = $this->extractFilters($request);
-        $withDependents = $filters['with_dependents'];
-        $isForAttachment = $request->query('for_attachment', false);
-
-        $enrollees = $this->buildBaseQuery($filters)->get();
-        $exportContext = $this->getExportContext($filters['enrollment_id']);
-        $exportType = $exportContext['export_type'];
-        $compareRules = $exportContext['compare_rules'];
-        
-        $columns = $this->determineColumns($request, $exportType, $isForAttachment);
-        $columns = $this->ensureCompareColumnsIncluded($columns, $compareRules);
-        [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
-        $columns = $this->expandUnmappedColumns($columns, $enrollees);
-        
-        // Use DEFAULT labels when use_selected_columns is checked
-        $useDefaultLabels = (bool) $request->query('use_selected_columns');
-        $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
-        // Use DEFAULT column values when use_selected_columns is checked
-        $useDefaultValues = (bool) $request->query('use_selected_columns');
-        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules);
-        $csv = $this->generateCsv($headers, $rows);
-
-        return $this->createCsvResponse($csv, $filters['enrollment_status'], $enrollees);
+        return $this->runExport(
+            $request,
+            (bool) $request->query('for_attachment', false),
+            false,
+        );
     }
 
     public function exportAndUpdateEnrollees(Request $request)
     {
+        return $this->runExport($request, true, true);
+    }
+
+    private function runExport(Request $request, bool $isForAttachment, bool $updateSubmitted): \Symfony\Component\HttpFoundation\Response
+    {
         $filters = $this->extractFilters($request);
         $withDependents = $filters['with_dependents'];
+        $includeBillingColumns = $filters['include_billing_columns'];
 
         $enrollees = $this->buildBaseQuery($filters)->get();
         $exportContext = $this->getExportContext($filters['enrollment_id']);
         $exportType = $exportContext['export_type'];
         $compareRules = $exportContext['compare_rules'];
 
-        $columns = $this->determineColumns($request, $exportType, true);
+        $billingContext = $includeBillingColumns
+            ? $this->buildBillingContext($enrollees, $withDependents, $filters['enrollment_id'])
+            : $this->emptyBillingContext();
+
+        $columns = $this->determineColumns($request, $exportType, $isForAttachment);
         $columns = $this->ensureCompareColumnsIncluded($columns, $compareRules);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
         $columns = $this->expandUnmappedColumns($columns, $enrollees);
+        if ($includeBillingColumns) {
+            $columns = $this->appendBillingColumns($columns, $billingContext['columns']);
+        }
 
+        // Use DEFAULT labels when use_selected_columns is checked
         $useDefaultLabels = (bool) $request->query('use_selected_columns');
-        $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels);
+        $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels, $billingContext['labels']);
+
+        // Use DEFAULT column values when use_selected_columns is checked
         $useDefaultValues = (bool) $request->query('use_selected_columns');
-        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules);
+        $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules, $billingContext);
         $csv = $this->generateCsv($headers, $rows);
 
         // Update SUBMITTED enrollees to FOR-APPROVAL after export
-        if ($filters['enrollment_status'] === 'SUBMITTED') {
+        if ($updateSubmitted && $filters['enrollment_status'] === 'SUBMITTED') {
             $this->updateSubmittedEnrollees($enrollees);
         }
 
@@ -222,6 +85,11 @@ class ExportEnrolleesController extends Controller
             FILTER_VALIDATE_BOOLEAN
         );
 
+        $includeBillingColumns = filter_var(
+            $request->query('include_billing_columns', false),
+            FILTER_VALIDATE_BOOLEAN
+        );
+
         return [
             'use_selected_columns' => $request->query('use_selected_columns'),
             'enrollment_id' => $request->query('enrollment_id'),
@@ -231,6 +99,7 @@ class ExportEnrolleesController extends Controller
             'date_to' => $request->query('date_to'),
             'use_certification_date' => $request->query('use_certification_date'),
             'with_dependents' => $withDependents,
+            'include_billing_columns' => $includeBillingColumns,
         ];
     }
 
@@ -253,12 +122,12 @@ class ExportEnrolleesController extends Controller
 
     private function isCustomExportType(string $exportType): bool
     {
-        return in_array($exportType, ['MAXI-SCVP', 'MAXI-SCVP-W-PLAN', 'MAXI-ACVP']);
+        return EnrolleeExportDefinition::isCustom($exportType);
     }
 
     private function getConfig(string $exportType): array
     {
-        return self::EXPORT_CONFIGS[$exportType] ?? self::EXPORT_CONFIGS['DEFAULT'];
+        return EnrolleeExportDefinition::config($exportType);
     }
 
     private function determineColumns(Request $request, string $exportType, bool $isForAttachment): array
@@ -317,10 +186,10 @@ class ExportEnrolleesController extends Controller
             });
         }
 
-        Log::info('Applied dependent filters', [
+        /* Log::info('Applied dependent filters', [
             'statuses' => $statuses,
             'will_filter_enrollment_status' => $statuses && count($statuses) > 0
-        ]);
+        ]); */
     }
 
     private function applyHealthInsuranceDateFilters($query, array $filters)
@@ -735,11 +604,14 @@ class ExportEnrolleesController extends Controller
                && $dependent->attachmentForRequirement->file_path;
     }
 
-    private function generateHeaders(array $columns, string $exportType, bool $useDefaultLabels = false): array
+    private function generateHeaders(array $columns, string $exportType, bool $useDefaultLabels = false, array $billingLabels = []): array
     {
         // Use DEFAULT labels if specifically requested (when use_selected_columns is checked)
-        $config = $useDefaultLabels ? self::EXPORT_CONFIGS['DEFAULT'] : $this->getConfig($exportType);
-        return array_map(function ($col) use ($config) {
+        $config = $useDefaultLabels ? EnrolleeExportDefinition::defaultConfig() : $this->getConfig($exportType);
+        return array_map(function ($col) use ($config, $billingLabels) {
+            if (isset($billingLabels[$col])) {
+                return $billingLabels[$col];
+            }
             if ($col === 'unmapped_columns') {
                 return $config['labels']['unmapped_columns'] ?? 'Unmapped Columns';
             }
@@ -747,7 +619,7 @@ class ExportEnrolleesController extends Controller
         }, $columns);
     }
 
-    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false, array $compareRules = []): array
+    private function generateRows($enrollees, array $columns, bool $withDependents, string $exportType, bool $useDefaultValues = false, bool $isRenewal = false, array $compareRules = [], array $billingContext = []): array
     {
         $rows = [];
         $colCount = count($columns);
@@ -758,6 +630,7 @@ class ExportEnrolleesController extends Controller
             // Add principal row
             $row = $this->generateEntityRow($enrollee, $columns, $withDependents, true, null, $isCustom, false);
             $row = $this->applyCompareConfigurationToRow($columns, $row, $compareRules, true, $enrollee, null);
+            $row = $this->applyBillingColumnsToRow($row, $columns, $billingContext, true, (int) $enrollee->id);
             $rows[] = $this->normalizeRowLength($row, $colCount);
 
             // Add dependent rows if needed
@@ -768,6 +641,7 @@ class ExportEnrolleesController extends Controller
                     foreach ($activeDependents as $dependent) {
                         $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, false);
                         $depRow = $this->applyCompareConfigurationToRow($columns, $depRow, $compareRules, false, $dependent, $enrollee);
+                        $depRow = $this->applyBillingColumnsToRow($depRow, $columns, $billingContext, false, (int) $dependent->id);
                         $rows[] = $this->normalizeRowLength($depRow, $colCount);
                     }
                 }
@@ -782,6 +656,7 @@ class ExportEnrolleesController extends Controller
                     foreach ($deletedDependents as $dependent) {
                         $depRow = $this->generateEntityRow($dependent, $columns, $withDependents, false, $enrollee, $isCustom, true);
                         $depRow = $this->applyCompareConfigurationToRow($columns, $depRow, $compareRules, false, $dependent, $enrollee);
+                        $depRow = $this->applyBillingColumnsToRow($depRow, $columns, $billingContext, false, (int) $dependent->id);
                         $rows[] = $this->normalizeRowLength($depRow, $colCount);
                     }
                 }
@@ -1248,7 +1123,7 @@ class ExportEnrolleesController extends Controller
 
     private function getDefaultColumnValue(string $column, $entity): string
     {
-        if (in_array($column, self::INSURANCE_FIELDS)) {
+        if (EnrolleeExportDefinition::isInsuranceField($column)) {
             return $entity->healthInsurance ? ($entity->healthInsurance->$column ?? '') : '';
         }
 
@@ -1259,6 +1134,230 @@ class ExportEnrolleesController extends Controller
         }
 
         return $entity->$column ?? '';
+    }
+
+    private function emptyBillingContext(): array
+    {
+        return [
+            'columns' => [],
+            'labels' => [],
+            'principal_rows' => [],
+            'dependent_rows' => [],
+        ];
+    }
+
+    private function buildBillingContext($enrollees, bool $withDependents, $enrollmentId): array
+    {
+        $context = $this->emptyBillingContext();
+
+        if (empty($enrollmentId) || $enrollees->isEmpty()) {
+            return $context;
+        }
+
+        $principalIds = $enrollees
+            ->pluck('id')
+            ->filter(fn($id) => !empty($id))
+            ->map(fn($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if (empty($principalIds)) {
+            return $context;
+        }
+
+        $dependentIds = [];
+        if ($withDependents) {
+            foreach ($enrollees as $enrollee) {
+                if (!isset($enrollee->dependents)) {
+                    continue;
+                }
+                foreach ($enrollee->dependents as $dependent) {
+                    if (!empty($dependent->id)) {
+                        $dependentIds[] = (int) $dependent->id;
+                    }
+                }
+            }
+        }
+        $dependentIds = array_values(array_unique($dependentIds));
+
+        $records = BillingRecord::query()
+            ->where('enrollment_id', $enrollmentId)
+            ->where(function ($query) use ($principalIds, $dependentIds) {
+                $query->whereIn('principal_id', $principalIds);
+                if (!empty($dependentIds)) {
+                    $query->orWhereIn('dependent_id', $dependentIds);
+                }
+            })
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($records as $record) {
+            $rawColumns = $this->extractBillingColumnsFromRecord($record);
+            $rowValues = $this->mapBillingRowData($record->row_data ?? [], $rawColumns);
+
+            foreach ($rawColumns as $rawColumn) {
+                $normalized = $this->normalizeBillingColumnKey((string) $rawColumn);
+                if (!$normalized) {
+                    continue;
+                }
+
+                $columnKey = 'billing__' . $normalized;
+                if (!in_array($columnKey, $context['columns'], true)) {
+                    $context['columns'][] = $columnKey;
+                }
+
+                if (!isset($context['labels'][$columnKey])) {
+                    $display = trim((string) $rawColumn);
+                    $context['labels'][$columnKey] = $display === '' ? 'Billing Column' : 'Billing - ' . $display;
+                }
+            }
+
+            if (!empty($record->dependent_id) && !isset($context['dependent_rows'][(int) $record->dependent_id])) {
+                $context['dependent_rows'][(int) $record->dependent_id] = $rowValues;
+            } elseif (!empty($record->principal_id) && !isset($context['principal_rows'][(int) $record->principal_id])) {
+                $context['principal_rows'][(int) $record->principal_id] = $rowValues;
+            }
+        }
+
+        return $context;
+    }
+
+    private function extractBillingColumnsFromRecord(BillingRecord $record): array
+    {
+        $columns = [];
+
+        if (is_array($record->column_names)) {
+            foreach ($record->column_names as $columnName) {
+                $name = '';
+                if (is_array($columnName)) {
+                    $name = trim((string) ($columnName['label'] ?? $columnName['key'] ?? ''));
+                } elseif (is_object($columnName)) {
+                    $name = trim((string) ($columnName->label ?? $columnName->key ?? ''));
+                } else {
+                    $name = trim((string) $columnName);
+                }
+
+                if ($name !== '' && !in_array($name, $columns, true) && !$this->isExcludedBillingColumn($name)) {
+                    $columns[] = $name;
+                }
+            }
+        }
+
+        if (empty($columns) && is_array($record->row_data)) {
+            foreach (array_keys($record->row_data) as $columnName) {
+                $name = trim((string) $columnName);
+                if ($name !== '' && !in_array($name, $columns, true) && !$this->isExcludedBillingColumn($name)) {
+                    $columns[] = $name;
+                }
+            }
+        }
+
+        return $columns;
+    }
+
+    private function appendBillingColumns(array $columns, array $billingColumns): array
+    {
+        foreach ($billingColumns as $billingColumn) {
+            if (!in_array($billingColumn, $columns, true)) {
+                $columns[] = $billingColumn;
+            }
+        }
+
+        return $columns;
+    }
+
+    private function normalizeBillingColumnKey(string $column): string
+    {
+        $normalized = strtolower(trim($column));
+        if ($normalized === '') {
+            return '';
+        }
+
+        $normalized = preg_replace('/[^a-z0-9]+/i', '_', $normalized) ?? '';
+        return trim($normalized, '_');
+    }
+
+    private function mapBillingRowData(array $rowData, array $preferredColumns = []): array
+    {
+        $mapped = [];
+
+        foreach ($rowData as $columnName => $value) {
+            if ($this->isExcludedBillingColumn((string) $columnName)) {
+                continue;
+            }
+
+            $normalized = $this->normalizeBillingColumnKey((string) $columnName);
+            if ($normalized === '') {
+                continue;
+            }
+
+            $columnKey = 'billing__' . $normalized;
+            if (is_array($value) || is_object($value)) {
+                $mapped[$columnKey] = json_encode($value, JSON_UNESCAPED_UNICODE) ?: '';
+            } else {
+                $mapped[$columnKey] = $value === null ? '' : (string) $value;
+            }
+        }
+
+        foreach ($preferredColumns as $columnName) {
+            if ($this->isExcludedBillingColumn((string) $columnName)) {
+                continue;
+            }
+
+            $normalized = $this->normalizeBillingColumnKey((string) $columnName);
+            if ($normalized === '') {
+                continue;
+            }
+
+            $columnKey = 'billing__' . $normalized;
+            if (!array_key_exists($columnKey, $mapped)) {
+                $mapped[$columnKey] = '';
+            }
+        }
+
+        return $mapped;
+    }
+
+    private function isExcludedBillingColumn(string $column): bool
+    {
+        $excluded = [
+            'full_name',
+            'employee_id',
+            'birthdate',
+            'created',
+            'enrollment_status',
+            'principal_id',
+            'dependent_id',
+        ];
+
+        return in_array($this->normalizeBillingColumnKey($column), $excluded, true);
+    }
+
+    private function applyBillingColumnsToRow(array $row, array $columns, array $billingContext, bool $isPrincipal, int $entityId): array
+    {
+        if (empty($billingContext['columns']) || $entityId <= 0) {
+            return $row;
+        }
+
+        $entityRows = $isPrincipal
+            ? ($billingContext['principal_rows'] ?? [])
+            : ($billingContext['dependent_rows'] ?? []);
+        $values = $entityRows[$entityId] ?? null;
+
+        if (!is_array($values) || empty($values)) {
+            return $row;
+        }
+
+        foreach ($billingContext['columns'] as $billingColumn) {
+            $index = array_search($billingColumn, $columns, true);
+            if ($index === false) {
+                continue;
+            }
+
+            $row[$index] = $values[$billingColumn] ?? '';
+        }
+
+        return $row;
     }
 
     /**
@@ -1301,12 +1400,12 @@ class ExportEnrolleesController extends Controller
 
     private function getRelationCode(string $relation): string
     {
-        return self::RELATION_CODE_MAP[strtoupper($relation)] ?? 'P';
+        return EnrolleeExportDefinition::relationCode($relation);
     }
 
     private function getCivilStatusCode(string $maritalStatus): string
     {
-        return self::CIVIL_STATUS_CODE_MAP[strtoupper($maritalStatus)] ?? 'S';
+        return EnrolleeExportDefinition::civilStatusCode($maritalStatus);
     }
 
     private function getAddressPart(string $column, string $address): string
