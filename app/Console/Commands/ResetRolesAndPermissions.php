@@ -17,7 +17,7 @@ class ResetRolesAndPermissions extends Command
 
     protected $signature = 'rbac:reset-roles-permissions {--force : Force the operation in production}';
 
-    protected $description = 'Truncate roles/permissions RBAC tables and reseed full RBAC permissions while preserving user-role links';
+    protected $description = 'Truncate RBAC tables, reseed roles/permissions, and remap only admin/admin-se users from legacy users.role';
 
     public function handle(): int
     {
@@ -28,14 +28,10 @@ class ResetRolesAndPermissions extends Command
             return self::FAILURE;
         }
 
-        $userRoleAssignments = DB::table('user_role')
-            ->join('roles', 'roles.id', '=', 'user_role.role_id')
-            ->select('user_role.user_id', 'roles.slug')
-            ->get();
-
         try {
             Schema::disableForeignKeyConstraints();
 
+            DB::table('user_role')->truncate();
             DB::table('permission_role')->truncate();
             DB::table('permissions')->truncate();
             DB::table('roles')->truncate();
@@ -72,43 +68,16 @@ class ResetRolesAndPermissions extends Command
 
         $roleIdBySlug = Role::query()->pluck('id', 'slug');
         $adminSeRoleId = $roleIdBySlug->get('admin-se');
-
-        $restoredAssignments = [];
-
-        foreach ($userRoleAssignments as $assignment) {
-            $roleId = $roleIdBySlug->get($assignment->slug);
-
-            if (! $roleId && $assignment->slug === 'admin' && $adminSeRoleId) {
-                $roleId = $adminSeRoleId;
-            }
-
-            if ($roleId) {
-                $restoredAssignments[] = [
-                    'user_id' => $assignment->user_id,
-                    'role_id' => $roleId,
-                ];
-            }
-        }
-
-        Schema::disableForeignKeyConstraints();
-        DB::table('user_role')->truncate();
-        Schema::enableForeignKeyConstraints();
-
-        if (! empty($restoredAssignments)) {
-            DB::table('user_role')->insertOrIgnore($restoredAssignments);
-        }
+        $adminRoleId = $roleIdBySlug->get('admin');
 
         $legacyAssignments = User::query()
             ->select('id', 'role')
             ->whereNotNull('role')
+            ->whereIn(DB::raw('LOWER(TRIM(role))'), ['admin', 'admin-se'])
             ->get()
-            ->map(function (User $user) use ($roleIdBySlug, $adminSeRoleId) {
+            ->map(function (User $user) use ($adminRoleId, $adminSeRoleId) {
                 $slug = strtolower(trim((string) $user->role));
-                $roleId = $roleIdBySlug->get($slug);
-
-                if (! $roleId && $slug === 'admin' && $adminSeRoleId) {
-                    $roleId = $adminSeRoleId;
-                }
+                $roleId = $slug === 'admin-se' ? $adminSeRoleId : $adminRoleId;
 
                 return [
                     'user_id' => $user->id,
@@ -123,14 +92,7 @@ class ResetRolesAndPermissions extends Command
             DB::table('user_role')->insertOrIgnore($legacyAssignments);
         }
 
-        Schema::disableForeignKeyConstraints();
-        DB::table('user_role')->insertOrIgnore([
-            'user_id' => 1,
-            'role_id' => 1,
-        ]);
-        Schema::enableForeignKeyConstraints();
-
-        $this->info('Roles and permissions were reset, user-role assignments restored, and user 1 was mapped to role 1.');
+        $this->info('Roles and permissions were reset; user_role was truncated and only legacy admin/admin-se users were remapped.');
 
         return self::SUCCESS;
     }

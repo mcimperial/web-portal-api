@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
+use Modules\ClientMasterlist\App\Services\EmailSender;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\EnrollmentRole;
 use Throwable;
@@ -264,7 +265,7 @@ class AccessManagementController extends Controller
         ];
 
         if ($shouldSendInvite) {
-            $invite = $this->dispatchUserInvite($user->email);
+            $invite = $this->dispatchUserInvite($user);
         }
 
         return response()->json([
@@ -275,7 +276,7 @@ class AccessManagementController extends Controller
 
     public function resendUserInvite(User $user): JsonResponse
     {
-        $invite = $this->dispatchUserInvite($user->email);
+        $invite = $this->dispatchUserInvite($user);
 
         return response()->json([
             'user_id' => $user->id,
@@ -290,6 +291,7 @@ class AccessManagementController extends Controller
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email,' . $user->id],
             'password' => ['nullable', 'string', 'min:8'],
+            'send_invite' => ['sometimes', 'boolean'],
             'is_active' => ['sometimes', 'boolean'],
             'role_ids' => ['array'],
             'role_ids.*' => ['integer', 'exists:roles,id'],
@@ -324,7 +326,22 @@ class AccessManagementController extends Controller
 
         $this->logUpdate($user, $old, ['action' => 'user_update']);
 
-        return response()->json($user);
+        $shouldSendInvite = $validated['send_invite'] ?? false;
+        $invite = [
+            'attempted' => false,
+            'sent' => false,
+            'status' => null,
+            'message' => null,
+        ];
+
+        if ($shouldSendInvite) {
+            $invite = $this->dispatchUserInvite($user);
+        }
+
+        return response()->json([
+            'user' => $user,
+            'invite' => $invite,
+        ]);
     }
 
     public function setUserStatus(Request $request, User $user): JsonResponse
@@ -476,25 +493,35 @@ class AccessManagementController extends Controller
         return;
     }
 
-    private function dispatchUserInvite(string $email): array
+    private function dispatchUserInvite(User $user): array
     {
         try {
-            $status = Password::sendResetLink(['email' => $email]);
+            $token = Password::broker()->createToken($user);
+            $resetUrl = config('app.frontend_url') . '/password-reset/' . $token . '?email=' . urlencode($user->getEmailForPasswordReset());
 
-            if ($status === Password::RESET_LINK_SENT) {
+            $subject = 'Set Up Your Account Password';
+            $body = $this->buildUserInviteEmailHtml($user, $resetUrl);
+
+            $sent = (new EmailSender(
+                email: $user->email,
+                body: $body,
+                subject: $subject
+            ))->send();
+
+            if ($sent) {
                 return [
                     'attempted' => true,
                     'sent' => true,
-                    'status' => $status,
-                    'message' => __($status),
+                    'status' => Password::RESET_LINK_SENT,
+                    'message' => 'Invite email sent successfully via Infobip.',
                 ];
             }
 
             return [
                 'attempted' => true,
                 'sent' => false,
-                'status' => $status,
-                'message' => __($status),
+                'status' => 'invite_send_failed',
+                'message' => 'Infobip did not confirm the invite email send.',
             ];
         } catch (Throwable $exception) {
             report($exception);
@@ -506,6 +533,25 @@ class AccessManagementController extends Controller
                 'message' => $exception->getMessage(),
             ];
         }
+    }
+
+    private function buildUserInviteEmailHtml(User $user, string $resetUrl): string
+    {
+        $name = e($user->name ?? 'User');
+        $safeResetUrl = e($resetUrl);
+
+        return "
+            <div style=\"font-family:Arial,sans-serif;line-height:1.5;color:#111827;\">
+                <p>Hello {$name},</p>
+                <p>Your account has been created or updated. Please set your password using the link below:</p>
+                <p>
+                    <a href=\"{$safeResetUrl}\" style=\"display:inline-block;padding:10px 16px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:6px;\">Set Password</a>
+                </p>
+                <p>If the button does not work, copy and paste this URL into your browser:</p>
+                <p><a href=\"{$safeResetUrl}\">{$safeResetUrl}</a></p>
+                <p>If you did not expect this email, you can ignore it.</p>
+            </div>
+        ";
     }
 
     private function syncUserRolesWithGuard(User $actor, User $target, array $roleIds): void
