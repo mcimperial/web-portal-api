@@ -5,72 +5,57 @@ namespace Modules\ClientMasterlist\App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Modules\ClientMasterlist\App\Models\Enrollment;
-use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
 use App\Http\Traits\LogsActions;
 use Illuminate\Support\Facades\Schema;
-
+use Modules\ClientMasterlist\App\Http\Middleware\EnsureEnrollmentAccess;
+use Modules\ClientMasterlist\App\Http\Requests\Enrollments\AssignEnrollmentUserRequest;
+use Modules\ClientMasterlist\App\Http\Requests\Enrollments\StoreEnrollmentRequest;
+use Modules\ClientMasterlist\App\Http\Requests\Enrollments\UpdateEnrollmentRequest;
 use Modules\ClientMasterlist\App\Models\UserCM;
 use Modules\ClientMasterlist\App\Models\EnrollmentRole;
+use Modules\ClientMasterlist\App\Services\Enrollments\EnrollmentAccessService;
+use Modules\ClientMasterlist\App\Services\Enrollments\EnrollmentPayloadService;
 
 class EnrollmentController extends Controller
 {
-    use UppercaseInput, PasswordDeleteValidation, LogsActions;
+    use PasswordDeleteValidation, LogsActions;
+
+    public function __construct(
+        private readonly EnrollmentPayloadService $payloadService,
+        private readonly EnrollmentAccessService $accessService,
+    ) {
+        $this->middleware(EnsureEnrollmentAccess::class)->only(['show', 'getEnrollmentAccess']);
+    }
 
     public function index()
     {
+        $user = request()->user();
         $ids = request()->query('ids');
-        $isadmin = request()->query('isadmin');
+        $isadmin = $this->accessService->isAdmin($user);
 
         if (!$isadmin) {
-            $idArray = array_filter(array_map('intval', explode(',', $ids)));
+            $assigned = EnrollmentRole::where('user_id', $user->id)
+                ->pluck('enrollment_id')
+                ->filter()
+                ->values()
+                ->all();
+
+            $requested = array_filter(array_map('intval', explode(',', (string) $ids)));
+            $idArray = empty($requested)
+                ? $assigned
+                : array_values(array_intersect($assigned, $requested));
+
             return Enrollment::whereIn('id', $idArray)->get();
-        } else {
-            return Enrollment::all();
         }
 
         return Enrollment::all();
     }
 
-    public function store(Request $request)
+    public function store(StoreEnrollmentRequest $request)
     {
-        $validated = $request->validate([
-            'company_id' => 'nullable|integer|exists:company,id',
-            'insurance_provider_id' => 'nullable|integer|exists:cm_insurance_provider,id',
-            'title' => 'nullable|string',
-            'note' => 'nullable|string',
-            'account_code' => 'nullable|string',
-            'plan_code' => 'nullable|string',
-            'export_compare_configuration' => 'nullable|string',
-            'premium' => 'nullable|numeric',
-            'premium_computation' => 'nullable|string',
-            'premium_variable' => 'nullable|string',
-            'with_monthly' => 'nullable|boolean',
-            'age_restriction' => 'nullable|string',
-            'hierarchy_options' => 'nullable|string',
-            'premium_restriction' => 'nullable|string',
-            'principal_mbl' => 'nullable|numeric',
-            'principal_room_and_board' => 'nullable|string',
-            'dependent_mbl' => 'nullable|numeric',
-            'dependent_room_and_board' => 'nullable|string',
-            'with_address' => 'nullable|boolean',
-            'with_skip_hierarchy' => 'nullable|boolean',
-            'export_type' => 'nullable|string',
-            'with_optout' => 'nullable|boolean',
-            'status' => 'nullable|string',
-        ]);
-        // Only uppercase string fields, keep ids as is
-        $validated = $this->uppercaseStrings($validated);
-        if (isset($validated['company_id'])) {
-            $validated['company_id'] = (int) $request->input('company_id');
-        }
-        if (isset($validated['insurance_provider_id'])) {
-            $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
-        }
-        if (array_key_exists('export_compare_configuration', $validated)) {
-            $validated['export_compare_configuration'] = $request->input('export_compare_configuration');
-        }
-        $enrollment = Enrollment::create($validated);
+        $payload = $this->payloadService->prepare($request->validated(), $request);
+        $enrollment = Enrollment::create($payload);
         
         // Log the create action
         $this->logCreate($enrollment, ['request_data' => $request->all()]);
@@ -78,44 +63,9 @@ class EnrollmentController extends Controller
         return response()->json($enrollment, 201);
     }
 
-    public function show(Request $request, $id)
+    public function show($id)
     {
-        $enrollment = Enrollment::findOrFail($id);
-        $user = $request->user();
-
-        // Check if user has access to this enrollment
-        if (!$this->userHasAccessToEnrollment($user, $enrollment)) {
-            return response()->json([
-                'message' => 'Unauthorized access to this enrollment'
-            ], 403);
-        }
-
-        return $enrollment;
-    }
-
-    /**
-     * Check if user has access to a specific enrollment
-     */
-    private function userHasAccessToEnrollment($user, $enrollment): bool
-    {
-        // Admin roles have access to all enrollments
-        if ($user->hasRole('admin') || 
-            $user->hasRole('admin-se') || 
-            $user->hasRole('manager-se')) {
-            return true;
-        }
-
-        // Check if user is assigned to this enrollment
-        $hasEnrollmentRole = EnrollmentRole::where('user_id', $user->id)
-            ->where('enrollment_id', $enrollment->id)
-            ->exists();
-
-        if ($hasEnrollmentRole) {
-            return true;
-        }
-
-        // Viewer-se role should not have access by default unless assigned
-        return false;
+        return Enrollment::findOrFail($id);
     }
 
     /**
@@ -123,72 +73,15 @@ class EnrollmentController extends Controller
      */
     public function getEnrollmentAccess(Request $request, $id)
     {
-        $enrollment = Enrollment::findOrFail($id);
-        $user = $request->user();
-
-        if (!$this->userHasAccessToEnrollment($user, $enrollment)) {
-            return response()->json([
-                'message' => 'Unauthorized access to this enrollment'
-            ], 403);
-        }
-
-        // Determine permissions
-        $isAdmin = $user->hasRole('admin') || 
-                   $user->hasRole('admin-se') || 
-                   $user->hasRole('manager-se');
-
-        $canEdit = $isAdmin;
-        $canView = true; // If they have access, they can view
-
-        return response()->json([
-            'can_edit' => $canEdit,
-            'can_view' => $canView,
-            'is_admin' => $isAdmin,
-            'role' => $user->roles->first()?->slug ?? null,
-        ]);
+        return response()->json($this->accessService->accessPayload($request->user()));
     }
 
-    public function update(Request $request, $id)
+    public function update(UpdateEnrollmentRequest $request, $id)
     {
         $enrollment = Enrollment::findOrFail($id);
         $oldValues = $enrollment->toArray();
-        $validated = $request->validate([
-            'company_id' => 'nullable|integer|exists:company,id',
-            'insurance_provider_id' => 'nullable|integer|exists:cm_insurance_provider,id',
-            'title' => 'nullable|string',
-            'note' => 'nullable|string',
-            'account_code' => 'nullable|string',
-            'plan_code' => 'nullable|string',
-            'export_compare_configuration' => 'nullable|string',
-            'premium' => 'nullable|numeric',
-            'premium_computation' => 'nullable|string',
-            'premium_variable' => 'nullable|string',
-            'with_monthly' => 'nullable|boolean',
-            'age_restriction' => 'nullable|string',
-            'hierarchy_options' => 'nullable|string',
-            'premium_restriction' => 'nullable|string',
-            'principal_mbl' => 'nullable|numeric',
-            'principal_room_and_board' => 'nullable|string',
-            'dependent_mbl' => 'nullable|numeric',
-            'dependent_room_and_board' => 'nullable|string',
-            'with_address' => 'nullable|boolean',
-            'with_skip_hierarchy' => 'nullable|boolean',
-            'export_type' => 'nullable|string',
-            'with_optout' => 'nullable|boolean',
-            'status' => 'nullable|string',
-        ]);
-        // Only uppercase string fields, keep ids as is
-        $validated = $this->uppercaseStrings($validated);
-        if (isset($validated['company_id'])) {
-            $validated['company_id'] = (int) $request->input('company_id');
-        }
-        if (isset($validated['insurance_provider_id'])) {
-            $validated['insurance_provider_id'] = (int) $request->input('insurance_provider_id');
-        }
-        if (array_key_exists('export_compare_configuration', $validated)) {
-            $validated['export_compare_configuration'] = $request->input('export_compare_configuration');
-        }
-        $enrollment->update($validated);
+        $payload = $this->payloadService->prepare($request->validated(), $request);
+        $enrollment->update($payload);
         
         // Log the update action
         $this->logUpdate($enrollment, $oldValues, ['request_data' => $request->all()]);
@@ -226,12 +119,9 @@ class EnrollmentController extends Controller
         return EnrollmentRole::with(['user', 'enrollment'])->get();
     }
 
-    public function assignUserToEnrollment(Request $request)
+    public function assignUserToEnrollment(AssignEnrollmentUserRequest $request)
     {
-        $validated = $request->validate([
-            'user_id' => 'required|integer|exists:users,id',
-            'enrollment_id' => 'required|integer|exists:cm_enrollment,id',
-        ]);
+        $validated = $request->validated();
 
         // Check if the assignment already exists
         $existing = EnrollmentRole::where('user_id', $validated['user_id'])

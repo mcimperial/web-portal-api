@@ -1,18 +1,6 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\ClientMasterlist\App\Http\Controllers\InsuranceProviderController;
-use Modules\ClientMasterlist\App\Http\Controllers\EnrollmentController;
-use Modules\ClientMasterlist\App\Http\Controllers\EnrolleeController;
-use Modules\ClientMasterlist\App\Http\Controllers\EnrolleeManageDependentController;
-
-use Modules\ClientMasterlist\App\Http\Controllers\DependentController;
-use Modules\ClientMasterlist\App\Http\Controllers\AttachmentController;
-use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
-use Modules\ClientMasterlist\App\Http\Controllers\ImportEnrolleeController;
-use Modules\ClientMasterlist\App\Http\Controllers\SendNotificationController;
-use Modules\ClientMasterlist\App\Http\Controllers\NotificationController;
-use Modules\ClientMasterlist\App\Http\Controllers\ActionLogController;
 
 /*
     |--------------------------------------------------------------------------
@@ -25,87 +13,25 @@ use Modules\ClientMasterlist\App\Http\Controllers\ActionLogController;
     |
 */
 
-// Protected routes (auth:sanctum)
-Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function () {
-    //Route::get('clientmasterlist', fn(Request $request) => $request->user())->name('clientmasterlist');
+$protectedRouteFiles = [
+    __DIR__.'/api/protected/imports.php',
+    __DIR__.'/api/protected/catalog.php',
+    __DIR__.'/api/protected/enrollments.php',
+    __DIR__.'/api/protected/billing.php',
+    __DIR__.'/api/protected/enrollees.php',
+    __DIR__.'/api/protected/communications.php',
+    __DIR__.'/api/protected/action-logs.php',
+];
 
-    // Import enrollees (with dependents and health insurance)
-    Route::post('import', [ImportEnrolleeController::class, 'import']);
-
-    // Import enrollees (with dependents and health insurance)
-    Route::post('import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider']);
-
-    // Get import logs for an enrollment
-    Route::get('import-logs', [ImportEnrolleeController::class, 'getImportLogs']);
-
-    // Compare latest temp import rows against existing data in other enrollments
-    Route::post('import-temp/compare', [ImportEnrolleeController::class, 'compareTempImportData']);
-
-    // Download import log as text file
-    Route::get('import-logs/{id}/download', [ImportEnrolleeController::class, 'downloadImportLog']);
-
-    // Insurance Providers CRUD
-    Route::apiResource('insurance-providers', InsuranceProviderController::class);
-
-    Route::controller(EnrollmentController::class)->group(function () {
-        Route::get('enrollments/get-users', 'getUsers');
-        Route::get('enrollments/get-enrollment-roles', 'getEnrollmentRoles');
-        Route::post('enrollments/assign-user', 'assignUserToEnrollment');
-        Route::delete('enrollments/remove-user/{id}', 'removeUserFromEnrollment');
-        Route::get('enrollments/{id}/access', 'getEnrollmentAccess');
+Route::middleware(['auth:sanctum'])
+    ->prefix('v1')
+    ->name('api.')
+    ->group(function () use ($protectedRouteFiles) {
+        foreach ($protectedRouteFiles as $routeFile) {
+            require $routeFile;
+        }
     });
 
-    // Enrollment CRUD
-    Route::apiResource('enrollments', EnrollmentController::class);
-
-    // Export enrollees as CSV (must be above apiResource to avoid shadowing)
-    Route::get('enrollees/export', [ExportEnrolleesController::class, 'exportEnrollees']);
-    // Export enrollees and update SUBMITTED → FOR-APPROVAL (separate from read-only export)
-    Route::get('enrollees/export-with-update', [ExportEnrolleesController::class, 'exportAndUpdateEnrollees']);
-
-    Route::get('/enrollees/select', [EnrolleeController::class, 'getAllForSelect']);
-
-    // Enrollee CRUD
-    Route::apiResource('enrollees', EnrolleeController::class);
-
-    // Update card delivery status
-    Route::put('enrollees/{id}/card-delivery', [EnrolleeController::class, 'updateCardDelivery']);
-
-    // Dependents CRUD
-    Route::apiResource('dependents', DependentController::class);
-
-    // Notification CRUD API
-    Route::controller(NotificationController::class)->group(function () {
-        Route::get('notifications/enrollees', 'enrollees');
-        Route::get('notifications/{enrolleeId}', 'index');
-        Route::get('notifications/single/{enrolleeId}', 'single');
-        Route::post('notifications', 'store');
-        Route::put('notifications/{id}', 'update');
-        Route::delete('notifications/{id}', 'destroy');
-    });
-
-    // Send Notification API
-    Route::post('send-notification', [SendNotificationController::class, 'send']);
-
-    // Action Logs API
-    Route::controller(ActionLogController::class)->group(function () {
-        Route::get('action-logs/latest', 'getLatestForEnrollment');
-        Route::get('action-logs/all', 'getAllForEnrollment');
-    });
-});
-
-// Public Attachments CRUD (no auth)
-Route::prefix('v1')->name('api.')->group(function () {
-    Route::apiResource('attachments', AttachmentController::class);
-
-    Route::controller(EnrolleeManageDependentController::class)->group(function () {
-        Route::get('enrollee-manage-information/{uuid}', 'show');
-        Route::put('enrollee-manage-information/{uuid}', 'update');
-        Route::put('enrollee-manage-information/name/{uuid}', 'updateName');
-        Route::put('enrollee-manage-information/gender/{uuid}', 'updateGender');
-        Route::put('enrollee-manage-information/marital-status/{uuid}', 'updateMaritalStatus');
-        Route::put('enrollee-manage-information/address/{uuid}', 'updateAddress');
-        Route::put('enrollee-manage-information/update-on-renewal/{uuid}', 'updateOnRenewal');
-        Route::post('enrollee-manage-dependents/{enrollee}/dependents/batch', 'storeBatch');
-    });
-});
+Route::prefix('v1')
+    ->name('api.')
+    ->group(__DIR__.'/api/public.php');

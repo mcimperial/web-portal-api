@@ -238,7 +238,7 @@ class EnrolleeController extends Controller
      */
     private function buildSelectQuery(array $filters)
     {
-        $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'enrollment_status', 'enrollment_id', 'email1');
+        $query = Enrollee::select('id', 'employee_id', 'first_name', 'last_name', 'middle_name', 'birth_date', 'enrollment_status', 'enrollment_id', 'email1');
 
         $this->applyEnrollmentIdFilter($query, $filters['enrollment_id']);
         $this->applyEnrollmentStatusFilter($query, $filters['enrollment_status']);
@@ -351,6 +351,7 @@ class EnrolleeController extends Controller
                 'first_name' => $enrollee->first_name,
                 'last_name' => $enrollee->last_name,
                 'middle_name' => $enrollee->middle_name,
+                'birth_date' => $enrollee->birth_date,
                 'enrollment_status' => $enrollee->enrollment_status,
                 'enrollment_id' => $enrollee->enrollment_id,
                 'email1' => $enrollee->email1,

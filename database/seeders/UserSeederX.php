@@ -24,6 +24,10 @@ class UserSeederX extends Seeder
                 'email_verified_at' => now()
             ]
         );
-        $testUser->roles()->sync(Role::where('slug', 'employee-se')->first()->id);
+
+        $employeeRole = Role::where('slug', 'employee-se')->first();
+        if ($employeeRole) {
+            $testUser->roles()->syncWithoutDetaching([$employeeRole->id]);
+        }
     }
 }

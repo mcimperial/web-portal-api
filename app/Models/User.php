@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Spatie\Permission\Traits\HasRoles;
 
 use Modules\ClientMasterlist\App\Models\EnrollmentRole;
+use Modules\ClientMasterlist\App\Models\Enrollment;
 
 class User extends Authenticatable
 {
@@ -24,6 +25,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'is_active',
         'device_name',
         'social_providers',
         'email_verified_at',
@@ -55,6 +57,7 @@ class User extends Authenticatable
         'email_verified_at' => 'datetime',
         'email_otp_expires_at' => 'datetime',
         'password' => 'hashed',
+        'is_active' => 'boolean',
         'social_providers' => 'array',
     ];
 
@@ -67,7 +70,7 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(
             Permission::class,
-            'role_permission',
+            'permission_role',
             'role_id',
             'permission_id'
         );
@@ -93,11 +96,65 @@ class User extends Authenticatable
         return $this->hasMany(EnrollmentRole::class, 'user_id');
     }
 
+    public function enrollmentAssignments()
+    {
+        return $this->hasMany(EnrollmentRole::class, 'user_id');
+    }
+
+    public function assignedEnrollments(): BelongsToMany
+    {
+        return $this->belongsToMany(
+            Enrollment::class,
+            'cm_enrollment_role',
+            'user_id',
+            'enrollment_id'
+        );
+    }
+
     /**
      * Get only the enrollment_id values for this user.
      */
     public function enrollmentIds(): array
     {
         return $this->hasEnrollmentRole()->pluck('enrollment_id')->filter()->unique()->values()->toArray();
+    }
+
+    public function isSuperAdmin(): bool
+    {
+        $superAdminRoles = config('rbac.super_admin_roles', ['admin', 'admin-se']);
+        return $this->roles()->whereIn('slug', $superAdminRoles)->exists();
+    }
+
+    public function hasModulePermission(string $module, string $action): bool
+    {
+        if (!$this->is_active) {
+            return false;
+        }
+
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        $module = strtolower(trim($module));
+        $action = strtolower(trim($action));
+
+        $allowedActions = config('rbac.actions', ['view', 'export', 'create', 'update', 'delete']);
+        if (!in_array($action, $allowedActions, true)) {
+            return false;
+        }
+
+        if ($action === 'export' && config('rbac.export_requires_view', true)) {
+            if (!$this->hasModulePermission($module, 'view')) {
+                return false;
+            }
+        }
+
+        return $this->roles()
+            ->whereHas('permissions', function ($query) use ($module, $action) {
+                $query->where('slug', "{$module}.{$action}")
+                    ->orWhere(function ($legacy) use ($module, $action) {
+                        $legacy->where('app', $module)->where('sub_app', $action);
+                    });
+            })->exists();
     }
 }

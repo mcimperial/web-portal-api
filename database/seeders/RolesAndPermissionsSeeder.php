@@ -10,36 +10,46 @@ class RolesAndPermissionsSeeder extends Seeder
 {
     public function run(): void
     {
-        // Create roles
-        $adminRole = Role::create([
-            'name' => 'Administrator',
-            'slug' => 'admin-se',
-            'description' => 'System Administrator'
-        ]);
+        // Create or update roles
+        $adminRole = Role::query()->updateOrCreate(
+            ['slug' => 'admin-se'],
+            [
+                'name' => 'Administrator',
+                'description' => 'System Administrator',
+            ]
+        );
 
-        $managerRole = Role::create([
-            'name' => 'Manager: Self Enrollment',
-            'slug' => 'manager-se',
-            'description' => 'Department Manager Self Enrollment'
-        ]);
+        $managerRole = Role::query()->updateOrCreate(
+            ['slug' => 'manager-se'],
+            [
+                'name' => 'Manager: Self Enrollment',
+                'description' => 'Department Manager Self Enrollment',
+            ]
+        );
 
-        $employeeRole = Role::create([
-            'name' => 'Employee: Self Enrollment',
-            'slug' => 'employee-se',
-            'description' => 'Regular Employee Self Enrollment'
-        ]);
+        $employeeRole = Role::query()->updateOrCreate(
+            ['slug' => 'employee-se'],
+            [
+                'name' => 'Employee: Self Enrollment',
+                'description' => 'Regular Employee Self Enrollment',
+            ]
+        );
 
-        $viewerRole = Role::create([
-            'name' => 'Viewer: Self Enrollment',
-            'slug' => 'viewer-se',
-            'description' => 'Viewer Self Enrollment'
-        ]);
+        $viewerRole = Role::query()->updateOrCreate(
+            ['slug' => 'viewer-se'],
+            [
+                'name' => 'Viewer: Self Enrollment',
+                'description' => 'Viewer Self Enrollment',
+            ]
+        );
 
-        $guestRole = Role::create([
-            'name' => 'Guest',
-            'slug' => 'guest',
-            'description' => 'Guest User'
-        ]);
+        Role::query()->updateOrCreate(
+            ['slug' => 'guest'],
+            [
+                'name' => 'Guest',
+                'description' => 'Guest User',
+            ]
+        );
 
         // Create permissions with app and sub_app
         $permissions = [
@@ -128,22 +138,31 @@ class RolesAndPermissionsSeeder extends Seeder
             ],
         ];
 
-        // Create permissions
+        // Create or update permissions
         foreach ($permissions as $perm) {
-            Permission::create($perm);
+            Permission::query()->updateOrCreate(
+                [
+                    'slug' => $perm['slug'],
+                    'sub_app' => $perm['sub_app'],
+                ],
+                $perm
+            );
         }
 
         // Assign permissions to roles
-        $adminRole->permissions()->attach(Permission::where('app', 'self-enrollment')->get());
-        $adminRole->permissions()->attach(Permission::where('app', 'dashboard')->get());
-        $adminRole->permissions()->attach(Permission::where('app', 'hr-portal')->get());
+        $adminRole->permissions()->syncWithoutDetaching(
+            Permission::query()
+                ->whereIn('app', ['self-enrollment', 'dashboard', 'hr-portal'])
+                ->pluck('id')
+                ->all()
+        );
 
-        $managerRole->permissions()->attach(Permission::where(function ($q) {
+        $managerRole->permissions()->syncWithoutDetaching(Permission::query()->where(function ($q) {
             $q->where('sub_app', 'manager-se')->orWhere('app', 'dashboard');
-        })->get());
+        })->pluck('id')->all());
 
-        $employeeRole->permissions()->attach(Permission::where(function ($q) {
+        $employeeRole->permissions()->syncWithoutDetaching(Permission::query()->where(function ($q) {
             $q->where('sub_app', 'employee-se')->orWhere('app', 'dashboard');
-        })->get());
+        })->pluck('id')->all());
     }
 }

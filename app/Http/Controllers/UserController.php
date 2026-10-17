@@ -15,6 +15,13 @@ class UserController extends Controller
 
         //$user->load('hasEnrollmentRole');
         $user->enrollment_ids = method_exists($user, 'enrollmentIds') ? $user->enrollmentIds() : [];
+        $user->is_active = (bool) ($user->is_active ?? true);
+        $user->effective_permissions = $user->roles
+            ->flatMap(fn($role) => $role->permissions)
+            ->pluck('slug')
+            ->filter()
+            ->unique()
+            ->values();
 
         return response()->json($user);
     }

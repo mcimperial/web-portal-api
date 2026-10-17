@@ -28,34 +28,34 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     // Sync operations
     Route::controller(SyncController::class)->group(function () {
         // Test sync database connection
-        Route::get('sync/test-connection', 'testConnection');
+        Route::get('sync/test-connection', 'testConnection')->middleware('rbac:third_party_api,view');
         
         // Get all tables from sync database
-        Route::get('sync/tables', 'getTables');
+        Route::get('sync/tables', 'getTables')->middleware('rbac:third_party_api,view');
         
         // Get data from a specific table
-        Route::get('sync/tables/{table}', 'getTableData');
+        Route::get('sync/tables/{table}', 'getTableData')->middleware('rbac:third_party_api,view');
         
         // Sync specific table data
-        Route::post('sync/tables/{table}', 'syncTableData');
+        Route::post('sync/tables/{table}', 'syncTableData')->middleware('rbac:third_party_api,update');
         
         // Full sync operation
-        Route::post('sync/full-sync', 'fullSync');
+        Route::post('sync/full-sync', 'fullSync')->middleware('rbac:third_party_api,update');
         
         // Get sync status
-        Route::get('sync/status', 'getSyncStatus');
+        Route::get('sync/status', 'getSyncStatus')->middleware('rbac:third_party_api,view');
     });
 
     // -------------------------------------------------------------------------
     // API Credentials management (admin only, Sanctum-protected)
     // -------------------------------------------------------------------------
     Route::prefix('third-party/credentials')->name('credentials.')->controller(ApiCredentialController::class)->group(function () {
-        Route::get('/',             'index')->name('index');
-        Route::post('/',            'store')->name('store');
-        Route::get('/{id}',         'show')->name('show');
-        Route::put('/{id}',         'update')->name('update');
-        Route::delete('/{id}',      'destroy')->name('destroy');
-        Route::post('/{id}/regenerate', 'regenerateKey')->name('regenerate');
+        Route::get('/',             'index')->middleware('rbac:third_party_api,view')->name('index');
+        Route::post('/',            'store')->middleware('rbac:third_party_api,create')->name('store');
+        Route::get('/{id}',         'show')->middleware('rbac:third_party_api,view')->name('show');
+        Route::put('/{id}',         'update')->middleware('rbac:third_party_api,update')->name('update');
+        Route::delete('/{id}',      'destroy')->middleware('rbac:third_party_api,delete')->name('destroy');
+        Route::post('/{id}/regenerate', 'regenerateKey')->middleware('rbac:third_party_api,update')->name('regenerate');
     });
 });
 
