@@ -25,11 +25,7 @@ class EnrollmentAccessService
 
     public function isAdmin($user): bool
     {
-        if ($user->isSuperAdmin()) {
-            return true;
-        }
-
-        return $user->hasModulePermission('enrollments', 'update');
+        return $user->isSuperAdmin();
     }
 
     public function accessPayload($user): array

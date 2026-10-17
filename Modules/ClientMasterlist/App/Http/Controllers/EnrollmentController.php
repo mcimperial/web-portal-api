@@ -25,7 +25,12 @@ class EnrollmentController extends Controller
         private readonly EnrollmentPayloadService $payloadService,
         private readonly EnrollmentAccessService $accessService,
     ) {
-        $this->middleware(EnsureEnrollmentAccess::class)->only(['show', 'getEnrollmentAccess']);
+        $this->middleware(EnsureEnrollmentAccess::class)->only([
+            'show',
+            'getEnrollmentAccess',
+            'update',
+            'destroy',
+        ]);
     }
 
     public function index()
