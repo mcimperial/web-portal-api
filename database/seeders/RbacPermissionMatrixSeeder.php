@@ -14,21 +14,29 @@ class RbacPermissionMatrixSeeder extends Seeder
         $modules = config('rbac.modules', []);
         $actions = config('rbac.actions', []);
 
+        $upsertPermission = static function (array $permission): void {
+            Permission::query()->updateOrCreate(
+                ['slug' => $permission['slug']],
+                [
+                    'name' => $permission['name'],
+                    'description' => $permission['description'],
+                    'app' => $permission['app'],
+                    'sub_app' => $permission['sub_app'],
+                    'link' => $permission['link'] ?? null,
+                    'is_system' => true,
+                ]
+            );
+        };
+
         foreach ($modules as $module) {
             foreach ($actions as $action) {
-                $slug = "{$module}.{$action}";
-
-                Permission::query()->updateOrCreate(
-                    ['slug' => $slug],
-                    [
-                        'name' => strtoupper($module) . ': ' . strtoupper($action),
-                        'description' => "{$action} access for {$module}",
-                        'app' => $module,
-                        'sub_app' => $action,
-                        'link' => null,
-                        'is_system' => true,
-                    ]
-                );
+                $upsertPermission([
+                    'slug' => "{$module}.{$action}",
+                    'name' => strtoupper($module) . ': ' . strtoupper($action),
+                    'description' => "{$action} access for {$module}",
+                    'app' => $module,
+                    'sub_app' => $action,
+                ]);
             }
         }
 
@@ -76,11 +84,39 @@ class RbacPermissionMatrixSeeder extends Seeder
                 'sub_app' => 'enrollees-import-company-provider',
             ],
             [
-                'slug' => 'self-enrollment.enrollees.manage-notifications',
-                'name' => 'Manage Notifications',
-                'description' => 'Show Manage Notifications button/actions for enrollees',
+                'slug' => 'self-enrollment.enrollees.notifications.view',
+                'name' => 'Notifications: View',
+                'description' => 'View notifications list and details for enrollees',
                 'app' => 'self-enrollment',
-                'sub_app' => 'enrollees-manage-notifications',
+                'sub_app' => 'enrollees-notifications-view',
+            ],
+            [
+                'slug' => 'self-enrollment.enrollees.notifications.send',
+                'name' => 'Notifications: Send',
+                'description' => 'Send saved notifications to enrollees',
+                'app' => 'self-enrollment',
+                'sub_app' => 'enrollees-notifications-send',
+            ],
+            [
+                'slug' => 'self-enrollment.enrollees.notifications.create',
+                'name' => 'Notifications: Create',
+                'description' => 'Create new notifications for enrollees',
+                'app' => 'self-enrollment',
+                'sub_app' => 'enrollees-notifications-create',
+            ],
+            [
+                'slug' => 'self-enrollment.enrollees.notifications.update',
+                'name' => 'Notifications: Update',
+                'description' => 'Edit existing notifications for enrollees',
+                'app' => 'self-enrollment',
+                'sub_app' => 'enrollees-notifications-update',
+            ],
+            [
+                'slug' => 'self-enrollment.enrollees.notifications.delete',
+                'name' => 'Notifications: Delete',
+                'description' => 'Delete notifications for enrollees',
+                'app' => 'self-enrollment',
+                'sub_app' => 'enrollees-notifications-delete',
             ],
             [
                 'slug' => 'self-enrollment.enrollees.card-delivery',
@@ -120,17 +156,7 @@ class RbacPermissionMatrixSeeder extends Seeder
         ];
 
         foreach ($enrolleeUiPermissions as $permission) {
-            Permission::query()->updateOrCreate(
-                ['slug' => $permission['slug']],
-                [
-                    'name' => $permission['name'],
-                    'description' => $permission['description'],
-                    'app' => $permission['app'],
-                    'sub_app' => $permission['sub_app'],
-                    'link' => null,
-                    'is_system' => true,
-                ]
-            );
+            $upsertPermission($permission);
         }
 
         $pagePermissions = [
@@ -193,17 +219,7 @@ class RbacPermissionMatrixSeeder extends Seeder
         ];
 
         foreach ($pagePermissions as $permission) {
-            Permission::query()->updateOrCreate(
-                ['slug' => $permission['slug']],
-                [
-                    'name' => $permission['name'],
-                    'description' => $permission['description'],
-                    'app' => $permission['app'],
-                    'sub_app' => $permission['sub_app'],
-                    'link' => $permission['link'],
-                    'is_system' => true,
-                ]
-            );
+            $upsertPermission($permission);
         }
 
         $allPermissionIds = Permission::query()->pluck('id')->all();

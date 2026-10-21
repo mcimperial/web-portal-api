@@ -149,6 +149,14 @@ class User extends Authenticatable
             }
         }
 
+        $aliasKey = "{$module}.{$action}";
+        $aliases = config('rbac.module_action_aliases.' . $aliasKey, []);
+        foreach ((array) $aliases as $aliasPermissionSlug) {
+            if (is_string($aliasPermissionSlug) && $aliasPermissionSlug !== '' && $this->hasPermission($aliasPermissionSlug)) {
+                return true;
+            }
+        }
+
         return $this->roles()
             ->whereHas('permissions', function ($query) use ($module, $action) {
                 $query->where('slug', "{$module}.{$action}")
