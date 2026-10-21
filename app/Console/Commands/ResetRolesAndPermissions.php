@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Role;
+use App\Models\Permission;
 use App\Models\User;
 use Database\Seeders\RbacPermissionMatrixSeeder;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -54,6 +55,18 @@ class ResetRolesAndPermissions extends Command
 
             return self::FAILURE;
         }
+
+        Permission::query()->updateOrCreate(
+            ['slug' => 'self-enrollment.enrollees.manage-notifications'],
+            [
+                'name' => 'Manage Notifications',
+                'description' => 'Show Manage Notifications button/actions for enrollees',
+                'app' => 'self-enrollment',
+                'sub_app' => 'enrollees-manage-notifications',
+                'link' => null,
+                'is_system' => true,
+            ]
+        );
 
         $exitCode = $this->call('db:seed', [
             '--class' => RbacPermissionMatrixSeeder::class,
