@@ -22,6 +22,17 @@ class EmailSender
         public $bcc = []
     ) {}
 
+    private function createInfobipClient(): Client
+    {
+        $timeout = (float) env('INFOBIP_TIMEOUT', 15);
+        $connectTimeout = (float) env('INFOBIP_CONNECT_TIMEOUT', 5);
+
+        return new Client([
+            'timeout' => max(1, $timeout),
+            'connect_timeout' => max(1, $connectTimeout),
+        ]);
+    }
+
     private function defaultSendMail()
     {
         $tempFiles = [];
@@ -121,14 +132,13 @@ class EmailSender
             });
             Log::info('Infobip multipart payload (to, cc, bcc):', $debugFields);
 
-            $client = new Client();
+            $client = $this->createInfobipClient();
             $response = $client->post(env('INFOBIP_API_URL') . '/email/3/send', $post_data);
             $body = $response->getBody();
 
             Log::info('EMAIL SENT');
             return true;
         } catch (\Throwable $th) {
-            echo $th;
             Log::error($th);
             return false;
         } finally {
@@ -212,7 +222,7 @@ class EmailSender
                     ]);
                 }
             }
-            $client = new Client();
+            $client = $this->createInfobipClient();
             $response = $client->post(env('INFOBIP_API_URL') . '/email/3/send', $post_data);
             $body = $response->getBody();
 
@@ -220,7 +230,6 @@ class EmailSender
             return true;
             // return json_decode($body);
         } catch (\Throwable $th) {
-            echo $th;
             Log::error($th);
             return false;
         }
@@ -299,7 +308,7 @@ class EmailSender
                     ]);
                 }
             }
-            $client = new Client();
+            $client = $this->createInfobipClient();
             $response = $client->post(env('INFOBIP_API_URL') . '/email/3/send', $post_data);
             $body = $response->getBody();
 
@@ -307,7 +316,6 @@ class EmailSender
             return true;
             // return json_decode($body);
         } catch (\Throwable $th) {
-            echo $th;
             Log::error($th);
             return false;
         }
@@ -386,7 +394,7 @@ class EmailSender
                     ]);
                 }
             }
-            $client = new Client();
+            $client = $this->createInfobipClient();
             $response = $client->post(config('app.infobip_url') . '/email/3/send', $post_data);
             $body = $response->getBody();
 
@@ -394,7 +402,6 @@ class EmailSender
             return true;
             // return json_decode($body);
         } catch (\Throwable $th) {
-            echo $th;
             Log::error($th);
             return false;
         }

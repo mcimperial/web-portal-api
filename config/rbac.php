@@ -64,11 +64,41 @@ return [
         'self-enrollment.enrollees.import' => ['imports.create', 'imports.view', 'applications.create', 'settings.update'],
         'self-enrollment.enrollees.compare-temp-import' => ['imports.view'],
         'self-enrollment.enrollees.import-company-provider' => ['imports.create', 'imports.view', 'applications.create', 'settings.update'],
-        'self-enrollment.enrollees.manage-notifications' => ['communications.view'],
+        'self-enrollment.enrollees.notifications.view' => [
+            'communications.view',
+        ],
+        'self-enrollment.enrollees.notifications.send' => [
+            'communications.create',
+            'communications.view',
+        ],
+        'self-enrollment.enrollees.notifications.create' => [
+            'communications.create',
+            'communications.view',
+        ],
+        'self-enrollment.enrollees.notifications.update' => [
+            'communications.update',
+            'communications.view',
+        ],
+        'self-enrollment.enrollees.notifications.delete' => [
+            'communications.delete',
+            'communications.view',
+        ],
         'self-enrollment.enrollees.card-delivery' => ['applications.update', 'applications.view'],
         'self-enrollment.enrollees.export-legacy' => ['applications.export', 'applications.view'],
         'self-enrollment.enrollees.export-viewer' => ['applications.export', 'applications.view'],
         'self-enrollment.enrollees.table-legacy' => ['applications.view'],
         'self-enrollment.enrollees.table-viewer' => ['applications.view'],
+    ],
+
+    'module_action_aliases' => [
+        'imports.create' => [
+            'self-enrollment.enrollees.import',
+            'self-enrollment.enrollees.import-company-provider',
+        ],
+        'imports.view' => [
+            'self-enrollment.enrollees.compare-temp-import',
+            'self-enrollment.enrollees.import',
+            'self-enrollment.enrollees.import-company-provider',
+        ],
     ],
 ];
