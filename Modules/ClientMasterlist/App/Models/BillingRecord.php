@@ -10,6 +10,9 @@ class BillingRecord extends Model
 
     protected $fillable = [
         'enrollment_id',
+        'billing_type',
+        'billing_month',
+        'billing_year',
         'principal_id',
         'dependent_id',
         'source_file_name',
@@ -24,6 +27,8 @@ class BillingRecord extends Model
         'column_names' => 'array',
         'row_data' => 'array',
         'source_row_number' => 'integer',
+        'billing_month' => 'integer',
+        'billing_year' => 'integer',
         'principal_id' => 'integer',
         'dependent_id' => 'integer',
         'enrollment_id' => 'integer',
