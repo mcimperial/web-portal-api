@@ -384,6 +384,59 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Prepare the import log payload for storage in the `import_details` JSON
+     * column while avoiding oversized packets for large imports.
+     */
+    private function buildStorableImportDetails(): array
+    {
+        $fullDetails = $this->importLog;
+
+        $maxBytes = 2 * 1024 * 1024;
+        $encoded = json_encode($fullDetails);
+
+        if ($encoded !== false && strlen($encoded) <= $maxBytes) {
+            return $fullDetails;
+        }
+
+        $fileName = 'import-logs/full-log-' . now()->format('Y-m-d_His') . '-' . Str::random(8) . '.json';
+
+        try {
+            Storage::disk('local')->put($fileName, $encoded !== false ? $encoded : json_encode([
+                'error' => 'Failed to encode full import log',
+            ]));
+        } catch (\Throwable $e) {
+            Log::error('Failed to write full import log to disk', ['error' => $e->getMessage()]);
+            $fileName = null;
+        }
+
+        $maxInlineEntries = 200;
+        $principals = $fullDetails['principals'] ?? [];
+        $dependents = $fullDetails['dependents'] ?? [];
+
+        $truncatedPrincipals = array_slice($principals, 0, $maxInlineEntries);
+        $truncatedDependents = array_slice($dependents, 0, $maxInlineEntries);
+
+        Log::warning('Import log details truncated before saving to database due to size', [
+            'encoded_size_bytes' => $encoded !== false ? strlen($encoded) : null,
+            'max_bytes' => $maxBytes,
+            'total_principals_logged' => count($principals),
+            'total_dependents_logged' => count($dependents),
+            'inline_principals_kept' => count($truncatedPrincipals),
+            'inline_dependents_kept' => count($truncatedDependents),
+            'full_log_file' => $fileName,
+        ]);
+
+        return array_merge($fullDetails, [
+            'principals' => $truncatedPrincipals,
+            'dependents' => $truncatedDependents,
+            'truncated' => true,
+            'truncated_principals_omitted' => max(0, count($principals) - count($truncatedPrincipals)),
+            'truncated_dependents_omitted' => max(0, count($dependents) - count($truncatedDependents)),
+            'full_log_file' => $fileName,
+        ]);
+    }
+
+    /**
      * Persist a normalized record of the uploaded source file for reuse in the
      * billing history/download UI. This covers both regular enrollment imports
      * and multi-company / multi-provider imports that have no single enrollment_id.
@@ -559,10 +612,40 @@ class ImportEnrolleeController extends Controller
 
         if (is_string($enrollees)) {
             $decoded = json_decode($enrollees, true);
-            return is_array($decoded) ? $decoded : [];
+            return is_array($decoded)
+                ? $this->normalizeImportPayloadValues($decoded)
+                : [];
         }
 
-        return is_array($enrollees) ? $enrollees : [];
+        return is_array($enrollees)
+            ? $this->normalizeImportPayloadValues($enrollees)
+            : [];
+    }
+
+    /**
+     * Recursively normalize import payload values.
+     * Converts empty/whitespace-only strings to null while preserving
+     * non-empty strings and scalar values.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private function normalizeImportPayloadValues($value)
+    {
+        if (is_array($value)) {
+            foreach ($value as $key => $nestedValue) {
+                $value[$key] = $this->normalizeImportPayloadValues($nestedValue);
+            }
+
+            return $value;
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            return $trimmed === '' ? null : $trimmed;
+        }
+
+        return $value;
     }
 
     /**
@@ -1138,6 +1221,24 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Existing resigned principals are immutable during imports.
+     *
+     * Locking is based on enrollment_status only so members can be
+     * imported again after being moved back to non-resigned statuses
+     * (e.g. PENDING).
+     */
+    private function isLockedResignedPrincipal(?Enrollee $principal): bool
+    {
+        if (!$principal) {
+            return false;
+        }
+
+        $enrollmentNormalized = $this->normalizeStatusValue($principal->enrollment_status ?? null);
+
+        return str_contains($enrollmentNormalized, 'RESIGN');
+    }
+
+    /**
      * Determine whether a status combination should be counted as not enrolled.
      */
     private function isNotEnrolledMember($enrollmentStatus, $status): bool
@@ -1356,6 +1457,50 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Resolve enrollment ID using company code and provider title.
+     *
+     * @throws \Exception
+     */
+    private function findEnrollmentByCompanyAndProvider(string $companyCode, string $providerTitle): int
+    {
+        $normalizedCompanyCode = strtoupper(trim($companyCode));
+        $normalizedProviderTitle = strtoupper(trim($providerTitle));
+
+        if ($normalizedCompanyCode === '' || $normalizedProviderTitle === '') {
+            throw new \Exception('Company code and provider title are required.');
+        }
+
+        $company = Company::query()
+            ->whereRaw('UPPER(TRIM(company_code)) = ?', [$normalizedCompanyCode])
+            ->first();
+
+        if (!$company) {
+            throw new \Exception('Company not found for code: ' . $companyCode);
+        }
+
+        $provider = InsuranceProvider::query()
+            ->whereRaw('UPPER(TRIM(title)) = ?', [$normalizedProviderTitle])
+            ->first();
+
+        if (!$provider) {
+            throw new \Exception('Insurance provider not found for title: ' . $providerTitle);
+        }
+
+        $enrollment = Enrollment::query()
+            ->where('company_id', $company->id)
+            ->where('insurance_provider_id', $provider->id)
+            ->first();
+
+        if (!$enrollment) {
+            throw new \Exception(
+                'Enrollment not found for company code ' . $companyCode . ' and provider title ' . $providerTitle
+            );
+        }
+
+        return (int) $enrollment->id;
+    }
+
+    /**
      * Resolve folder context for file uploads based on import payload.
      */
     private function resolveImportFileContext(?int $enrollmentId, array $enrollees): array
@@ -1497,6 +1642,7 @@ class ImportEnrolleeController extends Controller
 
             $principalMap = [];
             $dependentsByPrincipal = [];
+            $lockedResignedEmployeeIds = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
 
             // Separate principals and dependents
@@ -1554,7 +1700,7 @@ class ImportEnrolleeController extends Controller
                 $isPrincipal = ($relation === 'PRINCIPAL' || $relation === 'EMPLOYEE' || $relation === 'EMPLOYEES');
 
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, true);
-                $isRenewal = isset($this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal']) ? $this->processHealthInsuranceData($healthInsuranceData, true)['is_renewal'] : false;
+                $isRenewal = (bool) ($healthInsuranceData['is_renewal'] ?? false);
 
                 if (!isset($enrolleeData['enrollment_status'])) {
                     // Set enrollment status based on health insurance data
@@ -1572,6 +1718,32 @@ class ImportEnrolleeController extends Controller
                 }
 
                 if ($isPrincipal) {
+
+                    $existingPrincipalForSkipCheck = Enrollee::withTrashed()
+                        ->where('employee_id', $employeeId)
+                        ->where('enrollment_id', $enrollmentId)
+                        ->first();
+
+                    if ($this->isLockedResignedPrincipal($existingPrincipalForSkipCheck)) {
+                        $principalMap[$employeeId] = $existingPrincipalForSkipCheck;
+                        $lockedResignedEmployeeIds[$employeeId] = true;
+
+                        $this->logPrincipal(
+                            $employeeId,
+                            'skipped',
+                            $enrolleeData,
+                            [],
+                            []
+                        );
+
+                        Log::info('Skipping principal update because member is resigned/locked', [
+                            'employee_id' => $employeeId,
+                            'enrollment_id' => $enrollmentId,
+                            'principal_id' => $existingPrincipalForSkipCheck->id,
+                        ]);
+
+                        continue;
+                    }
 
                     $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $enrollmentId, $employeeId, $dateAnalysis['recommended_format']);
 
@@ -1637,6 +1809,14 @@ class ImportEnrolleeController extends Controller
 
             // Process dependents
             foreach ($dependentsByPrincipal as $employeeId => $dependents) {
+                if (isset($lockedResignedEmployeeIds[$employeeId])) {
+                    Log::info('Skipping dependents for resigned/locked principal', [
+                        'employee_id' => $employeeId,
+                        'enrollment_id' => $enrollmentId,
+                    ]);
+                    continue;
+                }
+
                 $principal = $principalMap[$employeeId] ?? null;
 
                 // If principal was not in this import batch, try to find them in the database
@@ -1668,6 +1848,15 @@ class ImportEnrolleeController extends Controller
                         ]);
                         continue;
                     }
+                }
+
+                if ($this->isLockedResignedPrincipal($principal)) {
+                    Log::info('Skipping dependents because principal is resigned/locked', [
+                        'employee_id' => $employeeId,
+                        'enrollment_id' => $enrollmentId,
+                        'principal_id' => $principal->id,
+                    ]);
+                    continue;
                 }
 
                 $dependentsData = [];
@@ -1720,6 +1909,27 @@ class ImportEnrolleeController extends Controller
                 }
             }
 
+            Log::info('About to commit regular import transaction', [
+                'principals_processed' => count($principalMap),
+                'transaction_level_before_commit' => DB::transactionLevel(),
+            ]);
+
+            $transactionLevel = DB::transactionLevel();
+
+            for ($i = 0; $i < $transactionLevel; $i++) {
+                DB::commit();
+
+                Log::info('Committed regular import transaction level', [
+                    'level' => $i + 1,
+                    'remaining_levels' => DB::transactionLevel(),
+                ]);
+            }
+
+            Log::info('Regular import transaction committed successfully', [
+                'principals_processed' => count($principalMap),
+                'final_transaction_level' => DB::transactionLevel(),
+            ]);
+
             // Save import log to database
             $importLog = $this->saveImportLog(
                 $enrollmentId,
@@ -1728,7 +1938,7 @@ class ImportEnrolleeController extends Controller
                 'success'
             );
 
-            $this->persistImportedEnrollmentFileRecord($importLog->id, null, 'company_provider');
+            $this->persistImportedEnrollmentFileRecord($importLog->id, (int) $enrollmentId, 'regular');
             $this->persistResignedImportAudits($importLog->id);
 
             return response()->json([
@@ -1861,31 +2071,14 @@ class ImportEnrolleeController extends Controller
 
                 $tempRowsByEnrollment[$currentEnrollmentId][] = $enrolleeData;
 
-                // Fast skip: if the principal already has an employment_end_date on
-                // record, don't touch it at all. Bail out before any date
-                // sanitization, health-insurance processing, or nested
-                // transactions run, which is where most of the per-row cost of a
-                // bulk import comes from.
+                // Fast skip: existing resigned principals are immutable.
                 $existingPrincipalForSkipCheck = Enrollee::withTrashed()
                     ->where('employee_id', $employeeId)
                     ->where('enrollment_id', $currentEnrollmentId)
-                    ->first(['id', 'employee_id', 'enrollment_id', 'employment_end_date', 'unmapped_columns']);
+                    ->first(['id', 'employee_id', 'enrollment_id', 'employment_end_date', 'enrollment_status', 'status', 'unmapped_columns']);
 
-                if ($existingPrincipalForSkipCheck && !empty($existingPrincipalForSkipCheck->employment_end_date)) {
+                if ($this->isLockedResignedPrincipal($existingPrincipalForSkipCheck)) {
                     $principalMap[$employeeId] = $existingPrincipalForSkipCheck;
-
-                    // Even though we're skipping all other field updates for this
-                    // already-resigned principal, still persist any unmapped
-                    // Excel columns supplied for this row so that data isn't
-                    // silently dropped.
-                    if (!empty($enrolleeData['unmapped_columns'])) {
-                        $existingPrincipalForSkipCheck->update([
-                            'unmapped_columns' => $enrolleeData['unmapped_columns'],
-                            'unmapped_columns_by' => auth()->id(),
-                        ]);
-
-                        $this->syncUnmappedColumnValues($existingPrincipalForSkipCheck, $enrolleeData['unmapped_columns']);
-                    }
 
                     $this->logPrincipal(
                         $employeeId,
@@ -1895,7 +2088,7 @@ class ImportEnrolleeController extends Controller
                         []
                     );
 
-                    Log::info('Skipping principal entirely; employment_end_date already set', [
+                    Log::info('Skipping principal entirely; member is resigned/locked', [
                         'employee_id' => $employeeId,
                         'enrollment_id' => $currentEnrollmentId,
                         'existing_employment_end_date' => $existingPrincipalForSkipCheck->employment_end_date,
@@ -2089,12 +2282,527 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Create or update principal with soft delete handling.
+     */
+    private function createOrUpdatePrincipalWithSoftDelete(array $enrolleeData, int $enrollmentId, string $employeeId, string $dateFormat = 'auto'): Enrollee
+    {
+        $enrolleeData['enrollment_id'] = $enrollmentId;
+        $originalEmploymentEndDate = $enrolleeData['employment_end_date'] ?? null;
+
+        $enrolleeDateFields = ['birth_date', 'employment_start_date', 'employment_end_date'];
+        foreach ($enrolleeDateFields as $dateField) {
+            if (!array_key_exists($dateField, $enrolleeData)) {
+                continue;
+            }
+
+            $rawDate = $enrolleeData[$dateField];
+            if ($rawDate === null || trim((string) $rawDate) === '') {
+                $enrolleeData[$dateField] = null;
+                continue;
+            }
+
+            $enrolleeData[$dateField] = $this->sanitizeDateWithFormat($rawDate, $dateFormat);
+            Log::info('Sanitized enrollee date field', [
+                'field' => $dateField,
+                'original' => $rawDate,
+                'sanitized' => $enrolleeData[$dateField],
+                'format_used' => $dateFormat,
+            ]);
+        }
+
+        $unmappedColumnsOriginal = $enrolleeData['unmapped_columns'] ?? null;
+        unset($enrolleeData['unmapped_columns']);
+
+        $enrolleeData = $this->uppercaseStrings($enrolleeData);
+
+        if ($unmappedColumnsOriginal !== null) {
+            $enrolleeData['unmapped_columns'] = $unmappedColumnsOriginal;
+        }
+
+        $enrolleeData['status'] = 'ACTIVE';
+        $shouldSoftDelete = false;
+
+        $principalQuery = Enrollee::with(['healthInsurance'])
+            ->withTrashed()
+            ->where('employee_id', $employeeId)
+            ->where('enrollment_id', $enrollmentId);
+
+        $existingPrincipal = $principalQuery->first();
+
+        $existingHadEndDate = $existingPrincipal && !empty($existingPrincipal->employment_end_date);
+        $existingHasBackDate = $existingPrincipal && !empty($existingPrincipal->back_date);
+
+        if ($existingHasBackDate) {
+            unset($enrolleeData['back_date']);
+        }
+
+        $newEndDateProvided = (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date']))
+            || ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)));
+
+        if ($existingHadEndDate) {
+            unset($enrolleeData['employment_end_date']);
+
+            Log::info('Skipping employment_end_date update and back_date; principal already has an employment_end_date', [
+                'employee_id' => $employeeId,
+                'existing_employment_end_date' => $existingPrincipal->employment_end_date,
+            ]);
+        } elseif ($newEndDateProvided) {
+            if (!empty($enrolleeData['employment_end_date'])) {
+                $endDateMonthYear = date('Y-m', strtotime($enrolleeData['employment_end_date']));
+                $currentMonthYear = date('Y-m');
+
+                if ($endDateMonthYear < $currentMonthYear && !$existingHasBackDate) {
+                    $enrolleeData['back_date'] = now();
+                }
+            }
+
+            if (($enrolleeData['employment_end_date'] ?? null) <= date('Y-m-d')) {
+                $enrolleeData['status'] = 'INACTIVE';
+                $enrolleeData['enrollment_status'] = 'RESIGNED';
+            }
+        }
+
+        $isRenewal = $existingPrincipal && $existingPrincipal->healthInsurance
+            ? $existingPrincipal->healthInsurance->is_renewal
+            : false;
+
+        if ($existingPrincipal) {
+            $hasChanges = false;
+            $changes = [];
+
+            foreach ($enrolleeData as $key => $value) {
+                if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
+                    continue;
+                }
+
+                $currentValue = $existingPrincipal->getAttribute($key);
+                $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                $normalizedNewValue = $this->normalizeValue($value);
+
+                if ($normalizedCurrentValue !== $normalizedNewValue) {
+                    $hasChanges = true;
+                    $changes[$key] = [
+                        'old' => $currentValue,
+                        'new' => $value,
+                        'old_normalized' => $normalizedCurrentValue,
+                        'new_normalized' => $normalizedNewValue,
+                        'old_type' => gettype($currentValue),
+                        'new_type' => gettype($value),
+                    ];
+                }
+            }
+
+            if ($hasChanges) {
+                Log::info('Updating existing principal with changes', [
+                    'employee_id' => $employeeId,
+                    'changes' => $changes,
+                    'is_renewal' => $isRenewal,
+                ]);
+
+                $existingPrincipal->update($enrolleeData);
+            } else {
+                Log::info('No principal changes detected, skipping update', [
+                    'employee_id' => $employeeId,
+                    'is_renewal' => $isRenewal,
+                ]);
+            }
+
+            if ($shouldSoftDelete) {
+                $currentUserId = auth()->check() ? auth()->user()->id : 1;
+                $existingPrincipal->update(['deleted_by' => $currentUserId]);
+                $existingPrincipal->delete();
+            }
+
+            return $existingPrincipal;
+        }
+
+        if (!isset($enrolleeData['employee_id']) || empty($enrolleeData['employee_id'])) {
+            $enrolleeData['employee_id'] = $employeeId;
+        }
+
+        try {
+            $principal = Enrollee::create($enrolleeData);
+
+            if ($shouldSoftDelete) {
+                $currentUserId = auth()->check() ? auth()->user()->id : 1;
+                $principal->update(['deleted_by' => $currentUserId]);
+                $principal->delete();
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to create principal', [
+                'employee_id' => $employeeId,
+                'error' => $e->getMessage(),
+                'sql_error' => $e->getPrevious() ? $e->getPrevious()->getMessage() : 'N/A',
+                'enrollee_data' => $enrolleeData,
+            ]);
+            throw $e;
+        }
+
+        return $principal;
+    }
+
+    /**
+     * Attach/update dependents for a principal.
+     */
+    public function attachDependents(Request $request, string $dateFormat = 'auto'): JsonResponse
+    {
+        DB::beginTransaction();
+
+        try {
+            $enrolleeId = $request->input('enrollee_id');
+            $dependentsData = $request->input('dependents', []);
+
+            if (empty($enrolleeId)) {
+                return response()->json(['message' => 'Enrollee ID is required'], 400);
+            }
+
+            if (empty($dependentsData)) {
+                return response()->json(['message' => 'No dependents data provided'], 400);
+            }
+
+            $enrollee = Enrollee::withTrashed()->find($enrolleeId);
+            if (!$enrollee) {
+                return response()->json(['message' => 'Enrollee not found with id: ' . $enrolleeId], 404);
+            }
+
+            $dependentFields = (new Dependent())->getFillable();
+            $createdDependents = [];
+            $hasChanges = false;
+
+            foreach ($dependentsData as $dependentData) {
+                $filtered = array_intersect_key($dependentData, array_flip($dependentFields));
+
+                if (isset($filtered['birth_date']) && !empty($filtered['birth_date'])) {
+                    $filtered['birth_date'] = $this->sanitizeDateWithFormat($filtered['birth_date'], $dateFormat);
+                }
+
+                $filtered = $this->uppercaseStrings($filtered);
+                $filtered['principal_id'] = $enrolleeId;
+
+                $dependentQuery = Dependent::withTrashed()->where('principal_id', $enrolleeId);
+                if (isset($filtered['birth_date']) && !empty($filtered['birth_date'])) {
+                    $dependentQuery = $dependentQuery->where('birth_date', $filtered['birth_date']);
+                }
+
+                $existingDependent = $dependentQuery->first();
+
+                if ($existingDependent) {
+                    $dependentHasChanges = false;
+
+                    foreach ($filtered as $key => $value) {
+                        if (in_array($key, ['created_at', 'updated_at'])) {
+                            continue;
+                        }
+
+                        $currentValue = $existingDependent->getAttribute($key);
+                        $normalizedCurrentValue = $this->normalizeValue($currentValue);
+                        $normalizedNewValue = $this->normalizeValue($value);
+
+                        if ($normalizedCurrentValue !== $normalizedNewValue) {
+                            $dependentHasChanges = true;
+                            break;
+                        }
+                    }
+
+                    if ($dependentHasChanges) {
+                        $existingDependent->update($filtered);
+                        $hasChanges = true;
+                    }
+
+                    $dependent = $existingDependent;
+                } else {
+                    $dependent = Dependent::create($filtered);
+                    $hasChanges = true;
+                }
+
+                $createdDependents[] = $dependent;
+            }
+
+            $enrollee->touch();
+
+            DB::commit();
+            return response()->json([
+                'message' => 'Dependents attached successfully',
+                'dependents' => $createdDependents,
+                'had_changes' => $hasChanges,
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Failed to attach dependents', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Process health insurance data and normalize boolean-like fields.
+     */
+    private function processHealthInsuranceData(array $healthInsuranceData, bool $withRenewalChecking = false): array
+    {
+        $toBoolInt = static function ($value): int {
+            if (is_bool($value)) {
+                return $value ? 1 : 0;
+            }
+
+            if (is_numeric($value)) {
+                return ((int) $value) > 0 ? 1 : 0;
+            }
+
+            $normalized = strtoupper(trim((string) $value));
+            return in_array($normalized, ['YES', 'TRUE', '1', 'Y'], true) ? 1 : 0;
+        };
+
+        $healthInsuranceData['is_company_paid'] = isset($healthInsuranceData['is_company_paid'])
+            ? $toBoolInt($healthInsuranceData['is_company_paid'])
+            : 0;
+
+        if ($withRenewalChecking && isset($healthInsuranceData['is_renewal'])) {
+            $healthInsuranceData['is_renewal'] = $toBoolInt($healthInsuranceData['is_renewal']);
+        }
+
+        if (isset($healthInsuranceData['is_skipping'])) {
+            $healthInsuranceData['is_skipping'] = $toBoolInt($healthInsuranceData['is_skipping']);
+        } else {
+            $healthInsuranceData['is_skipping'] = !empty($healthInsuranceData['reason_for_skipping']) ? 1 : 0;
+        }
+
+        return $healthInsuranceData;
+    }
+
+    /**
+     * Attach/update health insurance record for principal or dependent.
+     */
+    public function attachHealthInsurance(Request $request, string $dateFormat = 'auto'): JsonResponse
+    {
+        DB::beginTransaction();
+
+        try {
+            $enrolleeId = $request->input('enrollee_id');
+            $dependentId = $request->input('dependent_id');
+            $insuranceData = $request->input('insurance', []);
+
+            if (!$enrolleeId && !$dependentId) {
+                return response()->json(['message' => 'Either enrollee_id or dependent_id must be provided'], 400);
+            }
+
+            if (empty($insuranceData)) {
+                return response()->json(['message' => 'No insurance data provided'], 400);
+            }
+
+            $insuranceFields = (new HealthInsurance())->getFillable();
+            $filtered = array_intersect_key($insuranceData, array_flip($insuranceFields));
+
+            $dateFields = [
+                'coverage_start_date',
+                'coverage_end_date',
+                'certificate_date_issued',
+                'kyc_datestamp',
+                'card_delivery_date',
+            ];
+
+            foreach ($dateFields as $dateField) {
+                if (isset($filtered[$dateField]) && !empty($filtered[$dateField])) {
+                    $filtered[$dateField] = $this->sanitizeDateWithFormat($filtered[$dateField], $dateFormat);
+                }
+            }
+
+            $filtered = $this->uppercaseStrings($filtered);
+
+            $dependent = null;
+            $enrollee = null;
+
+            if ($enrolleeId) {
+                $enrollee = Enrollee::find($enrolleeId);
+                if (!$enrollee) {
+                    return response()->json(['message' => 'Enrollee not found with id: ' . $enrolleeId], 404);
+                }
+
+                $filtered['principal_id'] = $enrolleeId;
+            } else {
+                $dependent = Dependent::find($dependentId);
+                if (!$dependent) {
+                    return response()->json(['message' => 'Dependent not found with id: ' . $dependentId], 404);
+                }
+
+                $filtered['dependent_id'] = $dependentId;
+
+                if (!empty($filtered['certificate_number'])) {
+                    if (empty($filtered['coverage_start_date'])) {
+                        $filtered['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
+                    }
+                    if (empty($filtered['certificate_date_issued'])) {
+                        $filtered['certificate_date_issued'] = $filtered['coverage_start_date'];
+                    }
+
+                    $dependent->update(['enrollment_status' => 'APPROVED']);
+                }
+            }
+
+            $insuranceQuery = HealthInsurance::query();
+            if (isset($filtered['principal_id'])) {
+                $insuranceQuery->where('principal_id', $filtered['principal_id']);
+            } elseif (isset($filtered['dependent_id'])) {
+                $insuranceQuery->where('dependent_id', $filtered['dependent_id']);
+            }
+
+            $existingInsurance = $insuranceQuery->first();
+            $hasInsuranceChanges = false;
+
+            if ($existingInsurance) {
+                foreach ($filtered as $key => $value) {
+                    if (in_array($key, ['created_at', 'updated_at'])) {
+                        continue;
+                    }
+
+                    $currentValue = $existingInsurance->getAttribute($key);
+                    if ($this->normalizeValue($currentValue) !== $this->normalizeValue($value)) {
+                        $hasInsuranceChanges = true;
+                        break;
+                    }
+                }
+
+                if ($hasInsuranceChanges) {
+                    $existingInsurance->update($filtered);
+                }
+
+                $insurance = $existingInsurance;
+            } else {
+                $insurance = HealthInsurance::create($filtered);
+                $hasInsuranceChanges = true;
+            }
+
+            if ($hasInsuranceChanges) {
+                if ($enrollee) {
+                    $enrollee->touch();
+                } elseif ($dependent && $dependent->principal_id) {
+                    $principal = Enrollee::find($dependent->principal_id);
+                    if ($principal) {
+                        $principal->touch();
+                    }
+                }
+            }
+
+            DB::commit();
+            return response()->json(['message' => 'Health insurance attached successfully', 'insurance' => $insurance], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Failed to attach health insurance', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Return uploaded source files that can be reused in billing/import UI.
+     */
+    public function getImportedFiles(Request $request): JsonResponse
+    {
+        try {
+            $query = ImportedEnrollmentFile::query()
+                ->select([
+                    'id',
+                    'enrollment_id',
+                    'import_log_id',
+                    'source_type',
+                    'company_code',
+                    'provider_title',
+                    'original_name',
+                    'stored_name',
+                    'file_path',
+                    'file_url',
+                    'mime_type',
+                    'uploaded_at',
+                    'created_at',
+                ])
+                ->orderByDesc('uploaded_at')
+                ->orderByDesc('id');
+
+            $enrollmentId = $request->filled('enrollment_id') ? (int) $request->input('enrollment_id') : null;
+            $companyCode = $request->filled('company_code') ? trim((string) $request->input('company_code')) : null;
+            $providerTitle = $request->filled('provider_title') ? trim((string) $request->input('provider_title')) : null;
+
+            if ($enrollmentId || $companyCode || $providerTitle) {
+                $query->where(function ($groupQuery) use ($enrollmentId, $companyCode, $providerTitle) {
+                    if ($enrollmentId) {
+                        $groupQuery->where('enrollment_id', $enrollmentId);
+                    }
+
+                    if ($companyCode || $providerTitle) {
+                        $groupQuery->orWhere(function ($matchQuery) use ($companyCode, $providerTitle) {
+                            $matchQuery->whereNull('enrollment_id');
+
+                            if ($companyCode) {
+                                $matchQuery->whereRaw('LOWER(TRIM(company_code)) = ?', [strtolower($companyCode)]);
+                            }
+
+                            if ($providerTitle) {
+                                $matchQuery->whereRaw('LOWER(TRIM(provider_title)) = ?', [strtolower($providerTitle)]);
+                            }
+                        });
+                    }
+                });
+            }
+
+            if ($request->filled('source_type')) {
+                $query->where('source_type', trim((string) $request->input('source_type')));
+            }
+
+            $files = $query->get()->map(function ($file) {
+                return [
+                    'id' => (int) ($file->id ?? 0),
+                    'enrollment_id' => $file->enrollment_id ? (int) $file->enrollment_id : null,
+                    'import_log_id' => $file->import_log_id ? (int) $file->import_log_id : null,
+                    'source_type' => $file->source_type,
+                    'company_code' => $file->company_code,
+                    'provider_title' => $file->provider_title,
+                    'original_name' => $file->original_name,
+                    'stored_name' => $file->stored_name,
+                    'file_path' => $file->file_path,
+                    'file_url' => $file->file_url,
+                    'mime_type' => $file->mime_type,
+                    'uploaded_at' => $file->uploaded_at?->toDateTimeString(),
+                    'created_at' => $file->created_at?->toDateTimeString(),
+                ];
+            })->all();
+
+            return response()->json([
+                'data' => $files,
+                'count' => count($files),
+            ], 200);
+        } catch (\Throwable $e) {
+            Log::error('Failed to get imported files', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to fetch imported files.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Return import logs for the billing/import history UI.
      */
     public function getImportLogs(Request $request): JsonResponse
     {
         try {
-            $query = ImportLog::query()->orderByDesc('import_date');
+            $limit = (int) $request->input('limit', 100);
+            $limit = max(1, min($limit, 500));
+
+            $query = ImportLog::query()
+                ->select([
+                    'id',
+                    'enrollment_id',
+                    'import_date',
+                    'total_principals',
+                    'total_dependents',
+                    'principals_created',
+                    'principals_updated',
+                    'dependents_created',
+                    'dependents_updated',
+                    'status',
+                    'error_message',
+                    'date_format_detected',
+                    'date_format_confidence',
+                ])
+                ->orderByDesc('import_date');
 
             if ($request->filled('enrollment_id')) {
                 $query->where('enrollment_id', (int) $request->input('enrollment_id'));
@@ -2104,8 +2812,45 @@ class ImportEnrolleeController extends Controller
                 $query->whereNull('enrollment_id');
             }
 
-            $logs = $query->get()->map(function (ImportLog $log) {
-                $details = $log->import_details ?? [];
+            $logs = $query->limit($limit)->get();
+
+            $sourceFilesByImportLogId = [];
+            if ($logs->isNotEmpty()) {
+                $sourceFilesByImportLogId = ImportedEnrollmentFile::query()
+                    ->select([
+                        'import_log_id',
+                        'company_code',
+                        'provider_title',
+                        'original_name',
+                        'stored_name',
+                        'file_path',
+                        'file_url',
+                        'mime_type',
+                        'uploaded_at',
+                    ])
+                    ->whereIn('import_log_id', $logs->pluck('id')->all())
+                    ->orderByDesc('uploaded_at')
+                    ->get()
+                    ->groupBy('import_log_id')
+                    ->map(function ($rows) {
+                        $latest = $rows->first();
+
+                        return [
+                            'original_name' => $latest->original_name,
+                            'stored_name' => $latest->stored_name,
+                            'path' => $latest->file_path,
+                            'url' => $latest->file_url,
+                            'mime_type' => $latest->mime_type,
+                            'company_code' => $latest->company_code,
+                            'provider_title' => $latest->provider_title,
+                            'uploaded_at' => optional($latest->uploaded_at)->toDateTimeString(),
+                        ];
+                    })
+                    ->all();
+            }
+
+            $logs = $logs->map(function (ImportLog $log) use ($sourceFilesByImportLogId) {
+                $sourceFile = $sourceFilesByImportLogId[$log->id] ?? null;
 
                 return [
                     'id' => $log->id,
@@ -2121,13 +2866,16 @@ class ImportEnrolleeController extends Controller
                     'error_message' => $log->error_message,
                     'date_format_detected' => $log->date_format_detected,
                     'date_format_confidence' => $log->date_format_confidence,
-                    'import_details' => is_array($details) ? $details : [],
+                    'import_details' => [
+                        'source_file' => $sourceFile,
+                    ],
                 ];
             })->all();
 
             return response()->json([
                 'data' => $logs,
                 'count' => count($logs),
+                'limit' => $limit,
             ], 200);
         } catch (\Throwable $e) {
             Log::error('Failed to get import logs', [
@@ -2155,35 +2903,81 @@ class ImportEnrolleeController extends Controller
                 ], 404);
             }
 
-            $details = $log->import_details ?? [];
-            $sourceFile = $details['source_file'] ?? null;
-            $storagePath = $sourceFile['path'] ?? null;
-            $filename = $sourceFile['original_name'] ?? $sourceFile['stored_name'] ?? 'import-log-file';
+            $sourceFileRecord = ImportedEnrollmentFile::query()
+                ->select([
+                    'company_code',
+                    'provider_title',
+                    'original_name',
+                    'stored_name',
+                    'file_path',
+                    'file_url',
+                    'mime_type',
+                    'uploaded_at',
+                ])
+                ->where('import_log_id', $log->id)
+                ->orderByDesc('uploaded_at')
+                ->first();
 
-            if (!$storagePath || !Storage::disk('spaces')->exists($storagePath)) {
-                $downloadUrl = $sourceFile['url'] ?? null;
+            $sourceFile = $sourceFileRecord ? [
+                'original_name' => $sourceFileRecord->original_name,
+                'stored_name' => $sourceFileRecord->stored_name,
+                'path' => $sourceFileRecord->file_path,
+                'url' => $sourceFileRecord->file_url,
+                'mime_type' => $sourceFileRecord->mime_type,
+                'company_code' => $sourceFileRecord->company_code,
+                'provider_title' => $sourceFileRecord->provider_title,
+                'uploaded_at' => optional($sourceFileRecord->uploaded_at)->toDateTimeString(),
+            ] : [];
 
-                if ($downloadUrl) {
-                    return response()->redirectTo($downloadUrl);
-                }
+            $filenamePrefix = $log->enrollment_id
+                ? 'enrollment-' . $log->enrollment_id
+                : 'multi-provider';
+            $timestamp = $log->import_date?->format('Y-m-d_His') ?? now()->format('Y-m-d_His');
+            $filename = "import_log_{$filenamePrefix}_{$timestamp}.txt";
 
-                return response()->json([
-                    'message' => 'Import log file not found.',
-                ], 404);
-            }
+            $lines = [
+                'IMPORT LOG REPORT',
+                '=================',
+                'Import Log ID: ' . $log->id,
+                'Enrollment ID: ' . ($log->enrollment_id ?? 'N/A (multi-provider)'),
+                'Import Date: ' . ($log->import_date?->toDateTimeString() ?? 'N/A'),
+                'Status: ' . strtoupper((string) $log->status),
+                'Date Format Detected: ' . ($log->date_format_detected ?? 'N/A'),
+                'Date Format Confidence: ' . ($log->date_format_confidence ?? 'N/A'),
+                '',
+                'SUMMARY',
+                '-------',
+                'Total Principals: ' . (int) ($log->total_principals ?? 0),
+                'Total Dependents: ' . (int) ($log->total_dependents ?? 0),
+                'Principals Created: ' . (int) ($log->principals_created ?? 0),
+                'Principals Updated: ' . (int) ($log->principals_updated ?? 0),
+                'Dependents Created: ' . (int) ($log->dependents_created ?? 0),
+                'Dependents Updated: ' . (int) ($log->dependents_updated ?? 0),
+                '',
+                'SOURCE FILE',
+                '-----------',
+                'Original Name: ' . ($sourceFile['original_name'] ?? 'N/A'),
+                'Stored Name: ' . ($sourceFile['stored_name'] ?? 'N/A'),
+                'MIME Type: ' . ($sourceFile['mime_type'] ?? 'N/A'),
+                'Company Code: ' . ($sourceFile['company_code'] ?? 'N/A'),
+                'Provider Title: ' . ($sourceFile['provider_title'] ?? 'N/A'),
+                'Uploaded At: ' . ($sourceFile['uploaded_at'] ?? 'N/A'),
+                '',
+                'ERROR MESSAGE',
+                '-------------',
+                $log->error_message ?: 'N/A',
+                '',
+            ];
 
-            $stream = Storage::disk('spaces')->readStream($storagePath);
-            $response = response()->streamDownload(function () use ($stream) {
-                while (!feof($stream)) {
-                    echo fread($stream, 8192);
-                }
-                fclose($stream);
-            }, $filename);
+            $report = implode(PHP_EOL, $lines);
 
-            $response->headers->set('Content-Type', Storage::disk('spaces')->mimeType($storagePath) ?: 'application/octet-stream');
-            $response->headers->set('Content-Disposition', 'attachment; filename="' . basename($filename) . '"');
-
-            return $response;
+            return response()->streamDownload(
+                fn () => print $report,
+                $filename,
+                [
+                    'Content-Type' => 'text/plain; charset=UTF-8',
+                ]
+            );
         } catch (\Throwable $e) {
             Log::error('Failed to download import log', [
                 'id' => $id,
