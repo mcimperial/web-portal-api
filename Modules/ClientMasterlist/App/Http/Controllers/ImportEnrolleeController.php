@@ -15,6 +15,7 @@ use Modules\ClientMasterlist\App\Models\ImportTempData;
 use Modules\ClientMasterlist\App\Models\PrincipalUnmappedColumn;
 use Modules\ClientMasterlist\App\Models\ResignedImportAudit;
 use App\Models\Company;
+use Modules\ClientMasterlist\App\Models\ImportedEnrollmentFile;
 
 use App\Http\Traits\DateSanitizer;
 use App\Http\Traits\UppercaseInput;
@@ -379,84 +380,42 @@ class ImportEnrolleeController extends Controller
             'error_message' => $errorMessage,
         ]);
 
-        /* Log::info('Import log saved to database', [
-            'import_log_id' => $importLog->id,
-            'enrollment_id' => $enrollmentId,
-            'principals_created' => $this->importLog['summary']['principals_created'],
-            'principals_updated' => $this->importLog['summary']['principals_updated'],
-            'dependents_created' => $this->importLog['summary']['dependents_created'],
-            'dependents_updated' => $this->importLog['summary']['dependents_updated'],
-        ]); */
-
         return $importLog;
     }
 
     /**
-     * Prepare the import log payload for storage in the `import_details` JSON
-     * column. Large bulk imports (thousands of principals) can produce a
-     * multi-megabyte JSON blob, and inserting that in a single query can
-     * exceed MySQL's `max_allowed_packet`, which causes the connection to be
-     * forcibly dropped ("MySQL server has gone away", error 2006) — even
-     * though the row itself would otherwise be valid.
-     *
-     * To avoid that, once the encoded payload grows past a safe threshold we
-     * write the full detail to a log file on disk and store only a truncated
-     * preview (plus a pointer to the full file) in the database row.
+     * Persist a normalized record of the uploaded source file for reuse in the
+     * billing history/download UI. This covers both regular enrollment imports
+     * and multi-company / multi-provider imports that have no single enrollment_id.
      */
-    private function buildStorableImportDetails(): array
+    private function persistImportedEnrollmentFileRecord(?int $importLogId, ?int $enrollmentId, string $sourceType = 'regular'): void
     {
-        $fullDetails = $this->importLog;
+        $sourceFile = $this->importLog['source_file'] ?? null;
 
-        // Conservative threshold well under typical max_allowed_packet values
-        // (commonly 4MB-64MB) to leave headroom for the rest of the query.
-        $maxBytes = 2 * 1024 * 1024; // 2MB
-
-        $encoded = json_encode($fullDetails);
-
-        if ($encoded !== false && strlen($encoded) <= $maxBytes) {
-            return $fullDetails;
+        if (!$sourceFile || empty($sourceFile['url'])) {
+            return;
         }
 
-        // Persist the full, untruncated log to disk so nothing is lost.
-        $fileName = 'import-logs/full-log-' . now()->format('Y-m-d_His') . '-' . Str::random(8) . '.json';
+        $uploadedAt = $sourceFile['uploaded_at'] ?? null;
 
-        try {
-            Storage::disk('local')->put($fileName, $encoded !== false ? $encoded : json_encode([
-                'error' => 'Failed to encode full import log',
-            ]));
-        } catch (\Throwable $e) {
-            Log::error('Failed to write full import log to disk', ['error' => $e->getMessage()]);
-            $fileName = null;
-        }
-
-        // Cap the number of per-record entries kept inline in the DB so the
-        // JSON column stays small regardless of how large the import was.
-        $maxInlineEntries = 200;
-
-        $principals = $fullDetails['principals'] ?? [];
-        $dependents = $fullDetails['dependents'] ?? [];
-
-        $truncatedPrincipals = array_slice($principals, 0, $maxInlineEntries);
-        $truncatedDependents = array_slice($dependents, 0, $maxInlineEntries);
-
-        Log::warning('Import log details truncated before saving to database due to size', [
-            'encoded_size_bytes' => $encoded !== false ? strlen($encoded) : null,
-            'max_bytes' => $maxBytes,
-            'total_principals_logged' => count($principals),
-            'total_dependents_logged' => count($dependents),
-            'inline_principals_kept' => count($truncatedPrincipals),
-            'inline_dependents_kept' => count($truncatedDependents),
-            'full_log_file' => $fileName,
-        ]);
-
-        return array_merge($fullDetails, [
-            'principals' => $truncatedPrincipals,
-            'dependents' => $truncatedDependents,
-            'truncated' => true,
-            'truncated_principals_omitted' => max(0, count($principals) - count($truncatedPrincipals)),
-            'truncated_dependents_omitted' => max(0, count($dependents) - count($truncatedDependents)),
-            'full_log_file' => $fileName,
-        ]);
+        ImportedEnrollmentFile::updateOrCreate(
+            [
+                'import_log_id' => $importLogId,
+                'file_url' => $sourceFile['url'],
+            ],
+            [
+                'enrollment_id' => $enrollmentId,
+                'source_type' => $sourceType,
+                'company_code' => $sourceFile['company_code'] ?? null,
+                'provider_title' => $sourceFile['provider_title'] ?? null,
+                'original_name' => $sourceFile['original_name'] ?? null,
+                'stored_name' => $sourceFile['stored_name'] ?? null,
+                'file_path' => $sourceFile['path'] ?? null,
+                'file_url' => $sourceFile['url'],
+                'mime_type' => $sourceFile['mime_type'] ?? null,
+                'uploaded_at' => $uploadedAt ? now()->parse($uploadedAt) : now(),
+            ]
+        );
     }
 
     /**
@@ -1769,14 +1728,8 @@ class ImportEnrolleeController extends Controller
                 'success'
             );
 
+            $this->persistImportedEnrollmentFileRecord($importLog->id, null, 'company_provider');
             $this->persistResignedImportAudits($importLog->id);
-
-            // Commit all transaction levels to ensure data is actually saved
-            $transactionLevel = DB::transactionLevel();
-
-            for ($i = 0; $i < $transactionLevel; $i++) {
-                DB::commit();
-            }
 
             return response()->json([
                 'message' => 'Import successful',
@@ -2094,6 +2047,7 @@ class ImportEnrolleeController extends Controller
             );
 
             $this->persistResignedImportAudits($importLog->id);
+            $this->persistImportedEnrollmentFileRecord($importLog->id, null, 'multi-provider');
 
             return response()->json([
                 'message' => 'Import successful',
@@ -2135,1321 +2089,112 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
-     * Find enrollment by company code and insurance provider title
+     * Return import logs for the billing/import history UI.
      */
-    private function findEnrollmentByCompanyAndProvider(string $companyCode, string $insuranceProviderTitle): int
-    {
-        // Find company by company_code
-        $company = Company::where('company_code', strtoupper($companyCode))->first();
-
-        if (!$company) {
-            throw new \Exception('Company not found with code: ' . $companyCode);
-        }
-
-        // Find insurance provider by title
-        $insuranceProvider = InsuranceProvider::where('title', strtoupper($insuranceProviderTitle))->first();
-
-        if (!$insuranceProvider) {
-            throw new \Exception('Insurance provider not found with title: ' . $insuranceProviderTitle);
-        }
-
-        // Find enrollment by company_id and insurance_provider_id
-        $enrollment = Enrollment::where('company_id', $company->id)
-            ->where('insurance_provider_id', $insuranceProvider->id)
-            ->first();
-
-        if (!$enrollment) {
-            throw new \Exception('No enrollment found for company: ' . $companyCode . ' and insurance provider: ' . $insuranceProviderTitle);
-        }
-
-        return $enrollment->id;
-    }
-
-    /**
-     * Create or update principal with soft delete handling
-     */
-    private function createOrUpdatePrincipalWithSoftDelete(array $enrolleeData, int $enrollmentId, string $employeeId, string $dateFormat = 'auto'): Enrollee
-    {
-        $enrolleeData['enrollment_id'] = $enrollmentId;
-
-        // Store original employment_end_date before sanitization to check for soft deletion
-        $originalEmploymentEndDate = $enrolleeData['employment_end_date'] ?? null;
-
-        // Sanitize date fields using detected format
-        $enrolleeDateFields = ['birth_date', 'employment_start_date', 'employment_end_date'];
-
-        foreach ($enrolleeDateFields as $dateField) {
-            if (isset($enrolleeData[$dateField]) && !empty($enrolleeData[$dateField])) {
-                $originalDate = $enrolleeData[$dateField];
-                $enrolleeData[$dateField] = $this->sanitizeDateWithFormat($enrolleeData[$dateField], $dateFormat);
-                Log::info("Sanitized enrollee date field", [
-                    'field' => $dateField,
-                    'original' => $originalDate,
-                    'sanitized' => $enrolleeData[$dateField],
-                    'format_used' => $dateFormat
-                ]);
-            }
-        }
-
-        // Preserve original casing for the free-text unmapped columns field;
-        // it isn't a controlled-vocabulary field like the rest of the data.
-        $unmappedColumnsOriginal = $enrolleeData['unmapped_columns'] ?? null;
-        unset($enrolleeData['unmapped_columns']);
-
-        $enrolleeData = $this->uppercaseStrings($enrolleeData);
-
-        if ($unmappedColumnsOriginal !== null) {
-            $enrolleeData['unmapped_columns'] = $unmappedColumnsOriginal;
-        }
-
-        // Determine status and soft deletion based on employment_end_date
-        $enrolleeData['status'] = 'ACTIVE';
-        $shouldSoftDelete = false;
-
-        // Look up any existing principal first so we can check whether it already
-        // has an employment_end_date (needed for the back_date / resigned rules below)
-        $principalQuery = Enrollee::with(['healthInsurance'])
-            ->withTrashed()
-            ->where('employee_id', $employeeId)
-            ->where('enrollment_id', $enrollmentId);
-
-        $existingPrincipal = $principalQuery->first();
-
-        $existingHadEndDate = $existingPrincipal && !empty($existingPrincipal->employment_end_date);
-        $existingHasBackDate = $existingPrincipal && !empty($existingPrincipal->back_date);
-
-        // Never overwrite back_date once it has already been set on an existing principal.
-        if ($existingHasBackDate) {
-            unset($enrolleeData['back_date']);
-        }
-
-        $newEndDateProvided = (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) ||
-            ($originalEmploymentEndDate && !empty(trim($originalEmploymentEndDate)));
-
-        if ($existingHadEndDate) {
-            // The principal already has an employment_end_date on record.
-            // Don't adjust its mapped data (leave employment_end_date as-is)
-            // and don't update the back_date.
-            unset($enrolleeData['employment_end_date']);
-
-            Log::info('Skipping employment_end_date update and back_date; principal already has an employment_end_date', [
-                'employee_id' => $employeeId,
-                'existing_employment_end_date' => $existingPrincipal->employment_end_date,
-            ]);
-        } elseif ($newEndDateProvided) {
-            // employment_end_date is being mapped/added for the first time.
-            // Stamp back_date only when the employment_end_date month/year is
-            // earlier than the current month/year.
-            if (!empty($enrolleeData['employment_end_date'])) {
-                $endDateMonthYear = date('Y-m', strtotime($enrolleeData['employment_end_date']));
-                $currentMonthYear = date('Y-m');
-
-                if ($endDateMonthYear < $currentMonthYear && !$existingHasBackDate) {
-                    $enrolleeData['back_date'] = now();
-                }
-            }
-
-            if ($enrolleeData['employment_end_date'] <= date('Y-m-d')) {
-                // Date is today or in the past — mark as resigned
-                $enrolleeData['status'] = 'INACTIVE';
-                $enrolleeData['enrollment_status'] = 'RESIGNED';
-                //$shouldSoftDelete = true;
-            }
-            // If the uploaded employment_end_date is a future/advance date, don't update
-            // the resigned status — leave default ACTIVE.
-
-            //$healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
-        } else {
-            if ((isset($healthInsuranceData['certificate_number']) && !empty($healthInsuranceData['certificate_number']))) {
-
-                if (empty($healthInsuranceData['coverage_start_date'])) {
-                    $healthInsuranceData['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
-                }
-
-                if (empty($healthInsuranceData['coverage_start_date'])) {
-                    $healthInsuranceData['certificate_date_issued'] = $healthInsuranceData['coverage_start_date'];
-                }
-
-                $enrolleeData['status'] = 'ACTIVE';
-                $enrolleeData['enrollment_status'] = 'APPROVED';
-            }
-        }
-
-        $isRenewal = $existingPrincipal && $existingPrincipal->healthInsurance
-            ? $existingPrincipal->healthInsurance->is_renewal
-            : false;
-
-        if ($existingPrincipal) {
-
-            // Check for changes before updating existing active record
-            $hasChanges = false;
-            $changes = [];
-
-            foreach ($enrolleeData as $key => $value) {
-
-                // Skip timestamps and internal fields
-                if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
-                    continue;
-                }
-
-                $currentValue = $existingPrincipal->getAttribute($key);
-                $normalizedCurrentValue = $this->normalizeValue($currentValue);
-                $normalizedNewValue = $this->normalizeValue($value);
-
-                if ($normalizedCurrentValue !== $normalizedNewValue) {
-                    $hasChanges = true;
-                    $changes[$key] = [
-                        'old' => $currentValue,
-                        'new' => $value,
-                        'old_normalized' => $normalizedCurrentValue,
-                        'new_normalized' => $normalizedNewValue,
-                        'old_type' => gettype($currentValue),
-                        'new_type' => gettype($value)
-                    ];
-                }
-            }
-
-            // Debug: Log all field comparisons even when there are no changes.
-            // Only enabled when APP_DEBUG is on to avoid the overhead of building
-            // and writing this verbose log on every unchanged row during large imports.
-            if (!$hasChanges && config('app.debug')) {
-                $allComparisons = [];
-                foreach ($enrolleeData as $key => $value) {
-                    if (in_array($key, ['created_at', 'updated_at', 'coverage_end_date'])) {
-                        continue;
-                    }
-                    $currentValue = $existingPrincipal->getAttribute($key);
-                    $normalizedCurrentValue = $this->normalizeValue($currentValue);
-                    $normalizedNewValue = $this->normalizeValue($value);
-
-                    $allComparisons[$key] = [
-                        'old' => $currentValue,
-                        'new' => $value,
-                        'old_normalized' => $normalizedCurrentValue,
-                        'new_normalized' => $normalizedNewValue,
-                        'are_equal' => $normalizedCurrentValue === $normalizedNewValue,
-                        'old_type' => gettype($currentValue),
-                        'new_type' => gettype($value)
-                    ];
-                }
-
-                Log::info('Principal comparison details (no changes detected)', [
-                    'employee_id' => $employeeId,
-                    'comparisons' => $allComparisons
-                ]);
-            }
-
-            // Update if there are changes
-            if ($hasChanges) {
-                Log::info('Updating existing principal with changes', [
-                    'employee_id' => $employeeId,
-                    'changes' => $changes,
-                    'is_renewal' => $isRenewal
-                ]);
-
-                $existingPrincipal->update($enrolleeData);
-            } else {
-                Log::info('No principal changes detected, skipping update', [
-                    'employee_id' => $employeeId,
-                    'is_renewal' => $isRenewal
-                ]);
-            }
-
-            // Handle soft deletion if employment_end_date exists
-            if ($shouldSoftDelete) {
-                Log::info('Soft deleting principal due to employment_end_date', [
-                    'employee_id' => $employeeId,
-                    'employment_end_date' => $enrolleeData['employment_end_date'] ?? null
-                ]);
-                $currentUserId = auth()->check() ? auth()->user()->id : 1;
-                $existingPrincipal->update(['deleted_by' => $currentUserId]);
-                $existingPrincipal->delete();
-            } else {
-                Log::info('No soft deletion needed for principal', [
-                    'employee_id' => $employeeId,
-                    'has_employment_end_date' => isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])
-                ]);
-            }
-
-            return $existingPrincipal;
-        } else {
-
-            // Ensure employee_id is set properly to prevent auto-generation
-            if (!isset($enrolleeData['employee_id']) || empty($enrolleeData['employee_id'])) {
-                $enrolleeData['employee_id'] = $employeeId;
-            }
-
-            try {
-                $principal = Enrollee::create($enrolleeData);
-
-                // Soft delete immediately if employment_end_date exists
-                if ($shouldSoftDelete) {
-                    $currentUserId = auth()->check() ? auth()->user()->id : 1;
-                    $principal->update(['deleted_by' => $currentUserId]);
-                    $principal->delete();
-                }
-            } catch (\Exception $e) {
-                Log::error('Failed to create principal', [
-                    'employee_id' => $employeeId,
-                    'error' => $e->getMessage(),
-                    'sql_error' => $e->getPrevious() ? $e->getPrevious()->getMessage() : 'N/A',
-                    'enrollee_data' => $enrolleeData
-                ]);
-                throw $e;
-            }
-
-            return $principal;
-        }
-    }
-
-    public function attachDependents(Request $request, string $dateFormat = 'auto'): JsonResponse
-    {
-        DB::beginTransaction();
-
-        try {
-            $enrolleeId = $request->input('enrollee_id');
-            $dependentsData = $request->input('dependents', []);
-
-            if (empty($enrolleeId)) {
-                return response()->json(['message' => 'Enrollee ID is required'], 400);
-            }
-
-            if (empty($dependentsData)) {
-                return response()->json(['message' => 'No dependents data provided'], 400);
-            }
-
-            // Verify enrollee exists (including soft deleted ones since we might need to attach to them)
-            $enrollee = Enrollee::withTrashed()->find($enrolleeId);
-            if (!$enrollee) {
-                return response()->json(['message' => 'Enrollee not found with id: ' . $enrolleeId], 404);
-            }
-
-            $dependentFields = (new Dependent())->getFillable();
-            $createdDependents = [];
-            $hasChanges = false;
-
-            foreach ($dependentsData as $dependentData) {
-                $filtered = array_intersect_key($dependentData, array_flip($dependentFields));
-
-                // Sanitize all date fields in dependent data
-                $dateFields = [
-                    'birth_date',
-                ];
-
-                foreach ($dateFields as $dateField) {
-                    if (isset($filtered[$dateField]) && !empty($filtered[$dateField])) {
-
-                        $originalDate = $filtered[$dateField];
-
-                        $filtered[$dateField] = $this->sanitizeDateWithFormat($filtered[$dateField], $dateFormat);
-                        Log::info("Sanitized dependent date field", [
-                            'field' => $dateField,
-                            'original' => $originalDate,
-                            'sanitized' => $filtered[$dateField],
-                            'format_used' => $dateFormat
-                        ]);
-                    }
-                }
-
-                $filtered = $this->uppercaseStrings($filtered);
-                $filtered['principal_id'] = $enrolleeId;
-
-                // Check for existing dependent by principal_id and birth_date
-                $dependentQuery = Dependent::withTrashed()->where('principal_id',  $enrolleeId);
-
-                if (isset($filtered['birth_date']) && !empty($filtered['birth_date'])) {
-                    $dependentQuery = $dependentQuery->where('birth_date', $filtered['birth_date']);
-                }
-
-                $existingDependent = $dependentQuery->first();
-
-                if ($existingDependent) {
-                    // Check for changes before updating
-                    $dependentHasChanges = false;
-                    $dependentChanges = [];
-
-                    foreach ($filtered as $key => $value) {
-                        if (in_array($key, ['created_at', 'updated_at'])) {
-                            continue;
-                        }
-                        $currentValue = $existingDependent->getAttribute($key);
-                        $normalizedCurrentValue = $this->normalizeValue($currentValue);
-                        $normalizedNewValue = $this->normalizeValue($value);
-
-                        if ($normalizedCurrentValue !== $normalizedNewValue) {
-                            $dependentHasChanges = true;
-                            $dependentChanges[$key] = [
-                                'old' => $currentValue,
-                                'new' => $value,
-                                'old_normalized' => $normalizedCurrentValue,
-                                'new_normalized' => $normalizedNewValue
-                            ];
-                        }
-                    }
-
-                    if ($dependentHasChanges) {
-                        Log::info("Updating existing dependent with changes", [
-                            'dependent_id' => $existingDependent->id,
-                            'principal_id' => $enrolleeId,
-                            'changes' => $dependentChanges
-                        ]);
-                        $existingDependent->update($filtered);
-                        $hasChanges = true;
-                    } else {
-                        Log::info("No changes detected for existing dependent, skipping update", [
-                            'dependent_id' => $existingDependent->id,
-                            'principal_id' => $enrolleeId,
-                            'birth_date' => $filtered['birth_date'] ?? null
-                        ]);
-                    }
-                    $dependent = $existingDependent;
-                } else {
-                    Log::info("Creating new dependent", [
-                        'principal_id' => $enrolleeId,
-                        'birth_date' => $filtered['birth_date'] ?? null
-                    ]);
-                    $dependent = Dependent::create($filtered);
-                    $hasChanges = true;
-                }
-
-                $createdDependents[] = $dependent;
-            }
-
-            // Always update the principal's updated_at timestamp when importing dependents
-            $enrollee->touch();
-            Log::info("Updated principal timestamp due to dependent import", [
-                'principal_id' => $enrolleeId,
-                'dependents_processed' => count($createdDependents),
-                'had_changes' => $hasChanges
-            ]);
-
-            DB::commit();
-            return response()->json(['message' => 'Dependents attached successfully', 'dependents' => $createdDependents], 200);
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return response()->json(['message' => 'Failed to attach dependents', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Process health insurance data and convert boolean fields
-     */
-    private function processHealthInsuranceData(array $healthInsuranceData, bool $withRenewalChecking = false): array
-    {
-        // Convert is_company_paid from 'Yes'/'No' to 1/0 if present
-        if (isset($healthInsuranceData['is_company_paid'])) {
-            if (is_numeric($healthInsuranceData['is_company_paid'])) {
-                $healthInsuranceData['is_company_paid'] = (int)$healthInsuranceData['is_company_paid'];
-            } else {
-                $value = strtoupper(trim($healthInsuranceData['is_company_paid']));
-                $healthInsuranceData['is_company_paid'] = ($value === 'YES') ? 1 : 0;
-            }
-        } else {
-            $healthInsuranceData['is_company_paid'] = 0;
-        }
-
-        if ($withRenewalChecking) {
-            // Convert is_renewal from 'Yes'/'No' to 1/0 if present
-            if (isset($healthInsuranceData['is_renewal'])) {
-                if (is_numeric($healthInsuranceData['is_renewal'])) {
-                    $healthInsuranceData['is_renewal'] = (int)$healthInsuranceData['is_renewal'];
-                } else {
-                    $value = strtoupper(trim($healthInsuranceData['is_renewal']));
-                    $healthInsuranceData['is_renewal'] = ($value === 'YES') ? 1 : 0;
-                }
-            }
-        }
-
-        // Convert is_skipping from 'Yes'/'No' to 1/0 if present
-        if (isset($healthInsuranceData['is_skipping'])) {
-            if (is_numeric($healthInsuranceData['is_skipping'])) {
-                $healthInsuranceData['is_skipping'] = (int)$healthInsuranceData['is_skipping'];
-            } else {
-                $value = strtoupper(trim($healthInsuranceData['is_skipping']));
-                $healthInsuranceData['is_skipping'] = ($value === 'YES') ? 1 : 0;
-            }
-        } else {
-            $healthInsuranceData['is_skipping'] = 0;
-            if (isset($healthInsuranceData['reason_for_skipping'])) {
-                if (!empty($healthInsuranceData['reason_for_skipping'])) {
-                    $healthInsuranceData['is_skipping'] = 1;
-                }
-            }
-        }
-
-        return $healthInsuranceData;
-    }
-
-    public function attachHealthInsurance(Request $request, string $dateFormat = 'auto'): JsonResponse
-    {
-        DB::beginTransaction();
-
-        try {
-            $enrolleeId = $request->input('enrollee_id');
-            $dependentId = $request->input('dependent_id');
-            $insuranceData = $request->input('insurance', []);
-
-            if (!$enrolleeId && !$dependentId) {
-                return response()->json(['message' => 'Either enrollee_id or dependent_id must be provided'], 400);
-            }
-
-            if (empty($insuranceData)) {
-                return response()->json(['message' => 'No insurance data provided'], 400);
-            }
-
-            $insuranceFields = (new HealthInsurance())->getFillable();
-            $filtered = array_intersect_key($insuranceData, array_flip($insuranceFields));
-
-            // Sanitize all date fields in health insurance
-            $dateFields = [
-                'coverage_start_date',
-                'coverage_end_date',
-                'certificate_date_issued',
-                'kyc_datestamp',
-                'card_delivery_date',
-            ];
-
-            foreach ($dateFields as $dateField) {
-                if (isset($filtered[$dateField]) && !empty($filtered[$dateField])) {
-                    $originalDate = $filtered[$dateField];
-                    $filtered[$dateField] = $this->sanitizeDateWithFormat($filtered[$dateField], $dateFormat);
-                    Log::info("Sanitized insurance date field", [
-                        'field' => $dateField,
-                        'original' => $originalDate,
-                        'sanitized' => $filtered[$dateField],
-                        'format_used' => $dateFormat
-                    ]);
-                }
-            }
-
-            $filtered = $this->uppercaseStrings($filtered);
-
-            if ($enrolleeId) {
-
-                // Verify enrollee exists
-                $enrollee = Enrollee::find($enrolleeId);
-
-                if (!$enrollee) {
-                    return response()->json(['message' => 'Enrollee not found with id: ' . $enrolleeId], 404);
-                }
-
-                $filtered['principal_id'] = $enrolleeId;
-            } elseif ($dependentId) {
-
-                // Verify dependent exists
-                $dependent = Dependent::find($dependentId);
-
-                if (!$dependent) {
-                    return response()->json(['message' => 'Dependent not found with id: ' . $dependentId], 404);
-                }
-
-                $filtered['dependent_id'] = $dependentId;
-
-                // If certificate_number is present, set enrollment_status to APPROVED
-                // and populate coverage_start_date and certificate_date_issued if empty
-                if (!empty($filtered['certificate_number'])) {
-                    if (empty($filtered['coverage_start_date'])) {
-                        $filtered['coverage_start_date'] = date('Y-m-d', strtotime('first day of next month'));
-                    }
-                    if (empty($filtered['certificate_date_issued'])) {
-                        $filtered['certificate_date_issued'] = $filtered['coverage_start_date'];
-                    }
-                    $dependent->update(['enrollment_status' => 'APPROVED']);
-                    Log::info("Set dependent enrollment_status to APPROVED due to certificate_number", [
-                        'dependent_id' => $dependentId,
-                        'certificate_number' => $filtered['certificate_number'],
-                        'coverage_start_date' => $filtered['coverage_start_date'],
-                        'certificate_date_issued' => $filtered['certificate_date_issued']
-                    ]);
-                }
-            }
-
-            // Check for existing insurance by principal_id or dependent_id
-            $insuranceQuery = HealthInsurance::query();
-            if (isset($filtered['principal_id'])) {
-                $insuranceQuery->where('principal_id', $filtered['principal_id']);
-            } elseif (isset($filtered['dependent_id'])) {
-                $insuranceQuery->where('dependent_id', $filtered['dependent_id']);
-            }
-
-            $existingInsurance = $insuranceQuery->first();
-
-            $hasInsuranceChanges = false;
-
-            if ($existingInsurance) {
-                // Check for changes before updating
-                $insuranceChanges = [];
-
-                foreach ($filtered as $key => $value) {
-                    if (in_array($key, ['created_at', 'updated_at'])) {
-                        continue;
-                    }
-                    $currentValue = $existingInsurance->getAttribute($key);
-                    $normalizedCurrentValue = $this->normalizeValue($currentValue);
-                    $normalizedNewValue = $this->normalizeValue($value);
-
-                    if ($normalizedCurrentValue !== $normalizedNewValue) {
-                        $hasInsuranceChanges = true;
-                        $insuranceChanges[$key] = [
-                            'old' => $currentValue,
-                            'new' => $value,
-                            'old_normalized' => $normalizedCurrentValue,
-                            'new_normalized' => $normalizedNewValue
-                        ];
-                    }
-                }
-
-                if ($hasInsuranceChanges) {
-                    Log::info("Updating existing health insurance with changes", [
-                        'insurance_id' => $existingInsurance->id,
-                        'principal_id' => $enrolleeId ?? null,
-                        'dependent_id' => $dependentId ?? null,
-                        'changes' => $insuranceChanges
-                    ]);
-                    $existingInsurance->update($filtered);
-                } else {
-                    Log::info("No changes detected for existing health insurance, skipping update", [
-                        'insurance_id' => $existingInsurance->id,
-                        'principal_id' => $enrolleeId ?? null,
-                        'dependent_id' => $dependentId ?? null
-                    ]);
-                }
-                $insurance = $existingInsurance;
-            } else {
-                Log::info("Creating new health insurance", [
-                    'principal_id' => $enrolleeId ?? null,
-                    'dependent_id' => $dependentId ?? null
-                ]);
-                $insurance = HealthInsurance::create($filtered);
-                $hasInsuranceChanges = true;
-            }
-
-            // Only update the principal's updated_at timestamp when there are actual changes
-            if ($hasInsuranceChanges) {
-                if ($enrolleeId) {
-                    // Direct principal insurance update
-                    $enrollee->touch();
-                    Log::info("Updated principal timestamp due to health insurance changes", [
-                        'principal_id' => $enrolleeId,
-                        'insurance_type' => 'principal',
-                        'actual_changes' => true
-                    ]);
-                } elseif ($dependentId) {
-                    // Dependent insurance update - update the principal through the dependent
-                    if ($dependent && $dependent->principal_id) {
-                        $principal = Enrollee::find($dependent->principal_id);
-                        if ($principal) {
-                            $principal->touch();
-                            Log::info("Updated principal timestamp due to dependent health insurance changes", [
-                                'principal_id' => $dependent->principal_id,
-                                'dependent_id' => $dependentId,
-                                'insurance_type' => 'dependent',
-                                'actual_changes' => true
-                            ]);
-                        }
-                    }
-                }
-            } else {
-                Log::info("No health insurance changes detected, principal timestamp not updated", [
-                    'principal_id' => $enrolleeId ?? ($dependent->principal_id ?? null),
-                    'dependent_id' => $dependentId ?? null,
-                    'insurance_type' => $enrolleeId ? 'principal' : 'dependent'
-                ]);
-            }
-
-            DB::commit();
-            return response()->json(['message' => 'Health insurance attached successfully', 'insurance' => $insurance], 200);
-        } catch (\Exception $e) {
-
-            DB::rollBack();
-            return response()->json(['message' => 'Failed to attach health insurance', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Download import log as text file for super admin
-     */
-    public function downloadImportLog(int $importLogId)
+    public function getImportLogs(Request $request): JsonResponse
     {
         try {
-            $importLog = ImportLog::with('enrollment')->find($importLogId);
+            $query = ImportLog::query()->orderByDesc('import_date');
 
-            if (!$importLog) {
-                return response()->json(['message' => 'Import log not found'], 404);
+            if ($request->filled('enrollment_id')) {
+                $query->where('enrollment_id', (int) $request->input('enrollment_id'));
             }
 
-            // Generate text report
-            $report = $this->generateImportReport($importLog);
-
-            // Generate filename with enrollment (or multi-provider) and date info
-            $enrollment = $importLog->enrollment;
-            $enrollmentSegment = $enrollment ? "enrollment-{$enrollment->id}" : 'multi-provider';
-            $filename = "import_log_{$enrollmentSegment}_{$importLog->import_date->format('Y-m-d_His')}.txt";
-
-            return response($report, 200)
-                ->header('Content-Type', 'text/plain; charset=utf-8')
-                ->header('Content-Disposition', "attachment; filename=\"{$filename}\"");
-        } catch (\Exception $e) {
-            Log::error('Failed to download import log', [
-                'import_log_id' => $importLogId,
-                'error' => $e->getMessage()
-            ]);
-            return response()->json(['message' => 'Failed to download import log', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Get import logs for an enrollment
-     */
-    public function getImportLogs(Request $request)
-    {
-        try {
-            $enrollmentId = $request->input('enrollment_id');
-            $multiProvider = $request->boolean('multi_provider');
-
-            // Exclude the (potentially very large) import_details JSON column from the
-            // listing query. Sorting rows that include this column (or an expression
-            // derived from it, e.g. JSON_EXTRACT) can exhaust the MySQL sort buffer
-            // ("Out of sort memory") because filesort has to carry the full row buffer
-            // (including any JSON text) in memory. To avoid filesort altogether, the
-            // ORDER BY is applied in PHP after fetching only the lightweight columns.
-            // The full details are only loaded when downloading/viewing a single log
-            // (see downloadImportLog).
-            $query = ImportLog::query()->select([
-                'id',
-                'enrollment_id',
-                'import_date',
-                'total_principals',
-                'total_dependents',
-                'principals_created',
-                'principals_updated',
-                'dependents_created',
-                'dependents_updated',
-                'date_format_detected',
-                'date_format_confidence',
-                'status',
-                'error_message',
-                'created_at',
-                'updated_at',
-                DB::raw("JSON_EXTRACT(import_details, '$.source_file') as source_file_json"),
-            ]);
-
-            if ($multiProvider) {
-                // Imports done via the company/provider flexible import (no single enrollment)
+            if ($request->boolean('multi_provider')) {
                 $query->whereNull('enrollment_id');
-            } elseif ($enrollmentId) {
-                $query->where('enrollment_id', $enrollmentId);
-            } else {
-                return response()->json(['message' => 'Enrollment ID is required'], 400);
             }
 
-            // No ORDER BY / LIMIT at the SQL level (see comment above) — sort and cap
-            // the result set in PHP instead.
-            $logs = $query->get()
-                ->sortByDesc(fn ($log) => $log->import_date)
-                ->take(500)
-                ->values();
+            $logs = $query->get()->map(function (ImportLog $log) {
+                $details = $log->import_details ?? [];
 
-            $logs->each(function ($log) {
-                $sourceFile = $log->source_file_json ? json_decode($log->source_file_json, true) : null;
-                $log->import_details = ['source_file' => $sourceFile];
-                unset($log->source_file_json);
-            });
+                return [
+                    'id' => $log->id,
+                    'enrollment_id' => $log->enrollment_id,
+                    'import_date' => $log->import_date?->toDateTimeString(),
+                    'total_principals' => (int) ($log->total_principals ?? 0),
+                    'total_dependents' => (int) ($log->total_dependents ?? 0),
+                    'principals_created' => (int) ($log->principals_created ?? 0),
+                    'principals_updated' => (int) ($log->principals_updated ?? 0),
+                    'dependents_created' => (int) ($log->dependents_created ?? 0),
+                    'dependents_updated' => (int) ($log->dependents_updated ?? 0),
+                    'status' => $log->status,
+                    'error_message' => $log->error_message,
+                    'date_format_detected' => $log->date_format_detected,
+                    'date_format_confidence' => $log->date_format_confidence,
+                    'import_details' => is_array($details) ? $details : [],
+                ];
+            })->all();
 
             return response()->json([
                 'data' => $logs,
-                'count' => $logs->count(),
+                'count' => count($logs),
             ], 200);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Failed to get import logs', [
-                'error' => $e->getMessage()
-            ]);
-            return response()->json(['message' => 'Failed to get import logs', 'error' => $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Compare temporary import rows vs existing principals for the same
-     * enrollment, always matched by employee_id.
-     */
-    public function compareTempImportData(Request $request): JsonResponse
-    {
-        try {
-            $incomingSearch = $request->input('search');
-
-            if (is_array($incomingSearch)) {
-                $request->merge([
-                    'search' => trim(implode(' ', array_map(fn ($value) => (string) $value, $incomingSearch))),
-                ]);
-            } elseif (!is_null($incomingSearch) && !is_string($incomingSearch) && !is_numeric($incomingSearch)) {
-                $request->merge([
-                    'search' => (string) $incomingSearch,
-                ]);
-            }
-
-            $request->validate([
-                'enrollment_id' => 'required|integer|exists:cm_enrollment,id',
-                'import_date' => 'sometimes|date',
-                'enrollment_status' => 'sometimes|string',
-                'search' => 'sometimes|nullable|string',
-                'search_by' => 'sometimes|in:all,employee_id,name,department,certificate_number',
-                'show_temp_columns' => 'sometimes|array',
-                'show_temp_columns.*' => 'string',
-            ]);
-
-            $enrollmentId = (int) $request->input('enrollment_id');
-
-            $availableImportDates = ImportTempData::query()
-                ->where('enrollment_id', $enrollmentId)
-                ->select('import_date')
-                ->distinct()
-                ->orderByDesc('import_date')
-                ->pluck('import_date')
-                ->map(function ($date) {
-                    $dateString = (string) $date;
-
-                    if ($dateString === '') {
-                        return $dateString;
-                    }
-
-                    return substr($dateString, 0, 10);
-                })
-                ->filter(fn ($date) => $date !== '')
-                ->unique()
-                ->values();
-
-            if ($availableImportDates->isEmpty()) {
-                return response()->json([
-                    'message' => 'No temporary import data found for this enrollment. Import data first.',
-                ], 404);
-            }
-
-            $selectedImportDate = trim((string) $request->input('import_date', ''));
-
-            if ($selectedImportDate === '' || !$availableImportDates->contains($selectedImportDate)) {
-                $selectedImportDate = (string) $availableImportDates->first();
-            }
-
-            $sourceRows = ImportTempData::query()
-                ->where('enrollment_id', $enrollmentId)
-                ->whereDate('import_date', $selectedImportDate)
-                ->orderBy('row_number')
-                ->get();
-
-            $sourceColumns = [];
-            $sourceColumnHasValue = [];
-            $tempRowsByEmployeeId = [];
-
-            foreach ($sourceRows as $sourceRow) {
-                $columnNames = is_array($sourceRow->column_names) ? $sourceRow->column_names : [];
-                $sourceColumns = array_values(array_unique(array_merge($sourceColumns, $columnNames)));
-
-                $rowData = is_array($sourceRow->row_data) ? $sourceRow->row_data : [];
-                $sourceColumns = array_values(array_unique(array_merge($sourceColumns, array_keys($rowData))));
-
-                foreach ($rowData as $columnName => $columnValue) {
-                    if (!array_key_exists($columnName, $sourceColumnHasValue)) {
-                        $sourceColumnHasValue[$columnName] = false;
-                    }
-
-                    if (!$this->isNullLikeValue($columnValue)) {
-                        $sourceColumnHasValue[$columnName] = true;
-                    }
-                }
-
-                $employeeId = strtoupper(trim((string) ($rowData['employee_id'] ?? '')));
-
-                if ($employeeId !== '') {
-                    $tempRowsByEmployeeId[$employeeId] = $rowData;
-                }
-            }
-
-            $sourceColumns = array_values(array_filter(
-                $sourceColumns,
-                fn ($columnName) => !empty($sourceColumnHasValue[$columnName])
-            ));
-
-            $showTempColumns = collect($request->input('show_temp_columns', []))
-                ->map(fn ($column) => trim((string) $column))
-                ->filter(fn ($column) => $column !== '')
-                ->filter(fn ($column) => in_array($column, $sourceColumns, true))
-                ->unique()
-                ->values()
-                ->all();
-
-            if (empty($showTempColumns)) {
-                $showTempColumns = ['employee_id'];
-            }
-
-            $selectedEnrollmentStatus = strtoupper(trim((string) $request->input('enrollment_status', '')));
-            $rawSearch = $request->input('search', '');
-            $search = trim(is_scalar($rawSearch) ? (string) $rawSearch : '');
-            $searchBy = trim((string) $request->input('search_by', 'all'));
-
-            if (!in_array($searchBy, ['all', 'employee_id', 'name', 'department', 'certificate_number'], true)) {
-                $searchBy = 'all';
-            }
-
-            $statusOptions = Enrollee::query()
-                ->where('enrollment_id', $enrollmentId)
-                ->whereNotNull('enrollment_status')
-                ->select('enrollment_status')
-                ->distinct()
-                ->orderBy('enrollment_status')
-                ->pluck('enrollment_status')
-                ->values();
-
-            $existingBaseQuery = Enrollee::query()
-                ->with(['healthInsurance:id,principal_id,certificate_number'])
-                ->where('enrollment_id', $enrollmentId);
-
-            if ($selectedEnrollmentStatus !== '') {
-                $existingBaseQuery->where('enrollment_status', $selectedEnrollmentStatus);
-            }
-
-            $existingQuery = clone $existingBaseQuery;
-
-            if ($search !== '') {
-                $existingQuery->where(function ($query) use ($search, $searchBy) {
-                    $searchLike = '%' . $search . '%';
-
-                    if ($searchBy === 'employee_id') {
-                        $query->where('employee_id', 'LIKE', $searchLike);
-                        return;
-                    }
-
-                    if ($searchBy === 'name') {
-                        $query->where('first_name', 'LIKE', $searchLike)
-                            ->orWhere('last_name', 'LIKE', $searchLike)
-                            ->orWhere(DB::raw("CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))"), 'LIKE', $searchLike)
-                            ->orWhere(DB::raw("CONCAT(COALESCE(last_name, ''), ', ', COALESCE(first_name, ''))"), 'LIKE', $searchLike);
-                        return;
-                    }
-
-                    if ($searchBy === 'department') {
-                        $query->where('department', 'LIKE', $searchLike);
-                        return;
-                    }
-
-                    if ($searchBy === 'certificate_number') {
-                        $query->whereHas('healthInsurance', function ($healthInsuranceQuery) use ($searchLike) {
-                            $healthInsuranceQuery->where('certificate_number', 'LIKE', $searchLike);
-                        });
-                        return;
-                    }
-
-                    $query->where('employee_id', 'LIKE', $searchLike)
-                        ->orWhere('first_name', 'LIKE', $searchLike)
-                        ->orWhere('last_name', 'LIKE', $searchLike)
-                        ->orWhere('department', 'LIKE', $searchLike)
-                        ->orWhere(DB::raw("CONCAT(COALESCE(first_name, ''), ' ', COALESCE(last_name, ''))"), 'LIKE', $searchLike)
-                        ->orWhere(DB::raw("CONCAT(COALESCE(last_name, ''), ', ', COALESCE(first_name, ''))"), 'LIKE', $searchLike)
-                        ->orWhereHas('healthInsurance', function ($healthInsuranceQuery) use ($searchLike) {
-                            $healthInsuranceQuery->where('certificate_number', 'LIKE', $searchLike);
-                        });
-                });
-            }
-
-            $existingRows = $existingQuery->get([
-                'id',
-                'employee_id',
-                'first_name',
-                'last_name',
-                'middle_name',
-                'suffix',
-                'department',
-                'employment_start_date',
-                'employment_end_date',
-                'back_date',
-                'status',
-                'enrollment_status',
-            ]);
-
-            $existingRowsForTally = $search === ''
-                ? (clone $existingBaseQuery)->get([
-                    'id',
-                    'employee_id',
-                    'status',
-                    'enrollment_status',
-                ])
-                : $existingRows;
-
-            $todayDate = now()->toDateString();
-            $results = [];
-
-            foreach ($existingRows as $existingRow) {
-                $employeeId = strtoupper(trim((string) ($existingRow->employee_id ?? '')));
-                $sourceData = $employeeId !== '' ? ($tempRowsByEmployeeId[$employeeId] ?? null) : null;
-                $tempVisibleData = [];
-                foreach ($showTempColumns as $column) {
-                    $rawTempValue = $sourceData[$column] ?? null;
-                    $tempVisibleData[$column] = $this->normalizeTempDisplayValue($column, $rawTempValue);
-                }
-
-                $fullNameParts = array_filter([
-                    $existingRow->last_name,
-                    $existingRow->first_name,
-                    $existingRow->middle_name,
-                    $existingRow->suffix,
-                ], fn ($value) => !empty(trim((string) $value)));
-
-                $fullName = implode(', ', array_filter([
-                    !empty($existingRow->last_name) ? $existingRow->last_name : null,
-                    trim(implode(' ', array_filter([
-                        $existingRow->first_name,
-                        $existingRow->middle_name,
-                        $existingRow->suffix,
-                    ], fn ($value) => !empty(trim((string) $value))))) ?: null,
-                ]));
-
-                $existingStatusBucket = $this->getExistingTallyStatusBucket(
-                    $existingRow->enrollment_status ?? null,
-                    $existingRow->status ?? null
-                );
-
-                $tempStatusBucket = is_array($sourceData)
-                    ? $this->getTempTallyStatusBucket($sourceData, $todayDate)
-                    : null;
-
-                $statusMatch = is_array($sourceData)
-                    ? $existingStatusBucket === $tempStatusBucket
-                    : null;
-
-                $results[] = [
-                    'employee_id' => $existingRow->employee_id,
-                    'full_name' => $fullName,
-                    'department' => $existingRow->department,
-                    'employment_start_date' => optional($existingRow->employment_start_date)->format('Y-m-d') ?: $existingRow->employment_start_date,
-                    'employment_end_date' => optional($existingRow->employment_end_date)->format('Y-m-d') ?: $existingRow->employment_end_date,
-                    'back_date' => optional($existingRow->back_date)->format('Y-m-d') ?: $existingRow->back_date,
-                    'certificate_number' => $existingRow->healthInsurance->certificate_number ?? null,
-                    'enrollment_status' => $existingRow->enrollment_status,
-                    'match_status' => $sourceData ? 'MATCH' : 'UNMATCHED',
-                    'is_matched' => (bool) $sourceData,
-                    'status_match' => $statusMatch,
-                    'existing_status_bucket' => $existingStatusBucket,
-                    'temp_status_bucket' => $tempStatusBucket,
-                    'temp_data' => $tempVisibleData,
-                ];
-            }
-
-            $existingEmployeeIds = [];
-
-            foreach ($existingRowsForTally as $existingRow) {
-                $employeeId = strtoupper(trim((string) ($existingRow->employee_id ?? '')));
-
-                if ($employeeId !== '') {
-                    $existingEmployeeIds[$employeeId] = true;
-                }
-            }
-
-            $tempRowsForTally = $search === ''
-                ? $tempRowsByEmployeeId
-                : array_filter(
-                    $tempRowsByEmployeeId,
-                    fn ($tempRow) => $this->tempRowMatchesSearch(
-                        is_array($tempRow) ? $tempRow : [],
-                        $search,
-                        $searchBy
-                    )
-                );
-
-            $tempEmployeeIds = array_keys($tempRowsForTally);
-
-            $tempApprovedCount = 0;
-            $tempResignedCount = 0;
-            $tempNotEnrolledCount = 0;
-
-            foreach ($tempRowsForTally as $tempRow) {
-                if ($this->isTempApprovedMember($tempRow)) {
-                    $tempApprovedCount++;
-                }
-
-                if ($this->isTempRowResigned($tempRow, $todayDate)) {
-                    $tempResignedCount++;
-                }
-
-                if ($this->isTempNotEnrolledMember($tempRow)) {
-                    $tempNotEnrolledCount++;
-                }
-            }
-
-            $existingApprovedCount = 0;
-            $existingResignedCount = 0;
-            $existingNotEnrolledCount = 0;
-
-            foreach ($existingRowsForTally as $existingRow) {
-                if ($this->isExistingApprovedMember($existingRow->enrollment_status ?? null)) {
-                    $existingApprovedCount++;
-                }
-
-                if ($this->isResignedMember($existingRow->enrollment_status ?? null, $existingRow->status ?? null)) {
-                    $existingResignedCount++;
-                }
-
-                if ($this->isExistingNotEnrolledMember(
-                    $existingRow->enrollment_status ?? null,
-                    $existingRow->status ?? null
-                )) {
-                    $existingNotEnrolledCount++;
-                }
-            }
-
-            $notInLookerTempCount = 0;
-
-            foreach (array_keys($existingEmployeeIds) as $existingEmployeeId) {
-                if (!isset($tempRowsForTally[$existingEmployeeId])) {
-                    $notInLookerTempCount++;
-                }
-            }
-
-            $notInExistingSystemCount = 0;
-
-            foreach ($tempEmployeeIds as $tempEmployeeId) {
-                if (!isset($existingEmployeeIds[$tempEmployeeId])) {
-                    $notInExistingSystemCount++;
-                }
-            }
-
-            $matchedCount = count(array_filter($results, fn ($row) => $row['is_matched'] === true));
-            $unmatchedCount = count($results) - $matchedCount;
-
-            $summary = [
-                'temp_rows_considered' => count($tempRowsByEmployeeId),
-                'existing_rows_considered' => $existingRows->count(),
-                'matched' => $matchedCount,
-                'unmatched' => $unmatchedCount,
-            ];
-
-            $tally = [
-                'total_members' => [
-                    'looker_temp' => count($tempEmployeeIds),
-                    'existing' => $existingRowsForTally->count(),
-                ],
-                'active_approved' => [
-                    'looker_temp' => $tempApprovedCount,
-                    'existing' => $existingApprovedCount,
-                ],
-                'resigned' => [
-                    'looker_temp' => $tempResignedCount,
-                    'existing' => $existingResignedCount,
-                ],
-                'not_enrolled' => [
-                    'looker_temp' => $tempNotEnrolledCount,
-                    'existing' => $existingNotEnrolledCount,
-                ],
-                'not_in_looker_temp' => [
-                    'looker_temp' => 0,
-                    'existing' => $notInLookerTempCount,
-                ],
-                'not_in_existing_system' => [
-                    'looker_temp' => $notInExistingSystemCount,
-                    'existing' => 0,
-                ],
-            ];
-
-            return response()->json([
-                'source_enrollment_id' => $enrollmentId,
-                'available_import_dates' => $availableImportDates,
-                'selected_import_date' => $selectedImportDate,
-                'selected_enrollment_status' => $selectedEnrollmentStatus,
-                'search' => $search,
-                'search_by' => $searchBy,
-                'available_enrollment_statuses' => $statusOptions,
-                'available_temp_columns' => $sourceColumns,
-                'show_temp_columns' => $showTempColumns,
-                'source_total_rows' => $sourceRows->count(),
-                'source_rows_with_employee_id' => count($tempRowsByEmployeeId),
-                'summary' => $summary,
-                'tally' => $tally,
-                'results' => $results,
-            ], 200);
-        } catch (\Illuminate\Validation\ValidationException $validationException) {
-            throw $validationException;
-        } catch (\Exception $e) {
-            Log::error('Failed to compare temp import data', [
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
-                'message' => 'Failed to compare temp import data',
+                'message' => 'Failed to get import logs',
                 'error' => $e->getMessage(),
             ], 500);
         }
     }
 
     /**
-     * Generate formatted text report from import log
+     * Download the original uploaded file attached to an import log.
      */
-    private function generateImportReport(ImportLog $importLog): string
+    public function downloadImportLog(int $id): \Symfony\Component\HttpFoundation\StreamedResponse|JsonResponse
     {
-        $details = $importLog->import_details ?? [];
+        try {
+            $log = ImportLog::find($id);
 
-        // If the inline details were truncated to keep the DB row small, load
-        // the full log from disk (if still available) so the downloaded
-        // report contains every principal/dependent, not just the preview.
-        if (!empty($details['truncated']) && !empty($details['full_log_file'])) {
-            try {
-                if (Storage::disk('local')->exists($details['full_log_file'])) {
-                    $fullDetails = json_decode(Storage::disk('local')->get($details['full_log_file']), true);
-                    if (is_array($fullDetails)) {
-                        $details = $fullDetails;
-                    }
-                }
-            } catch (\Throwable $e) {
-                Log::warning('Failed to load full import log from disk for report generation', [
-                    'import_log_id' => $importLog->id,
-                    'full_log_file' => $details['full_log_file'],
-                    'error' => $e->getMessage(),
-                ]);
+            if (!$log) {
+                return response()->json([
+                    'message' => 'Import log not found.',
+                ], 404);
             }
-        }
 
-        $summary = $details['summary'] ?? [];
-        $principals = $details['principals'] ?? [];
-        $dependents = $details['dependents'] ?? [];
+            $details = $log->import_details ?? [];
+            $sourceFile = $details['source_file'] ?? null;
+            $storagePath = $sourceFile['path'] ?? null;
+            $filename = $sourceFile['original_name'] ?? $sourceFile['stored_name'] ?? 'import-log-file';
 
-        $report = "=" . str_repeat("=", 98) . "\n";
-        $report .= "IMPORT LOG REPORT\n";
-        $report .= "=" . str_repeat("=", 98) . "\n\n";
+            if (!$storagePath || !Storage::disk('spaces')->exists($storagePath)) {
+                $downloadUrl = $sourceFile['url'] ?? null;
 
-        // Header Information
-        $report .= "IMPORT INFORMATION:\n";
-        $report .= "-" . str_repeat("-", 98) . "\n";
-        $report .= sprintf("Import Log ID:          %s\n", $importLog->id);
-        $report .= sprintf(
-            "Enrollment ID:          %s\n",
-            $importLog->enrollment_id ?? 'Multi-Provider (' . implode(', ', $details['affected_enrollment_ids'] ?? []) . ')'
-        );
-        $report .= sprintf("Import Date:            %s\n", $importLog->import_date->format('Y-m-d H:i:s'));
-        $report .= sprintf("Status:                 %s\n", strtoupper($importLog->status));
-        $report .= sprintf("Date Format Detected:   %s\n", $importLog->date_format_detected);
-        $report .= sprintf("Date Confidence:        %s\n", $importLog->date_format_confidence);
-
-        if ($importLog->error_message) {
-            $report .= sprintf("Error Message:          %s\n", $importLog->error_message);
-        }
-
-        $report .= "\n";
-
-        // Summary Statistics
-        $report .= "IMPORT SUMMARY:\n";
-        $report .= "-" . str_repeat("-", 98) . "\n";
-        $report .= sprintf("Total Principals:       %d\n", $summary['total_principals'] ?? 0);
-        $report .= sprintf("Principals Created:     %d\n", $summary['principals_created'] ?? 0);
-        $report .= sprintf("Principals Updated:     %d\n", $summary['principals_updated'] ?? 0);
-        $report .= sprintf("Total Dependents:       %d\n", $summary['total_dependents'] ?? 0);
-        $report .= sprintf("Dependents Created:     %d\n", $summary['dependents_created'] ?? 0);
-        $report .= sprintf("Dependents Updated:     %d\n", $summary['dependents_updated'] ?? 0);
-
-        $report .= "\n";
-
-        // Principals Details
-        if (!empty($principals)) {
-            $report .= "PRINCIPALS IMPORTED:\n";
-            $report .= "=" . str_repeat("=", 98) . "\n\n";
-
-            foreach ($principals as $index => $principal) {
-                $report .= sprintf("PRINCIPAL #%d\n", $index + 1);
-                $report .= "-" . str_repeat("-", 98) . "\n";
-                $report .= sprintf("Employee ID:            %s\n", $principal['employee_id']);
-                $report .= sprintf("Action:                 %s\n", strtoupper($principal['action']));
-                $report .= sprintf("Timestamp:              %s\n", $principal['timestamp']);
-
-                $report .= "\n  ENROLLEE FIELDS:\n";
-                if (isset($principal['enrollee_fields']) && is_array($principal['enrollee_fields'])) {
-                    foreach ($principal['enrollee_fields'] as $key => $value) {
-                        if ($value !== null && $value !== '') {
-                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
-                        }
-                    }
+                if ($downloadUrl) {
+                    return response()->redirectTo($downloadUrl);
                 }
 
-                $report .= "\n  HEALTH INSURANCE FIELDS:\n";
-                if (isset($principal['health_insurance_fields']) && is_array($principal['health_insurance_fields'])) {
-                    $hasInsuranceData = false;
-                    foreach ($principal['health_insurance_fields'] as $key => $value) {
-                        if ($value !== null && $value !== '') {
-                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
-                            $hasInsuranceData = true;
-                        }
-                    }
-                    if (!$hasInsuranceData) {
-                        $report .= "    (No health insurance data)\n";
-                    }
-                }
-
-                if (!empty($principal['changes'])) {
-                    $report .= "\n  CHANGES MADE:\n";
-                    foreach ($principal['changes'] as $field => $changeData) {
-                        $report .= sprintf("    - %s: '%s' → '%s'\n", 
-                            ucwords(str_replace('_', ' ', $field)), 
-                            $changeData['old'] ?? 'NULL', 
-                            $changeData['new'] ?? 'NULL'
-                        );
-                    }
-                }
-
-                $report .= "\n";
+                return response()->json([
+                    'message' => 'Import log file not found.',
+                ], 404);
             }
+
+            $stream = Storage::disk('spaces')->readStream($storagePath);
+            $response = response()->streamDownload(function () use ($stream) {
+                while (!feof($stream)) {
+                    echo fread($stream, 8192);
+                }
+                fclose($stream);
+            }, $filename);
+
+            $response->headers->set('Content-Type', Storage::disk('spaces')->mimeType($storagePath) ?: 'application/octet-stream');
+            $response->headers->set('Content-Disposition', 'attachment; filename="' . basename($filename) . '"');
+
+            return $response;
+        } catch (\Throwable $e) {
+            Log::error('Failed to download import log', [
+                'id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to download import log',
+                'error' => $e->getMessage(),
+            ], 500);
         }
-
-        // Dependents Details
-        if (!empty($dependents)) {
-            $report .= "\nDEPENDENTS IMPORTED:\n";
-            $report .= "=" . str_repeat("=", 98) . "\n\n";
-
-            foreach ($dependents as $index => $dependent) {
-                $report .= sprintf("DEPENDENT #%d\n", $index + 1);
-                $report .= "-" . str_repeat("-", 98) . "\n";
-                $report .= sprintf("Principal Employee ID:  %s\n", $dependent['principal_employee_id']);
-                $report .= sprintf("Principal ID:           %s\n", $dependent['principal_id']);
-                $report .= sprintf("Action:                 %s\n", strtoupper($dependent['action']));
-                $report .= sprintf("Timestamp:              %s\n", $dependent['timestamp']);
-
-                $report .= "\n  DEPENDENT FIELDS:\n";
-                if (isset($dependent['dependent_fields']) && is_array($dependent['dependent_fields'])) {
-                    foreach ($dependent['dependent_fields'] as $key => $value) {
-                        if ($value !== null && $value !== '') {
-                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
-                        }
-                    }
-                }
-
-                $report .= "\n  HEALTH INSURANCE FIELDS:\n";
-                if (isset($dependent['health_insurance_fields']) && is_array($dependent['health_insurance_fields'])) {
-                    $hasInsuranceData = false;
-                    foreach ($dependent['health_insurance_fields'] as $key => $value) {
-                        if ($value !== null && $value !== '') {
-                            $report .= sprintf("    %-30s : %s\n", ucwords(str_replace('_', ' ', $key)), $value);
-                            $hasInsuranceData = true;
-                        }
-                    }
-                    if (!$hasInsuranceData) {
-                        $report .= "    (No health insurance data)\n";
-                    }
-                }
-
-                if (!empty($dependent['changes'])) {
-                    $report .= "\n  CHANGES MADE:\n";
-                    foreach ($dependent['changes'] as $field => $changeData) {
-                        $report .= sprintf("    - %s: '%s' → '%s'\n", 
-                            ucwords(str_replace('_', ' ', $field)), 
-                            $changeData['old'] ?? 'NULL', 
-                            $changeData['new'] ?? 'NULL'
-                        );
-                    }
-                }
-
-                $report .= "\n";
-            }
-        }
-
-        $report .= "\n" . "=" . str_repeat("=", 98) . "\n";
-        $report .= "END OF IMPORT LOG REPORT\n";
-        $report .= "=" . str_repeat("=", 98) . "\n";
-
-        return $report;
     }
 }
 
