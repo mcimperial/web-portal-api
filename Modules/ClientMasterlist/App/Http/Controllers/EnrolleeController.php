@@ -47,7 +47,7 @@ class EnrolleeController extends Controller
      */
     public function show($id): JsonResponse
     {
-        $enrollee = Enrollee::with(['dependents', 'healthInsurance'])->findOrFail($id);
+        $enrollee = Enrollee::with(['dependents', 'healthInsurance', 'resignedImportAudit'])->findOrFail($id);
         return response()->json($enrollee);
     }
 
@@ -221,7 +221,7 @@ class EnrolleeController extends Controller
      */
     private function buildEnrolleeQuery(array $filters)
     {
-        $query = Enrollee::with(['dependents', 'healthInsurance'])
+        $query = Enrollee::with(['dependents', 'healthInsurance', 'resignedImportAudit'])
             ->whereNull('deleted_at');
 
         $this->applyEnrollmentIdFilter($query, $filters['enrollment_id']);

@@ -13,6 +13,7 @@ use Modules\ClientMasterlist\App\Models\InsuranceProvider;
 use Modules\ClientMasterlist\App\Models\ImportLog;
 use Modules\ClientMasterlist\App\Models\ImportTempData;
 use Modules\ClientMasterlist\App\Models\PrincipalUnmappedColumn;
+use Modules\ClientMasterlist\App\Models\ResignedImportAudit;
 use App\Models\Company;
 
 use App\Http\Traits\DateSanitizer;
@@ -45,6 +46,102 @@ class ImportEnrolleeController extends Controller
             'dependents_updated' => 0,
         ]
     ];
+
+    /**
+     * Queue of principals that became RESIGNED during this import run.
+     * Persisted to cm_resigned_import_audits once import_log_id is available.
+     */
+    private $resignedAuditCandidates = [];
+
+    private function resetResignedAuditCandidates(): void
+    {
+        $this->resignedAuditCandidates = [];
+    }
+
+    private function normalizeDateForAudit($value): ?string
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        try {
+            return date('Y-m-d', strtotime((string) $value));
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private function queueResignedImportAuditCandidate(?Enrollee $principal, array $enrolleeData, array $healthInsuranceData, int $enrollmentId): void
+    {
+        if (!$principal || !$principal->id) {
+            return;
+        }
+
+        if (!$this->isResignedMember($principal->enrollment_status ?? null, $principal->status ?? null)) {
+            return;
+        }
+
+        $resignedDate =
+            $this->normalizeDateForAudit($principal->employment_end_date ?? null)
+            ?? $this->normalizeDateForAudit($healthInsuranceData['coverage_end_date'] ?? null)
+            ?? $this->normalizeDateForAudit($enrolleeData['employment_end_date'] ?? null)
+            ?? now()->toDateString();
+
+        $this->resignedAuditCandidates[(string) $principal->id] = [
+            'principal_id' => $principal->id,
+            'enrollment_id' => $enrollmentId,
+            'employee_id' => $principal->employee_id,
+            'first_name' => $principal->first_name,
+            'last_name' => $principal->last_name,
+            'resigned_date' => $resignedDate,
+        ];
+    }
+
+    private function persistResignedImportAudits(?int $importLogId): void
+    {
+        if (empty($this->resignedAuditCandidates)) {
+            return;
+        }
+
+        $sourceFile = $this->importLog['source_file'] ?? [];
+        $enrollmentCache = [];
+
+        foreach ($this->resignedAuditCandidates as $candidate) {
+            $principalId = (int) ($candidate['principal_id'] ?? 0);
+            if ($principalId <= 0) {
+                continue;
+            }
+
+            $alreadyRecorded = ResignedImportAudit::where('principal_id', $principalId)->exists();
+            if ($alreadyRecorded) {
+                continue;
+            }
+
+            $enrollmentId = isset($candidate['enrollment_id']) ? (int) $candidate['enrollment_id'] : null;
+            if ($enrollmentId && !isset($enrollmentCache[$enrollmentId])) {
+                $enrollmentCache[$enrollmentId] = Enrollment::with(['company', 'insuranceProvider'])->find($enrollmentId);
+            }
+
+            $enrollment = $enrollmentId ? ($enrollmentCache[$enrollmentId] ?? null) : null;
+
+            ResignedImportAudit::create([
+                'principal_id' => $principalId,
+                'enrollment_id' => $enrollmentId,
+                'import_log_id' => $importLogId,
+                'employee_id' => $candidate['employee_id'] ?? null,
+                'first_name' => $candidate['first_name'] ?? null,
+                'last_name' => $candidate['last_name'] ?? null,
+                'resigned_date' => $candidate['resigned_date'] ?? now()->toDateString(),
+                'source_file_original_name' => $sourceFile['original_name'] ?? null,
+                'source_file_stored_name' => $sourceFile['stored_name'] ?? null,
+                'source_file_path' => $sourceFile['path'] ?? null,
+                'source_file_url' => $sourceFile['url'] ?? null,
+                'source_company_code' => $enrollment?->company?->company_code ?? ($sourceFile['company_code'] ?? null),
+                'source_provider_title' => $enrollment?->insuranceProvider?->title ?? ($sourceFile['provider_title'] ?? null),
+                'recorded_at' => now(),
+            ]);
+        }
+    }
 
     /**
      * Make sure we have a live DB connection before starting a
@@ -1409,6 +1506,7 @@ class ImportEnrolleeController extends Controller
             $this->storeTempImportRowsForEnrollment((int) $enrollmentId, $enrollees, $importColumns);
 
             $sourceFile = $this->storeImportSourceFile($request, $enrollmentId ? (int) $enrollmentId : null, $enrollees);
+            $this->resetResignedAuditCandidates();
 
             // Initialize import log
             $this->importLog['summary']['total_principals'] = count($enrollees);
@@ -1551,6 +1649,13 @@ class ImportEnrolleeController extends Controller
                             'insurance' => $healthInsuranceData
                         ]), $dateAnalysis['recommended_format']);
                     }
+
+                    $this->queueResignedImportAuditCandidate(
+                        $principal,
+                        $enrolleeData,
+                        $healthInsuranceData,
+                        (int) $enrollmentId
+                    );
                 } else {
 
                     if ($relation === 'DEPENDENTS' || $relation === 'DEPENDENT') {
@@ -1664,6 +1769,8 @@ class ImportEnrolleeController extends Controller
                 'success'
             );
 
+            $this->persistResignedImportAudits($importLog->id);
+
             // Commit all transaction levels to ensure data is actually saved
             $transactionLevel = DB::transactionLevel();
 
@@ -1728,6 +1835,7 @@ class ImportEnrolleeController extends Controller
             $importColumns = $this->parseImportColumnsInput($request);
 
             $sourceFile = $this->storeImportSourceFile($request, null, $enrollees);
+            $this->resetResignedAuditCandidates();
 
             // Initialize import log summary
             $this->importLog['summary']['total_principals'] = count($enrollees);
@@ -1941,6 +2049,13 @@ class ImportEnrolleeController extends Controller
                         'insurance' => $healthInsuranceData
                     ]), $dateAnalysis['recommended_format']);
                 }
+
+                $this->queueResignedImportAuditCandidate(
+                    $principal,
+                    $enrolleeData,
+                    $healthInsuranceData,
+                    (int) $currentEnrollmentId
+                );
             }
 
             // Record affected enrollments for reference in the log details
@@ -1977,6 +2092,8 @@ class ImportEnrolleeController extends Controller
                 $dateAnalysis['confidence'] ?? '0%',
                 'success'
             );
+
+            $this->persistResignedImportAudits($importLog->id);
 
             return response()->json([
                 'message' => 'Import successful',
