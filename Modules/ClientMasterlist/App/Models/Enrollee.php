@@ -116,4 +116,9 @@ class Enrollee extends Model
     {
         return $this->hasMany(PrincipalUnmappedColumn::class, 'principal_id');
     }
+
+    public function resignedImportAudit()
+    {
+        return $this->hasOne(ResignedImportAudit::class, 'principal_id');
+    }
 }
