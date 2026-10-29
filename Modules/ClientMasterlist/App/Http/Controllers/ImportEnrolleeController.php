@@ -441,7 +441,7 @@ class ImportEnrolleeController extends Controller
      * billing history/download UI. This covers both regular enrollment imports
      * and multi-company / multi-provider imports that have no single enrollment_id.
      */
-    private function persistImportedEnrollmentFileRecord(?int $importLogId, ?int $enrollmentId, string $sourceType = 'regular'): void
+    private function persistImportedEnrollmentFileRecord(?int $importLogId, ?int $enrollmentId, string $sourceType = 'regular', array $enrollmentIds = []): void
     {
         $sourceFile = $this->importLog['source_file'] ?? null;
 
@@ -451,24 +451,67 @@ class ImportEnrolleeController extends Controller
 
         $uploadedAt = $sourceFile['uploaded_at'] ?? null;
 
-        ImportedEnrollmentFile::updateOrCreate(
-            [
-                'import_log_id' => $importLogId,
-                'file_url' => $sourceFile['url'],
-            ],
-            [
-                'enrollment_id' => $enrollmentId,
-                'source_type' => $sourceType,
-                'company_code' => $sourceFile['company_code'] ?? null,
-                'provider_title' => $sourceFile['provider_title'] ?? null,
-                'original_name' => $sourceFile['original_name'] ?? null,
-                'stored_name' => $sourceFile['stored_name'] ?? null,
-                'file_path' => $sourceFile['path'] ?? null,
-                'file_url' => $sourceFile['url'],
-                'mime_type' => $sourceFile['mime_type'] ?? null,
-                'uploaded_at' => $uploadedAt ? now()->parse($uploadedAt) : now(),
-            ]
-        );
+        if (empty($enrollmentIds) && $enrollmentId !== null) {
+            $enrollmentIds = [(int) $enrollmentId];
+        }
+
+        $enrollmentIds = array_values(array_unique(array_filter(
+            array_map(static fn ($value) => (int) $value, $enrollmentIds),
+            static fn (int $value) => $value > 0
+        )));
+
+        if (empty($enrollmentIds)) {
+            ImportedEnrollmentFile::updateOrCreate(
+                [
+                    'import_log_id' => $importLogId,
+                    'file_url' => $sourceFile['url'],
+                    'enrollment_id' => null,
+                ],
+                [
+                    'enrollment_id' => null,
+                    'source_type' => $sourceType,
+                    'company_code' => $sourceFile['company_code'] ?? null,
+                    'provider_title' => $sourceFile['provider_title'] ?? null,
+                    'original_name' => $sourceFile['original_name'] ?? null,
+                    'stored_name' => $sourceFile['stored_name'] ?? null,
+                    'file_path' => $sourceFile['path'] ?? null,
+                    'file_url' => $sourceFile['url'],
+                    'mime_type' => $sourceFile['mime_type'] ?? null,
+                    'uploaded_at' => $uploadedAt ? now()->parse($uploadedAt) : now(),
+                ]
+            );
+
+            return;
+        }
+
+        $enrollmentsById = Enrollment::with(['company', 'insuranceProvider'])
+            ->whereIn('id', $enrollmentIds)
+            ->get()
+            ->keyBy('id');
+
+        foreach ($enrollmentIds as $resolvedEnrollmentId) {
+            $enrollment = $enrollmentsById->get($resolvedEnrollmentId);
+
+            ImportedEnrollmentFile::updateOrCreate(
+                [
+                    'import_log_id' => $importLogId,
+                    'file_url' => $sourceFile['url'],
+                    'enrollment_id' => $resolvedEnrollmentId,
+                ],
+                [
+                    'enrollment_id' => $resolvedEnrollmentId,
+                    'source_type' => $sourceType,
+                    'company_code' => $enrollment?->company?->company_code ?? ($sourceFile['company_code'] ?? null),
+                    'provider_title' => $enrollment?->insuranceProvider?->title ?? ($sourceFile['provider_title'] ?? null),
+                    'original_name' => $sourceFile['original_name'] ?? null,
+                    'stored_name' => $sourceFile['stored_name'] ?? null,
+                    'file_path' => $sourceFile['path'] ?? null,
+                    'file_url' => $sourceFile['url'],
+                    'mime_type' => $sourceFile['mime_type'] ?? null,
+                    'uploaded_at' => $uploadedAt ? now()->parse($uploadedAt) : now(),
+                ]
+            );
+        }
     }
 
     /**
@@ -2240,7 +2283,7 @@ class ImportEnrolleeController extends Controller
             );
 
             $this->persistResignedImportAudits($importLog->id);
-            $this->persistImportedEnrollmentFileRecord($importLog->id, null, 'multi-provider');
+            $this->persistImportedEnrollmentFileRecord($importLog->id, null, 'multi-provider', $affectedEnrollmentIds);
 
             return response()->json([
                 'message' => 'Import successful',
