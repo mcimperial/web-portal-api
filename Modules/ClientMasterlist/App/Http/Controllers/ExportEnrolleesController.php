@@ -180,7 +180,12 @@ class ExportEnrolleesController extends Controller
         $query->where('status', 'ACTIVE')
               ->with(['healthInsurance', 'attachmentForSkipHierarchy', 'attachmentForRequirement', 'requiredDocuments', 'attachments']);
 
-        if (isset($filters['date_from']) || isset($filters['date_to'])) {
+        $rawUseCertificationDate = $filters['use_certification_date'] ?? null;
+        $useCertificationDate = ($rawUseCertificationDate === null)
+            ? true
+            : filter_var($rawUseCertificationDate, FILTER_VALIDATE_BOOLEAN);
+
+        if ($useCertificationDate && (isset($filters['date_from']) || isset($filters['date_to']))) {
             $query->whereHas('healthInsurance', function ($subQ) use ($filters) {
                 $this->applyHealthInsuranceDateFilters($subQ, $filters);
             });
@@ -254,20 +259,20 @@ class ExportEnrolleesController extends Controller
                 }
             });
         } else {
-            // Filter by updated_at on the enrollee record itself
+            // Filter by created_at on the enrollee record itself
             // If the date string already includes a time component (from cron schedule calculation),
             // use it as-is; otherwise append start/end-of-day times.
             if ($hasDateFrom) {
                 $fromVal = (strpos($filters['date_from'], ':') !== false)
                     ? $filters['date_from']
                     : $filters['date_from'] . ' 00:00:00';
-                $query->where('updated_at', '>=', $fromVal);
+                $query->where('created_at', '>=', $fromVal);
             }
             if ($hasDateTo) {
                 $toVal = (strpos($filters['date_to'], ':') !== false)
                     ? $filters['date_to']
                     : $filters['date_to'] . ' 23:59:59';
-                $query->where('updated_at', '<=', $toVal);
+                $query->where('created_at', '<=', $toVal);
             }
         }
     }
