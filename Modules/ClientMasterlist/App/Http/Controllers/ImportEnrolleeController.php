@@ -2732,6 +2732,419 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Compare temp-import rows against existing principals for one enrollment.
+     */
+    public function compareTempImportData(Request $request): JsonResponse
+    {
+        try {
+            $enrollmentId = (int) $request->input('enrollment_id');
+
+            if ($enrollmentId <= 0) {
+                return response()->json([
+                    'message' => 'Enrollment ID is required.',
+                ], 400);
+            }
+
+            $availableImportDates = ImportTempData::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->select('import_date')
+                ->distinct()
+                ->orderByDesc('import_date')
+                ->pluck('import_date')
+                ->map(fn ($date) => optional($date)->format('Y-m-d'))
+                ->filter(fn ($date) => !empty($date))
+                ->values()
+                ->all();
+
+            $selectedImportDate = trim((string) $request->input('import_date', ''));
+            if ($selectedImportDate === '' && !empty($availableImportDates)) {
+                $selectedImportDate = (string) $availableImportDates[0];
+            }
+
+            $selectedEnrollmentStatus = trim((string) $request->input('enrollment_status', ''));
+            $search = trim((string) $request->input('search', ''));
+            $searchBy = trim((string) $request->input('search_by', 'all'));
+            $allowedSearchBy = ['all', 'employee_id', 'name', 'department', 'certificate_number'];
+
+            if (!in_array($searchBy, $allowedSearchBy, true)) {
+                $searchBy = 'all';
+            }
+
+            $showTempColumns = $request->input('show_temp_columns', []);
+            if (!is_array($showTempColumns)) {
+                $showTempColumns = [];
+            }
+            $showTempColumns = array_values(array_unique(array_map(
+                fn ($column) => trim((string) $column),
+                array_filter($showTempColumns, fn ($column) => trim((string) $column) !== '')
+            )));
+
+            $tempRowsQuery = ImportTempData::query()
+                ->where('enrollment_id', $enrollmentId);
+
+            if ($selectedImportDate !== '') {
+                $tempRowsQuery->whereDate('import_date', $selectedImportDate);
+            }
+
+            $tempRowsRaw = $tempRowsQuery
+                ->orderBy('row_number')
+                ->get(['row_number', 'row_data', 'column_names']);
+
+            $existingRowsQuery = Enrollee::query()
+                ->with('healthInsurance')
+                ->where('enrollment_id', $enrollmentId)
+                ->whereNull('deleted_at');
+
+            if ($selectedEnrollmentStatus !== '') {
+                $existingRowsQuery->whereRaw('LOWER(TRIM(enrollment_status)) = ?', [strtolower($selectedEnrollmentStatus)]);
+            }
+
+            $existingRows = $existingRowsQuery->get();
+
+            $availableEnrollmentStatuses = Enrollee::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->whereNull('deleted_at')
+                ->whereNotNull('enrollment_status')
+                ->whereRaw("TRIM(enrollment_status) <> ''")
+                ->distinct()
+                ->orderBy('enrollment_status')
+                ->pluck('enrollment_status')
+                ->map(fn ($status) => trim((string) $status))
+                ->filter(fn ($status) => $status !== '')
+                ->values()
+                ->all();
+
+            $availableTempColumnsSet = [];
+            foreach ($tempRowsRaw as $tempModel) {
+                $rowData = is_array($tempModel->row_data) ? $tempModel->row_data : [];
+                $columnNames = is_array($tempModel->column_names) ? $tempModel->column_names : [];
+
+                foreach ($columnNames as $columnName) {
+                    $normalizedColumn = trim((string) $columnName);
+                    if ($normalizedColumn !== '') {
+                        $availableTempColumnsSet[$normalizedColumn] = true;
+                    }
+                }
+
+                foreach ($rowData as $columnName => $columnValue) {
+                    $normalizedColumn = trim((string) $columnName);
+                    if ($normalizedColumn === '' || $this->isNullLikeValue($columnValue)) {
+                        continue;
+                    }
+
+                    $availableTempColumnsSet[$normalizedColumn] = true;
+                }
+            }
+
+            $availableTempColumns = array_values(array_keys($availableTempColumnsSet));
+            sort($availableTempColumns);
+
+            $existingByEmployeeId = [];
+            $existingEmployeeIdsNormalized = [];
+
+            foreach ($existingRows as $existingRow) {
+                $employeeId = trim((string) ($existingRow->employee_id ?? ''));
+                if ($employeeId === '') {
+                    continue;
+                }
+
+                $key = strtolower($employeeId);
+                $existingByEmployeeId[$key] = $existingRow;
+                $existingEmployeeIdsNormalized[$key] = true;
+            }
+
+            $todayDate = now()->toDateString();
+            $results = [];
+            $tempMatchedEmployeeIds = [];
+            $tempRowsConsidered = 0;
+            $matchedCount = 0;
+            $unmatchedCount = 0;
+            $statusMismatchCount = 0;
+            $tempStatusBuckets = [
+                'ACTIVE_APPROVED' => 0,
+                'RESIGNED' => 0,
+                'NOT_ENROLLED' => 0,
+            ];
+            $existingStatusBuckets = [
+                'ACTIVE_APPROVED' => 0,
+                'RESIGNED' => 0,
+                'NOT_ENROLLED' => 0,
+            ];
+
+            foreach ($tempRowsRaw as $tempModel) {
+                $rawTempData = is_array($tempModel->row_data) ? $tempModel->row_data : [];
+                $normalizedTempData = $this->normalizeTempDataKeys($rawTempData);
+
+                $employeeId = $this->firstNonEmptyString($normalizedTempData, ['employee_id', 'employee id', 'employeeid']);
+                $department = $this->firstNonEmptyString($normalizedTempData, ['department']);
+                $fullName = $this->firstNonEmptyString($normalizedTempData, ['full_name', 'name']);
+                $employmentStartDate = $this->firstNonEmptyString($normalizedTempData, ['employment_start_date', 'employee_start_date', 'employment start date', 'employee start date']);
+                $employmentEndDate = $this->firstNonEmptyString($normalizedTempData, ['employment_end_date', 'employee_end_date', 'employment end date', 'employee end date']);
+                $backDate = $this->firstNonEmptyString($normalizedTempData, ['back_date', 'back date']);
+                $enrollmentStatus = $this->firstNonEmptyString($normalizedTempData, ['enrollment_status', 'status']);
+
+                if ($fullName === '') {
+                    $fullName = trim(implode(' ', array_filter([
+                        $this->firstNonEmptyString($normalizedTempData, ['first_name', 'first name']),
+                        $this->firstNonEmptyString($normalizedTempData, ['middle_name', 'middle name']),
+                        $this->firstNonEmptyString($normalizedTempData, ['last_name', 'last name']),
+                        $this->firstNonEmptyString($normalizedTempData, ['suffix']),
+                    ], fn ($value) => $value !== '')));
+                }
+
+                $tempComparableRow = array_merge($normalizedTempData, [
+                    'employee_id' => $employeeId,
+                    'department' => $department,
+                    'full_name' => $fullName,
+                    'employment_start_date' => $employmentStartDate,
+                    'employment_end_date' => $employmentEndDate,
+                    'back_date' => $backDate,
+                    'enrollment_status' => $enrollmentStatus,
+                ]);
+
+                if ($selectedEnrollmentStatus !== '' && $this->normalizeStatusValue($enrollmentStatus) !== $this->normalizeStatusValue($selectedEnrollmentStatus)) {
+                    continue;
+                }
+
+                if (!$this->tempRowMatchesSearch($tempComparableRow, $search, $searchBy)) {
+                    continue;
+                }
+
+                $tempRowsConsidered++;
+                $tempBucket = $this->getTempTallyStatusBucket($tempComparableRow, $todayDate);
+                if (isset($tempStatusBuckets[$tempBucket])) {
+                    $tempStatusBuckets[$tempBucket]++;
+                }
+
+                $normalizedEmployeeIdKey = strtolower($employeeId);
+                $existingMatch = $normalizedEmployeeIdKey !== '' ? ($existingByEmployeeId[$normalizedEmployeeIdKey] ?? null) : null;
+                $isMatched = !is_null($existingMatch);
+                $statusMatch = null;
+
+                if ($isMatched) {
+                    $matchedCount++;
+                    $tempMatchedEmployeeIds[$normalizedEmployeeIdKey] = true;
+
+                    $existingBucket = $this->getExistingTallyStatusBucket(
+                        $existingMatch->enrollment_status ?? null,
+                        $existingMatch->status ?? null
+                    );
+
+                    if (isset($existingStatusBuckets[$existingBucket])) {
+                        $existingStatusBuckets[$existingBucket]++;
+                    }
+
+                    if ($enrollmentStatus !== '') {
+                        $statusMatch = $this->normalizeStatusValue($enrollmentStatus)
+                            === $this->normalizeStatusValue($existingMatch->enrollment_status ?? null);
+
+                        if ($statusMatch === false) {
+                            $statusMismatchCount++;
+                        }
+                    }
+                } else {
+                    $unmatchedCount++;
+                }
+
+                $matchStatus = $isMatched
+                    ? (($statusMatch === false) ? 'STATUS MISMATCH' : 'MATCHED')
+                    : 'NOT IN EXISTING/SYSTEM';
+
+                $results[] = [
+                    'match_status' => $matchStatus,
+                    'is_matched' => $isMatched,
+                    'status_match' => $statusMatch,
+                    'employee_id' => $employeeId,
+                    'full_name' => $fullName,
+                    'department' => $department,
+                    'employment_start_date' => $employmentStartDate,
+                    'employment_end_date' => $employmentEndDate,
+                    'back_date' => $backDate,
+                    'enrollment_status' => $enrollmentStatus,
+                    'temp_data' => $this->normalizeTempDisplayData($normalizedTempData),
+                ];
+            }
+
+            foreach ($existingRows as $existingRow) {
+                $employeeId = trim((string) ($existingRow->employee_id ?? ''));
+                if ($employeeId === '') {
+                    continue;
+                }
+
+                $normalizedEmployeeIdKey = strtolower($employeeId);
+
+                if (isset($tempMatchedEmployeeIds[$normalizedEmployeeIdKey])) {
+                    continue;
+                }
+
+                if ($search !== '') {
+                    $existingSearchRow = [
+                        'employee_id' => $employeeId,
+                        'full_name' => trim((string) (($existingRow->first_name ?? '') . ' ' . ($existingRow->last_name ?? ''))),
+                        'name' => trim((string) (($existingRow->first_name ?? '') . ' ' . ($existingRow->last_name ?? ''))),
+                        'department' => $existingRow->department ?? null,
+                        'certificate_number' => $existingRow->healthInsurance->certificate_number ?? null,
+                    ];
+
+                    if (!$this->tempRowMatchesSearch($existingSearchRow, $search, $searchBy)) {
+                        continue;
+                    }
+                }
+
+                $existingBucket = $this->getExistingTallyStatusBucket(
+                    $existingRow->enrollment_status ?? null,
+                    $existingRow->status ?? null
+                );
+
+                if (isset($existingStatusBuckets[$existingBucket])) {
+                    $existingStatusBuckets[$existingBucket]++;
+                }
+
+                $results[] = [
+                    'match_status' => 'NOT IN LOOKER/TEMP',
+                    'is_matched' => false,
+                    'status_match' => null,
+                    'employee_id' => $employeeId,
+                    'full_name' => trim((string) implode(' ', array_filter([
+                        $existingRow->first_name ?? null,
+                        $existingRow->middle_name ?? null,
+                        $existingRow->last_name ?? null,
+                        $existingRow->suffix ?? null,
+                    ], fn ($value) => !empty(trim((string) $value))))),
+                    'department' => (string) ($existingRow->department ?? ''),
+                    'employment_start_date' => optional($existingRow->employment_start_date)->format('Y-m-d')
+                        ?? (string) ($existingRow->employment_start_date ?? ''),
+                    'employment_end_date' => optional($existingRow->employment_end_date)->format('Y-m-d')
+                        ?? (string) ($existingRow->employment_end_date ?? ''),
+                    'back_date' => optional($existingRow->back_date)->format('Y-m-d')
+                        ?? (string) ($existingRow->back_date ?? ''),
+                    'enrollment_status' => (string) ($existingRow->enrollment_status ?? ''),
+                    'temp_data' => new \stdClass(),
+                ];
+            }
+
+            $existingRowsConsidered = count($results) - $tempRowsConsidered + $matchedCount;
+            $notInLookerTempCount = 0;
+
+            foreach ($existingEmployeeIdsNormalized as $normalizedEmployeeId => $present) {
+                if ($present && !isset($tempMatchedEmployeeIds[$normalizedEmployeeId])) {
+                    $notInLookerTempCount++;
+                }
+            }
+
+            $responseSummary = [
+                'temp_rows_considered' => $tempRowsConsidered,
+                'existing_rows_considered' => max(0, $existingRowsConsidered),
+                'matched' => $matchedCount,
+                'unmatched' => $unmatchedCount,
+                'status_mismatched' => $statusMismatchCount,
+            ];
+
+            return response()->json([
+                'available_temp_columns' => $availableTempColumns,
+                'available_import_dates' => $availableImportDates,
+                'available_enrollment_statuses' => $availableEnrollmentStatuses,
+                'selected_import_date' => $selectedImportDate,
+                'selected_enrollment_status' => $selectedEnrollmentStatus,
+                'search' => $search,
+                'search_by' => $searchBy,
+                'show_temp_columns' => $showTempColumns,
+                'summary' => $responseSummary,
+                'tally' => [
+                    'total_members' => [
+                        'looker_temp' => $tempRowsConsidered,
+                        'existing' => max(0, $existingRowsConsidered),
+                    ],
+                    'active_approved' => [
+                        'looker_temp' => $tempStatusBuckets['ACTIVE_APPROVED'],
+                        'existing' => $existingStatusBuckets['ACTIVE_APPROVED'],
+                    ],
+                    'resigned' => [
+                        'looker_temp' => $tempStatusBuckets['RESIGNED'],
+                        'existing' => $existingStatusBuckets['RESIGNED'],
+                    ],
+                    'not_enrolled' => [
+                        'looker_temp' => $tempStatusBuckets['NOT_ENROLLED'],
+                        'existing' => $existingStatusBuckets['NOT_ENROLLED'],
+                    ],
+                    'not_in_looker_temp' => [
+                        'looker_temp' => 0,
+                        'existing' => $notInLookerTempCount,
+                    ],
+                    'not_in_existing_system' => [
+                        'looker_temp' => $unmatchedCount,
+                        'existing' => 0,
+                    ],
+                ],
+                'results' => $results,
+            ], 200);
+        } catch (\Throwable $e) {
+            Log::error('Failed to compare temp import data', [
+                'enrollment_id' => $request->input('enrollment_id'),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Failed to compare temp import data.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    private function normalizeTempDataKeys(array $row): array
+    {
+        $normalized = [];
+
+        foreach ($row as $key => $value) {
+            $normalizedKey = strtolower(trim((string) $key));
+
+            if ($normalizedKey === '') {
+                continue;
+            }
+
+            $normalized[$normalizedKey] = $value;
+        }
+
+        return $normalized;
+    }
+
+    private function firstNonEmptyString(array $row, array $keys): string
+    {
+        foreach ($keys as $key) {
+            $normalizedKey = strtolower(trim((string) $key));
+
+            if (!array_key_exists($normalizedKey, $row)) {
+                continue;
+            }
+
+            $value = $row[$normalizedKey];
+
+            if (is_null($value)) {
+                continue;
+            }
+
+            $stringValue = trim((string) $value);
+
+            if ($stringValue !== '') {
+                return $stringValue;
+            }
+        }
+
+        return '';
+    }
+
+    private function normalizeTempDisplayData(array $row): array
+    {
+        $normalizedDisplay = [];
+
+        foreach ($row as $key => $value) {
+            $normalizedDisplay[$key] = $this->normalizeTempDisplayValue($key, $value);
+        }
+
+        return $normalizedDisplay;
+    }
+
+    /**
      * Return uploaded source files that can be reused in billing/import UI.
      */
     public function getImportedFiles(Request $request): JsonResponse
