@@ -20,7 +20,7 @@ class BillingController extends Controller
 
         $validated = $request->validate([
             'enrollment_id' => ['nullable', 'integer', 'exists:cm_enrollment,id'],
-            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing'],
+            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation'],
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
@@ -62,10 +62,11 @@ class BillingController extends Controller
 
         $validated = $request->validate([
             'enrollment_id' => ['required', 'integer', 'exists:cm_enrollment,id'],
-            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing'],
+            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation'],
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'employee_id_column_key' => ['nullable', 'string', 'max:255'],
+            'oid_column_key' => ['nullable', 'string', 'max:255'],
             'birthdate_column_key' => ['nullable', 'string', 'max:255'],
             'source_file_name' => ['nullable', 'string', 'max:255'],
             'sheet_name' => ['nullable', 'string', 'max:255'],
@@ -78,15 +79,25 @@ class BillingController extends Controller
         ]);
 
         $billingType = $validated['billing_type'] ?? 'credit_memo';
-        $isStatusDrivenBilling = in_array($billingType, ['modal_billing', 'adjustment_billing'], true);
+        $isLookerFileValidationBilling = $billingType === 'looker_file_validation';
+        $isStatusDrivenBilling = in_array($billingType, ['modal_billing', 'adjustment_billing', 'looker_file_validation'], true);
+        $resolvedBillingMonth = $validated['billing_month'] ?? null;
+        $resolvedBillingYear = $validated['billing_year'] ?? null;
 
-        if ($isStatusDrivenBilling) {
+        if (in_array($billingType, ['modal_billing', 'adjustment_billing'], true)) {
             $request->validate([
                 'billing_month' => ['required', 'integer', 'min:1', 'max:12'],
                 'billing_year' => ['required', 'integer', 'min:2000', 'max:2100'],
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
                 'birthdate_column_key' => ['required', 'string', 'max:255'],
             ]);
+        } elseif ($isLookerFileValidationBilling) {
+            $request->validate([
+                'employee_id_column_key' => ['required', 'string', 'max:255'],
+            ]);
+
+            $resolvedBillingMonth = (int) ($resolvedBillingMonth ?? Carbon::now()->month);
+            $resolvedBillingYear = (int) ($resolvedBillingYear ?? Carbon::now()->year);
         }
 
         $importedRows = [];
@@ -94,14 +105,20 @@ class BillingController extends Controller
         $modalReconReport2 = [];
         $modalReconReport3 = [];
 
-        DB::transaction(function () use (&$importedRows, &$modalReconReport1, &$modalReconReport2, &$modalReconReport3, $validated, $request, $billingType, $isStatusDrivenBilling) {
+        DB::transaction(function () use (&$importedRows, &$modalReconReport1, &$modalReconReport2, &$modalReconReport3, $validated, $request, $billingType, $isStatusDrivenBilling, $isLookerFileValidationBilling, $resolvedBillingMonth, $resolvedBillingYear) {
             if ($isStatusDrivenBilling) {
-                BillingRecord::query()
+                $deleteQuery = BillingRecord::query()
                     ->where('enrollment_id', $validated['enrollment_id'])
-                    ->where('billing_type', $billingType)
-                    ->where('billing_month', $validated['billing_month'])
-                    ->where('billing_year', $validated['billing_year'])
-                    ->delete();
+                    ->where('billing_type', $billingType);
+
+                if ($isLookerFileValidationBilling) {
+                    $deleteQuery->delete();
+                } else {
+                    $deleteQuery
+                        ->where('billing_month', $resolvedBillingMonth)
+                        ->where('billing_year', $resolvedBillingYear)
+                        ->delete();
+                }
             }
 
             foreach ($validated['rows'] as $row) {
@@ -110,14 +127,24 @@ class BillingController extends Controller
                 $rowData = $row['row_data'];
 
                 if ($isStatusDrivenBilling) {
-                    $modalResolution = $this->resolveModalBillingStatus(
-                        $validated['enrollment_id'],
-                        $rowData,
-                        $validated['employee_id_column_key'],
-                        $validated['birthdate_column_key'],
-                        (int) $validated['billing_month'],
-                        (int) $validated['billing_year']
-                    );
+                    if ($isLookerFileValidationBilling) {
+                        $modalResolution = $this->resolveLookerFileValidationStatus(
+                            $validated['enrollment_id'],
+                            $rowData,
+                            $validated['employee_id_column_key'] ?? null,
+                            (int) $resolvedBillingMonth,
+                            (int) $resolvedBillingYear
+                        );
+                    } else {
+                        $modalResolution = $this->resolveModalBillingStatus(
+                            $validated['enrollment_id'],
+                            $rowData,
+                            $validated['employee_id_column_key'],
+                            $validated['birthdate_column_key'],
+                            (int) $validated['billing_month'],
+                            (int) $validated['billing_year']
+                        );
+                    }
 
                     $principalId = $modalResolution['principal_id'];
                     $dependentId = $modalResolution['dependent_id'];
@@ -138,8 +165,8 @@ class BillingController extends Controller
                 $payload = [
                     'enrollment_id' => $validated['enrollment_id'],
                     'billing_type' => $billingType,
-                    'billing_month' => $validated['billing_month'] ?? null,
-                    'billing_year' => $validated['billing_year'] ?? null,
+                    'billing_month' => $resolvedBillingMonth,
+                    'billing_year' => $resolvedBillingYear,
                     'principal_id' => $principalId,
                     'dependent_id' => $dependentId,
                     'source_file_name' => $validated['source_file_name'] ?? null,
@@ -153,8 +180,8 @@ class BillingController extends Controller
                 $lookup = [
                     'enrollment_id' => $validated['enrollment_id'],
                     'billing_type' => $billingType,
-                    'billing_month' => $validated['billing_month'] ?? null,
-                    'billing_year' => $validated['billing_year'] ?? null,
+                    'billing_month' => $resolvedBillingMonth,
+                    'billing_year' => $resolvedBillingYear,
                 ];
 
                 $hasMatchKey = !is_null($principalId) || !is_null($dependentId);
@@ -308,6 +335,88 @@ class BillingController extends Controller
         return [
             'principal_id' => $healthRecord->principal_id,
             'dependent_id' => $healthRecord->dependent_id,
+            'row_data' => $rowData,
+        ];
+    }
+
+    private function resolveLookerFileValidationStatus(
+        int $enrollmentId,
+        array $rowData,
+        ?string $employeeIdColumnKey,
+        int $billingMonth,
+        int $billingYear
+    ): array {
+        $employeeId = $this->normalizeIdentityValue(
+            $employeeIdColumnKey ? ($rowData[$employeeIdColumnKey] ?? null) : null
+        );
+
+        $rowData['ACCOUNT_NO'] = null;
+        $rowData['COVERAGE_START_DATE'] = null;
+        $rowData['COVERAGE_END_DATE'] = null;
+        $rowData['SYSTEM_STATUS'] = 'NOT_FOUND';
+
+        if ($employeeId === '') {
+            return [
+                'principal_id' => null,
+                'dependent_id' => null,
+                'row_data' => $rowData,
+            ];
+        }
+
+        $healthRecord = DB::table('cm_principal as p')
+            ->leftJoin('cm_health_insurance as hi', 'hi.principal_id', '=', 'p.id')
+            ->where('p.enrollment_id', $enrollmentId)
+            ->whereNull('p.deleted_at')
+            ->where(function ($query) use ($employeeId) {
+                $query
+                    ->where(DB::raw('UPPER(TRIM(p.employee_id))'), $employeeId)
+                    ->orWhere(DB::raw('UPPER(TRIM(p.member_id))'), $employeeId);
+            })
+            ->select([
+                'p.id as principal_id',
+                'hi.coverage_start_date',
+                'hi.coverage_end_date',
+                'hi.certificate_number',
+                'p.enrollment_status',
+            ])
+            ->orderByRaw('hi.id IS NULL ASC')
+            ->orderByDesc('hi.id')
+            ->first();
+
+        if (!$healthRecord) {
+            return [
+                'principal_id' => null,
+                'dependent_id' => null,
+                'row_data' => $rowData,
+            ];
+        }
+
+        $resolvedCoverageStartDate = $healthRecord->coverage_start_date
+            ? Carbon::parse($healthRecord->coverage_start_date)->format('Y-m-d')
+            : null;
+
+        $resolvedCoverageEndDate = $healthRecord->coverage_end_date
+            ? Carbon::parse($healthRecord->coverage_end_date)->format('Y-m-d')
+            : null;
+
+        $rowData['ACCOUNT_NO'] = $healthRecord->certificate_number ?: null;
+        $rowData['COVERAGE_START_DATE'] = $resolvedCoverageStartDate;
+        $rowData['COVERAGE_END_DATE'] = $resolvedCoverageEndDate;
+
+        $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
+        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
+
+        if ($mappedPendingStatus !== null) {
+            $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+        } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
+            $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+        } else {
+            $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+        }
+
+        return [
+            'principal_id' => $healthRecord->principal_id,
+            'dependent_id' => null,
             'row_data' => $rowData,
         ];
     }
