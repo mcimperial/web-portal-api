@@ -3233,6 +3233,147 @@ class ImportEnrolleeController extends Controller
         }
     }
 
+    private function readImportDetailsFromStorage(ImportLog $log): array
+    {
+        $details = is_array($log->import_details) ? $log->import_details : [];
+
+        $hasInlineRows = !empty($details['principals']) || !empty($details['dependents']);
+        $fullLogFile = $details['full_log_file'] ?? null;
+
+        if (!$fullLogFile || (!($details['truncated'] ?? false) && $hasInlineRows)) {
+            return $details;
+        }
+
+        try {
+            if (!Storage::disk('local')->exists($fullLogFile)) {
+                return $details;
+            }
+
+            $raw = Storage::disk('local')->get($fullLogFile);
+            $decoded = json_decode((string) $raw, true);
+
+            if (!is_array($decoded)) {
+                return $details;
+            }
+
+            return array_merge($details, $decoded, [
+                'loaded_from_full_log_file' => true,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('Unable to read full import details from storage', [
+                'import_log_id' => $log->id,
+                'full_log_file' => $fullLogFile,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $details;
+        }
+    }
+
+    private function normalizeActionValue($action): string
+    {
+        $normalized = strtolower(trim((string) $action));
+
+        if (in_array($normalized, ['created', 'create', 'inserted', 'insert'], true)) {
+            return 'created';
+        }
+
+        if (in_array($normalized, ['updated', 'update', 'modified', 'edit', 'edited'], true)) {
+            return 'updated';
+        }
+
+        return $normalized;
+    }
+
+    private function toDisplayName(array $source, array $fallback = []): string
+    {
+        $firstName = trim((string) ($source['first_name'] ?? $fallback['first_name'] ?? ''));
+        $middleName = trim((string) ($source['middle_name'] ?? $fallback['middle_name'] ?? ''));
+        $lastName = trim((string) ($source['last_name'] ?? $fallback['last_name'] ?? ''));
+        $suffix = trim((string) ($source['suffix'] ?? $fallback['suffix'] ?? ''));
+
+        return trim(implode(' ', array_filter([$firstName, $middleName, $lastName, $suffix])));
+    }
+
+    private function mapPrincipalLogRows(array $details): array
+    {
+        $rows = $details['principals'] ?? [];
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(function ($row) {
+            if (!is_array($row)) {
+                return null;
+            }
+
+            $enrolleeFields = is_array($row['enrollee_fields'] ?? null) ? $row['enrollee_fields'] : [];
+            $healthFields = is_array($row['health_insurance_fields'] ?? null) ? $row['health_insurance_fields'] : [];
+            $changes = is_array($row['changes'] ?? null) ? $row['changes'] : [];
+            $action = $this->normalizeActionValue($row['action'] ?? null);
+
+            return [
+                'record_type' => 'principal',
+                'action' => $action,
+                'employee_id' => $row['employee_id'] ?? ($enrolleeFields['employee_id'] ?? null),
+                'full_name' => $this->toDisplayName($enrolleeFields, $row),
+                'relation' => null,
+                'timestamp' => $row['timestamp'] ?? null,
+                'changes' => $changes,
+                'changes_count' => count($changes),
+                'enrollee_fields' => $enrolleeFields,
+                'dependent_fields' => null,
+                'health_insurance_fields' => $healthFields,
+            ];
+        }, $rows)));
+    }
+
+    private function mapDependentLogRows(array $details): array
+    {
+        $rows = $details['dependents'] ?? [];
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(function ($row) {
+            if (!is_array($row)) {
+                return null;
+            }
+
+            $dependentFields = is_array($row['dependent_fields'] ?? null) ? $row['dependent_fields'] : [];
+            $healthFields = is_array($row['health_insurance_fields'] ?? null) ? $row['health_insurance_fields'] : [];
+            $changes = is_array($row['changes'] ?? null) ? $row['changes'] : [];
+            $action = $this->normalizeActionValue($row['action'] ?? null);
+
+            return [
+                'record_type' => 'dependent',
+                'action' => $action,
+                'employee_id' => $row['principal_employee_id'] ?? null,
+                'full_name' => $this->toDisplayName($dependentFields, $row),
+                'relation' => $dependentFields['relation'] ?? null,
+                'timestamp' => $row['timestamp'] ?? null,
+                'changes' => $changes,
+                'changes_count' => count($changes),
+                'enrollee_fields' => null,
+                'dependent_fields' => $dependentFields,
+                'health_insurance_fields' => $healthFields,
+            ];
+        }, $rows)));
+    }
+
+    private function splitRowsByAction(array $rows): array
+    {
+        $inserted = array_values(array_filter($rows, fn ($row) => ($row['action'] ?? null) === 'created'));
+        $updated = array_values(array_filter($rows, fn ($row) => ($row['action'] ?? null) === 'updated'));
+
+        return [
+            'inserted' => $inserted,
+            'updated' => $updated,
+        ];
+    }
+
     /**
      * Return import logs for the billing/import history UI.
      */
@@ -3306,7 +3447,18 @@ class ImportEnrolleeController extends Controller
             }
 
             $logs = $logs->map(function (ImportLog $log) use ($sourceFilesByImportLogId) {
+                $details = $this->readImportDetailsFromStorage($log);
+                $principalRows = $this->mapPrincipalLogRows($details);
+                $dependentRows = $this->mapDependentLogRows($details);
+                $principalSplit = $this->splitRowsByAction($principalRows);
+                $dependentSplit = $this->splitRowsByAction($dependentRows);
                 $sourceFile = $sourceFilesByImportLogId[$log->id] ?? null;
+
+                if (!$sourceFile && is_array($details['source_file'] ?? null)) {
+                    $sourceFile = $details['source_file'];
+                }
+
+                $hasDetailedRows = count($principalRows) > 0 || count($dependentRows) > 0;
 
                 return [
                     'id' => $log->id,
@@ -3324,6 +3476,21 @@ class ImportEnrolleeController extends Controller
                     'date_format_confidence' => $log->date_format_confidence,
                     'import_details' => [
                         'source_file' => $sourceFile,
+                        'summary' => is_array($details['summary'] ?? null) ? $details['summary'] : [],
+                        'principals' => [
+                            'inserted' => $principalSplit['inserted'],
+                            'updated' => $principalSplit['updated'],
+                        ],
+                        'dependents' => [
+                            'inserted' => $dependentSplit['inserted'],
+                            'updated' => $dependentSplit['updated'],
+                        ],
+                        'legacy' => [
+                            'has_detailed_rows' => $hasDetailedRows,
+                            'loaded_from_full_log_file' => (bool) ($details['loaded_from_full_log_file'] ?? false),
+                            'truncated' => (bool) ($details['truncated'] ?? false),
+                            'full_log_file' => $details['full_log_file'] ?? null,
+                        ],
                     ],
                 ];
             })->all();
@@ -3385,55 +3552,37 @@ class ImportEnrolleeController extends Controller
                 'uploaded_at' => optional($sourceFileRecord->uploaded_at)->toDateTimeString(),
             ] : [];
 
-            $filenamePrefix = $log->enrollment_id
-                ? 'enrollment-' . $log->enrollment_id
-                : 'multi-provider';
-            $timestamp = $log->import_date?->format('Y-m-d_His') ?? now()->format('Y-m-d_His');
-            $filename = "import_log_{$filenamePrefix}_{$timestamp}.txt";
+            if (empty($sourceFile) || empty($sourceFile['path'])) {
+                $details = $this->readImportDetailsFromStorage($log);
+                $legacySourceFile = is_array($details['source_file'] ?? null) ? $details['source_file'] : [];
 
-            $lines = [
-                'IMPORT LOG REPORT',
-                '=================',
-                'Import Log ID: ' . $log->id,
-                'Enrollment ID: ' . ($log->enrollment_id ?? 'N/A (multi-provider)'),
-                'Import Date: ' . ($log->import_date?->toDateTimeString() ?? 'N/A'),
-                'Status: ' . strtoupper((string) $log->status),
-                'Date Format Detected: ' . ($log->date_format_detected ?? 'N/A'),
-                'Date Format Confidence: ' . ($log->date_format_confidence ?? 'N/A'),
-                '',
-                'SUMMARY',
-                '-------',
-                'Total Principals: ' . (int) ($log->total_principals ?? 0),
-                'Total Dependents: ' . (int) ($log->total_dependents ?? 0),
-                'Principals Created: ' . (int) ($log->principals_created ?? 0),
-                'Principals Updated: ' . (int) ($log->principals_updated ?? 0),
-                'Dependents Created: ' . (int) ($log->dependents_created ?? 0),
-                'Dependents Updated: ' . (int) ($log->dependents_updated ?? 0),
-                '',
-                'SOURCE FILE',
-                '-----------',
-                'Original Name: ' . ($sourceFile['original_name'] ?? 'N/A'),
-                'Stored Name: ' . ($sourceFile['stored_name'] ?? 'N/A'),
-                'MIME Type: ' . ($sourceFile['mime_type'] ?? 'N/A'),
-                'Company Code: ' . ($sourceFile['company_code'] ?? 'N/A'),
-                'Provider Title: ' . ($sourceFile['provider_title'] ?? 'N/A'),
-                'Uploaded At: ' . ($sourceFile['uploaded_at'] ?? 'N/A'),
-                '',
-                'ERROR MESSAGE',
-                '-------------',
-                $log->error_message ?: 'N/A',
-                '',
-            ];
+                if (!empty($legacySourceFile)) {
+                    $sourceFile = [
+                        'original_name' => $legacySourceFile['original_name'] ?? null,
+                        'stored_name' => $legacySourceFile['stored_name'] ?? null,
+                        'path' => $legacySourceFile['path'] ?? null,
+                        'url' => $legacySourceFile['url'] ?? null,
+                        'mime_type' => $legacySourceFile['mime_type'] ?? null,
+                        'company_code' => $legacySourceFile['company_code'] ?? null,
+                        'provider_title' => $legacySourceFile['provider_title'] ?? null,
+                        'uploaded_at' => $legacySourceFile['uploaded_at'] ?? null,
+                    ];
+                }
+            }
 
-            $report = implode(PHP_EOL, $lines);
+            $path = (string) ($sourceFile['path'] ?? '');
+            if ($path === '' || !Storage::disk('spaces')->exists($path)) {
+                return response()->json([
+                    'message' => 'Original import file is not available for this log.',
+                ], 404);
+            }
 
-            return response()->streamDownload(
-                fn () => print $report,
-                $filename,
-                [
-                    'Content-Type' => 'text/plain; charset=UTF-8',
-                ]
-            );
+            $downloadName = (string) ($sourceFile['original_name'] ?? $sourceFile['stored_name'] ?? 'import-source-file');
+            $contentType = (string) ($sourceFile['mime_type'] ?? 'application/octet-stream');
+
+            return Storage::disk('spaces')->download($path, $downloadName, [
+                'Content-Type' => $contentType,
+            ]);
         } catch (\Throwable $e) {
             Log::error('Failed to download import log', [
                 'id' => $id,
