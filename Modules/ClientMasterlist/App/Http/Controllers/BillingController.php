@@ -20,7 +20,7 @@ class BillingController extends Controller
 
         $validated = $request->validate([
             'enrollment_id' => ['nullable', 'integer', 'exists:cm_enrollment,id'],
-            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation'],
+            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation,active_list_validation'],
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
@@ -62,7 +62,7 @@ class BillingController extends Controller
 
         $validated = $request->validate([
             'enrollment_id' => ['required', 'integer', 'exists:cm_enrollment,id'],
-            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation'],
+            'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation,active_list_validation'],
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'employee_id_column_key' => ['nullable', 'string', 'max:255'],
@@ -79,8 +79,8 @@ class BillingController extends Controller
         ]);
 
         $billingType = $validated['billing_type'] ?? 'credit_memo';
-        $isLookerFileValidationBilling = $billingType === 'looker_file_validation';
-        $isStatusDrivenBilling = in_array($billingType, ['modal_billing', 'adjustment_billing', 'looker_file_validation'], true);
+        $isPrincipalOnlyValidationBilling = in_array($billingType, ['looker_file_validation', 'active_list_validation'], true);
+        $isStatusDrivenBilling = in_array($billingType, ['modal_billing', 'adjustment_billing', 'looker_file_validation', 'active_list_validation'], true);
         $resolvedBillingMonth = $validated['billing_month'] ?? null;
         $resolvedBillingYear = $validated['billing_year'] ?? null;
 
@@ -91,7 +91,7 @@ class BillingController extends Controller
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
                 'birthdate_column_key' => ['required', 'string', 'max:255'],
             ]);
-        } elseif ($isLookerFileValidationBilling) {
+        } elseif ($isPrincipalOnlyValidationBilling) {
             $request->validate([
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
             ]);
@@ -105,13 +105,13 @@ class BillingController extends Controller
         $modalReconReport2 = [];
         $modalReconReport3 = [];
 
-        DB::transaction(function () use (&$importedRows, &$modalReconReport1, &$modalReconReport2, &$modalReconReport3, $validated, $request, $billingType, $isStatusDrivenBilling, $isLookerFileValidationBilling, $resolvedBillingMonth, $resolvedBillingYear) {
+        DB::transaction(function () use (&$importedRows, &$modalReconReport1, &$modalReconReport2, &$modalReconReport3, $validated, $request, $billingType, $isStatusDrivenBilling, $isPrincipalOnlyValidationBilling, $resolvedBillingMonth, $resolvedBillingYear) {
             if ($isStatusDrivenBilling) {
                 $deleteQuery = BillingRecord::query()
                     ->where('enrollment_id', $validated['enrollment_id'])
                     ->where('billing_type', $billingType);
 
-                if ($isLookerFileValidationBilling) {
+                if ($isPrincipalOnlyValidationBilling) {
                     $deleteQuery->delete();
                 } else {
                     $deleteQuery
@@ -127,7 +127,7 @@ class BillingController extends Controller
                 $rowData = $row['row_data'];
 
                 if ($isStatusDrivenBilling) {
-                    if ($isLookerFileValidationBilling) {
+                    if ($isPrincipalOnlyValidationBilling) {
                         $modalResolution = $this->resolveLookerFileValidationStatus(
                             $validated['enrollment_id'],
                             $rowData,
@@ -209,6 +209,12 @@ class BillingController extends Controller
                 $validated['rows'],
                 (string) $validated['employee_id_column_key'],
                 (string) $validated['birthdate_column_key']
+            );
+        } elseif (in_array($billingType, ['looker_file_validation', 'active_list_validation'], true)) {
+            $modalReconReport2 = $this->buildLookerSystemNotFoundReport(
+                (int) $validated['enrollment_id'],
+                $validated['rows'],
+                (string) $validated['employee_id_column_key']
             );
         }
 
@@ -577,6 +583,97 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => $isDependent ? 'DEPENDENT' : 'PRINCIPAL',
                 'birth_date' => $birthDate,
+                'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
+                'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
+                'SYSTEM_STATUS' => 'NOT_FOUND',
+            ];
+        }
+
+        return $reportRows;
+    }
+
+    private function buildLookerSystemNotFoundReport(
+        int $enrollmentId,
+        array $uploadedRows,
+        string $employeeIdColumnKey
+    ): array {
+        $uploadedIdentities = [];
+
+        foreach ($uploadedRows as $row) {
+            $rowData = $row['row_data'] ?? [];
+            $employeeId = $this->normalizeIdentityValue($rowData[$employeeIdColumnKey] ?? null);
+
+            if ($employeeId === '') {
+                continue;
+            }
+
+            $uploadedIdentities[$employeeId] = true;
+        }
+
+        $systemRows = DB::table('cm_principal as p')
+            ->leftJoin('cm_health_insurance as hi', 'hi.principal_id', '=', 'p.id')
+            ->where('p.enrollment_id', $enrollmentId)
+            ->whereNull('p.deleted_at')
+            ->select([
+                'p.id as principal_id',
+                'p.employee_id',
+                'p.member_id',
+                'p.first_name',
+                'p.middle_name',
+                'p.last_name',
+                'p.suffix',
+                'p.birth_date',
+                'p.enrollment_status',
+                'hi.coverage_start_date',
+                'hi.certificate_number',
+            ])
+            ->orderByRaw('hi.id IS NULL ASC')
+            ->orderByDesc('hi.id')
+            ->get();
+
+        $seenPrincipalIds = [];
+        $reportRows = [];
+
+        foreach ($systemRows as $systemRow) {
+            $principalId = (int) ($systemRow->principal_id ?? 0);
+            if ($principalId <= 0 || isset($seenPrincipalIds[$principalId])) {
+                continue;
+            }
+            $seenPrincipalIds[$principalId] = true;
+
+            $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
+            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+                continue;
+            }
+
+            $employeeId = $this->normalizeIdentityValue($systemRow->employee_id ?? null);
+            $memberId = $this->normalizeIdentityValue($systemRow->member_id ?? null);
+
+            $isPresentInUpload =
+                ($employeeId !== '' && isset($uploadedIdentities[$employeeId])) ||
+                ($memberId !== '' && isset($uploadedIdentities[$memberId]));
+
+            if ($isPresentInUpload) {
+                continue;
+            }
+
+            if ($employeeId === '' && $memberId === '') {
+                continue;
+            }
+
+            $fullName = $this->buildPersonFullName(
+                $systemRow->first_name,
+                $systemRow->middle_name,
+                $systemRow->last_name,
+                $systemRow->suffix
+            );
+
+            $reportRows[] = [
+                'employee_id' => $employeeId !== '' ? $employeeId : null,
+                'member_id' => $memberId !== '' ? $memberId : null,
+                'full_name' => $fullName,
+                'relation' => 'PRINCIPAL',
+                'birth_date' => $this->normalizeDateValue($systemRow->birth_date),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
