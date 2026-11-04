@@ -66,6 +66,7 @@ class BillingController extends Controller
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'employee_id_column_key' => ['nullable', 'string', 'max:255'],
+            'status_column_key' => ['nullable', 'string', 'max:255'],
             'oid_column_key' => ['nullable', 'string', 'max:255'],
             'birthdate_column_key' => ['nullable', 'string', 'max:255'],
             'source_file_name' => ['nullable', 'string', 'max:255'],
@@ -96,8 +97,11 @@ class BillingController extends Controller
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
             ]);
 
-            $resolvedBillingMonth = (int) ($resolvedBillingMonth ?? Carbon::now()->month);
-            $resolvedBillingYear = (int) ($resolvedBillingYear ?? Carbon::now()->year);
+            if ($billingType === 'looker_file_validation') {
+                $request->validate([
+                    'status_column_key' => ['required', 'string', 'max:255'],
+                ]);
+            }
         }
 
         $importedRows = [];
@@ -132,8 +136,7 @@ class BillingController extends Controller
                             $validated['enrollment_id'],
                             $rowData,
                             $validated['employee_id_column_key'] ?? null,
-                            (int) $resolvedBillingMonth,
-                            (int) $resolvedBillingYear
+                            $validated['status_column_key'] ?? null
                         );
                     } else {
                         $modalResolution = $this->resolveModalBillingStatus(
@@ -349,8 +352,7 @@ class BillingController extends Controller
         int $enrollmentId,
         array $rowData,
         ?string $employeeIdColumnKey,
-        int $billingMonth,
-        int $billingYear
+        ?string $statusColumnKey
     ): array {
         $employeeId = $this->normalizeIdentityValue(
             $employeeIdColumnKey ? ($rowData[$employeeIdColumnKey] ?? null) : null
@@ -414,17 +416,61 @@ class BillingController extends Controller
 
         if ($mappedPendingStatus !== null) {
             $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
-        } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
+        } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
             $rowData['SYSTEM_STATUS'] = 'ACTIVE';
         } else {
             $rowData['SYSTEM_STATUS'] = 'INACTIVE';
         }
+
+        $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
+        $lookerStatusRaw = $statusColumnKey ? ($rowData[$statusColumnKey] ?? null) : null;
+        $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
+        $isMatched = false;
+
+        if ($expectedSystemStatus === 'PENDING_ANY') {
+            $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
+        } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE'], true)) {
+            $isMatched = $systemStatus === $expectedSystemStatus;
+        }
+
+        $rowData['MATCHED'] = $isMatched;
 
         return [
             'principal_id' => $healthRecord->principal_id,
             'dependent_id' => null,
             'row_data' => $rowData,
         ];
+    }
+
+    private function resolveLookerExpectedSystemStatus(mixed $statusValue): ?string
+    {
+        $normalized = $this->normalizeStatusToken((string) ($statusValue ?? ''));
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (in_array($normalized, ['ENROLLED', 'ACTIVE'], true)) {
+            return 'ACTIVE';
+        }
+
+        if (in_array($normalized, ['NOT-ENROLLED', 'EXPIRED', 'OPTED-OUT', 'INACTIVE'], true)) {
+            return 'INACTIVE';
+        }
+
+        if (in_array($normalized, ['AWAITING-ENROLLMENT', 'PENDING-HMO', 'PENDING-EMPLOYEE', 'AWAITING'], true)) {
+            return 'PENDING_ANY';
+        }
+
+        return null;
+    }
+
+    private function isCoverageEndDateOnOrAfterToday(string $coverageEndDate): bool
+    {
+        $today = Carbon::today()->startOfDay();
+        $coverageReferenceDate = Carbon::parse($coverageEndDate)->startOfDay();
+
+        return $coverageReferenceDate->greaterThanOrEqualTo($today);
     }
 
     private function isCoverageEndDateOnOrAfterBillingMonthYear(int $billingMonth, int $billingYear, string $coverageEndDate): bool
