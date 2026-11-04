@@ -434,8 +434,12 @@ class BillingController extends Controller
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             }
         } else {
+            $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
+
             if ($mappedPendingStatus !== null) {
                 $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+            } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             } else {
