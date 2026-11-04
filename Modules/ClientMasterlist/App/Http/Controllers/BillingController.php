@@ -333,9 +333,14 @@ class BillingController extends Controller
         $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
 
         $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
+        $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
 
         if ($mappedPendingStatus !== null) {
             $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+        } elseif ($normalizedSystemStatus === 'RESIGNED') {
+            $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+        } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+            $rowData['SYSTEM_STATUS'] = 'ACTIVE';
         } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
             $rowData['SYSTEM_STATUS'] = 'ACTIVE';
         } else {
