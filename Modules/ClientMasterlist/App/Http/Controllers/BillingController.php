@@ -136,7 +136,8 @@ class BillingController extends Controller
                             $validated['enrollment_id'],
                             $rowData,
                             $validated['employee_id_column_key'] ?? null,
-                            $validated['status_column_key'] ?? null
+                            $validated['status_column_key'] ?? null,
+                            $billingType
                         );
                     } else {
                         $modalResolution = $this->resolveModalBillingStatus(
@@ -352,7 +353,8 @@ class BillingController extends Controller
         int $enrollmentId,
         array $rowData,
         ?string $employeeIdColumnKey,
-        ?string $statusColumnKey
+        ?string $statusColumnKey,
+        string $billingType
     ): array {
         $employeeId = $this->normalizeIdentityValue(
             $employeeIdColumnKey ? ($rowData[$employeeIdColumnKey] ?? null) : null
@@ -414,26 +416,42 @@ class BillingController extends Controller
         $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
         $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
 
-        if ($mappedPendingStatus !== null) {
-            $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
-        } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
-            $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+        if ($billingType === 'active_list_validation') {
+            $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
+
+            if ($mappedPendingStatus !== null) {
+                $rowData['SYSTEM_STATUS'] = 'PENDING_EMPLOYEE';
+            } elseif ($normalizedSystemStatus === 'APPROVED') {
+                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+            } elseif ($normalizedSystemStatus === 'RESIGNED' || !is_null($resolvedCoverageEndDate)) {
+                $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+            } else {
+                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+            }
         } else {
-            $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+            if ($mappedPendingStatus !== null) {
+                $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+            } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
+                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+            } else {
+                $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+            }
         }
 
-        $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
-        $lookerStatusRaw = $statusColumnKey ? ($rowData[$statusColumnKey] ?? null) : null;
-        $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
-        $isMatched = false;
+        if ($billingType === 'looker_file_validation') {
+            $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
+            $lookerStatusRaw = $statusColumnKey ? ($rowData[$statusColumnKey] ?? null) : null;
+            $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
+            $isMatched = false;
 
-        if ($expectedSystemStatus === 'PENDING_ANY') {
-            $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
-        } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE'], true)) {
-            $isMatched = $systemStatus === $expectedSystemStatus;
+            if ($expectedSystemStatus === 'PENDING_ANY') {
+                $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
+            } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE'], true)) {
+                $isMatched = $systemStatus === $expectedSystemStatus;
+            }
+
+            $rowData['MATCHED'] = $isMatched;
         }
-
-        $rowData['MATCHED'] = $isMatched;
 
         return [
             'principal_id' => $healthRecord->principal_id,
