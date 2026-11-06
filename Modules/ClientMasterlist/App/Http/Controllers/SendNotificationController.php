@@ -825,6 +825,12 @@ class SendNotificationController extends Controller
                     }
                 } else {
                     // For other CSV reports (SUBMITTED), proceed with sending using single attachment
+                    if ($notification->notification_type === 'REPORT: ATTACHMENT (SUBMITTED)') {
+                        // Scheduled run enhancement: include older stuck SUBMITTED records
+                        // in the same attachment, in addition to current schedule range records.
+                        $statusResult['include_stuck_submitted'] = true;
+                    }
+
                     $csvAttachment = $this->generateCsvAttachment(
                         $statusResult
                     );
@@ -1564,19 +1570,116 @@ class SendNotificationController extends Controller
             // Write CSV content to temporary file
             file_put_contents($tempCsvPath, $csvContent);
 
-            return [
+            $attachment = [
                 'path' => $tempCsvPath,
                 'name' => $filename,
                 'temp_path' => $tempPath, // Store original temp path for cleanup
                 'has_data' => $dataRows > 0,
                 'data_rows' => $dataRows
             ];
+
+            if (($statusResult['enrollment_status'] ?? null) === 'SUBMITTED' && !empty($statusResult['include_stuck_submitted'])) {
+                $attachment = $this->appendStuckSubmittedRowsToCsvAttachment($attachment, $statusResult);
+            }
+
+            return $attachment;
         } catch (\Exception $e) {
             Log::error("Failed to generate CSV attachment: " . $e->getMessage(), [
                 'exception' => $e->getTraceAsString()
             ]);
             return null;
         }
+    }
+
+    /**
+     * Append older/stuck SUBMITTED rows (outside current schedule window)
+     * into the same attachment file for scheduled notifications.
+     */
+    private function appendStuckSubmittedRowsToCsvAttachment(array $csvAttachment, array $statusResult): array
+    {
+        try {
+            if (empty($csvAttachment['path']) || !file_exists($csvAttachment['path'])) {
+                return $csvAttachment;
+            }
+
+            $dateFrom = $statusResult['date_from'] ?? null;
+            if (empty($dateFrom)) {
+                return $csvAttachment;
+            }
+
+            $stuckDateTo = \Carbon\Carbon::parse($dateFrom)->subSecond()->format('Y-m-d H:i:s');
+
+            $request = new Request([
+                'maxicare_customized_column' => $statusResult['maxicare_customized_column'] ?? false,
+                'enrollment_id' => $statusResult['enrollment_id'],
+                'enrollment_status' => $statusResult['enrollment_status'] ?? null,
+                'export_enrollment_type' => $statusResult['export_enrollment_type'] ?? 'REGULAR',
+                'is_renewal' => $statusResult['is_renewal'] ?? false,
+                'with_dependents' => $statusResult['with_dependents'] ?? true,
+                'date_to' => $stuckDateTo,
+                'use_certification_date' => $statusResult['use_certification_date'] ?? false,
+                'for_attachment' => true,
+                'columns' => $statusResult['columns'] ?? []
+            ]);
+
+            $exportController = new ExportEnrolleesController();
+            $stuckResponse = $exportController->exportAndUpdateEnrollees($request);
+            $stuckCsvContent = $stuckResponse->getContent();
+            $stuckDataLines = $this->extractCsvDataLines($stuckCsvContent);
+
+            if (empty($stuckDataLines)) {
+                return $csvAttachment;
+            }
+
+            $appendContent = '';
+            foreach ($stuckDataLines as $line) {
+                $appendContent .= rtrim($line, "\r\n") . "\r\n";
+            }
+
+            file_put_contents($csvAttachment['path'], $appendContent, FILE_APPEND);
+
+            $existingRows = (int) ($csvAttachment['data_rows'] ?? 0);
+            $stuckRows = count($stuckDataLines);
+            $csvAttachment['data_rows'] = $existingRows + $stuckRows;
+            $csvAttachment['has_data'] = $csvAttachment['data_rows'] > 0;
+
+            Log::info('SUBMITTED scheduled attachment: appended stuck submitted rows', [
+                'enrollment_id' => $statusResult['enrollment_id'] ?? null,
+                'current_rows' => $existingRows,
+                'stuck_rows_appended' => $stuckRows,
+                'total_rows' => $csvAttachment['data_rows'],
+                'stuck_date_to' => $stuckDateTo,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Failed appending stuck submitted rows to CSV attachment', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return $csvAttachment;
+    }
+
+    /**
+     * Return CSV data lines without BOM/header/empty lines.
+     */
+    private function extractCsvDataLines(string $csvContent): array
+    {
+        $normalized = str_replace(["\r\n", "\r"], "\n", $csvContent);
+        $lines = array_values(array_filter(explode("\n", $normalized), function ($line) {
+            return trim($line) !== '';
+        }));
+
+        if (empty($lines)) {
+            return [];
+        }
+
+        if (str_starts_with($lines[0], "\xEF\xBB\xBF")) {
+            $lines[0] = substr($lines[0], 3);
+        }
+
+        array_shift($lines);
+
+        return $lines;
     }
 
     /**

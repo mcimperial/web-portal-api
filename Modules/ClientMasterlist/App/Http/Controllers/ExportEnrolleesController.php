@@ -16,6 +16,37 @@ class ExportEnrolleesController extends Controller
 {
     use UppercaseInput;
 
+    private function requestValue(Request $request, string $key, $default = null)
+    {
+        if ($request->has($key)) {
+            return $request->input($key, $default);
+        }
+
+        if ($request->query->has($key)) {
+            return $request->query($key, $default);
+        }
+
+        return $default;
+    }
+
+    private function requestBoolean(Request $request, string $key, bool $default = false): bool
+    {
+        $value = $this->requestValue($request, $key, $default);
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $default;
+    }
+
+    private function requestArray(Request $request, string $key, array $default = []): array
+    {
+        $value = $this->requestValue($request, $key, $default);
+
+        return is_array($value) ? $value : $default;
+    }
+
     // =========================================================================
     // MAIN EXPORT METHODS
     // =========================================================================
@@ -24,7 +55,7 @@ class ExportEnrolleesController extends Controller
     {
         return $this->runExport(
             $request,
-            (bool) $request->query('for_attachment', false),
+            $this->requestBoolean($request, 'for_attachment'),
             false,
         );
     }
@@ -49,7 +80,7 @@ class ExportEnrolleesController extends Controller
             ? $this->buildBillingContext($enrollees, $withDependents, $filters['enrollment_id'])
             : $this->emptyBillingContext();
 
-        $columns = $this->determineColumns($request, $exportType, $isForAttachment);
+        $columns = $this->resolveColumns($request, $exportType, $isForAttachment);
         $columns = $this->ensureCompareColumnsIncluded($columns, $compareRules);
         [$columns, $isRenewal] = $this->processColumns($columns, $enrollees, $exportType, $filters['export_enrollment_type'] ?? null);
         $columns = $this->expandUnmappedColumns($columns, $enrollees);
@@ -58,16 +89,19 @@ class ExportEnrolleesController extends Controller
         }
 
         // Use DEFAULT labels when use_selected_columns is checked
-        $useDefaultLabels = (bool) $request->query('use_selected_columns');
+        $useDefaultLabels = $this->requestBoolean($request, 'use_selected_columns');
         $headers = $this->generateHeaders($columns, $exportType, $useDefaultLabels, $billingContext['labels']);
 
         // Use DEFAULT column values when use_selected_columns is checked
-        $useDefaultValues = (bool) $request->query('use_selected_columns');
+        $useDefaultValues = $this->requestBoolean($request, 'use_selected_columns');
         $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules, $billingContext);
         $csv = $this->generateCsv($headers, $rows);
 
-        // Update SUBMITTED enrollees to FOR-APPROVAL after export
-        if ($updateSubmitted && $filters['enrollment_status'] === 'SUBMITTED') {
+        // Only mark rows as FOR-APPROVAL when the export actually generated data rows.
+        // This prevents the export from mutating enrollment_status when the attachment is empty
+        // or when the scheduled filter accidentally matched records that were not exported.
+        $hasExportedRows = count($rows) > 0;
+        if ($updateSubmitted && $filters['enrollment_status'] === 'SUBMITTED' && $hasExportedRows) {
             $this->updateSubmittedEnrollees($enrollees);
         }
 
@@ -80,27 +114,37 @@ class ExportEnrolleesController extends Controller
 
     private function extractFilters(Request $request): array
     {
-        $withDependents = filter_var(
-            $request->query('with_dependents', $request->query('include_dependents', false)),
-            FILTER_VALIDATE_BOOLEAN
-        );
+        $withDependents = $this->requestBoolean($request, 'with_dependents', $this->requestBoolean($request, 'include_dependents'));
 
-        $includeBillingColumns = filter_var(
-            $request->query('include_billing_columns', false),
-            FILTER_VALIDATE_BOOLEAN
-        );
+        $includeBillingColumns = $this->requestBoolean($request, 'include_billing_columns');
 
         return [
-            'use_selected_columns' => $request->query('use_selected_columns'),
-            'enrollment_id' => $request->query('enrollment_id'),
-            'export_enrollment_type' => $request->query('export_enrollment_type'),
-            'enrollment_status' => $request->query('enrollment_status'),
-            'date_from' => $request->query('date_from'),
-            'date_to' => $request->query('date_to'),
-            'use_certification_date' => $request->query('use_certification_date'),
+            'use_selected_columns' => $this->requestValue($request, 'use_selected_columns'),
+            'enrollment_id' => $this->requestValue($request, 'enrollment_id'),
+            'export_enrollment_type' => $this->requestValue($request, 'export_enrollment_type'),
+            'enrollment_status' => $this->requestValue($request, 'enrollment_status'),
+            'date_from' => $this->requestValue($request, 'date_from'),
+            'date_to' => $this->requestValue($request, 'date_to'),
+            'use_certification_date' => $this->requestValue($request, 'use_certification_date'),
             'with_dependents' => $withDependents,
             'include_billing_columns' => $includeBillingColumns,
         ];
+    }
+
+    private function resolveColumns(Request $request, string $exportType, bool $isForAttachment): array
+    {
+        // If use_selected_columns is checked, use the user's checked columns (with DEFAULT labels/values)
+        if ($this->requestBoolean($request, 'use_selected_columns')) {
+            return $this->requestArray($request, 'columns', []);
+        }
+
+        $config = $this->getConfig($exportType);
+
+        if ($this->isCustomExportType($exportType) || $isForAttachment) {
+            return $config['columns'];
+        }
+
+        return $this->requestArray($request, 'columns', []);
     }
 
     private function getExportContext($enrollmentId): array
@@ -128,22 +172,6 @@ class ExportEnrolleesController extends Controller
     private function getConfig(string $exportType): array
     {
         return EnrolleeExportDefinition::config($exportType);
-    }
-
-    private function determineColumns(Request $request, string $exportType, bool $isForAttachment): array
-    {
-        // If use_selected_columns is checked, use the user's checked columns (with DEFAULT labels/values)
-        if ($request->query('use_selected_columns')) {
-            return $request->query('columns', []);
-        }
-
-        $config = $this->getConfig($exportType);
-        
-        if ($this->isCustomExportType($exportType) || $isForAttachment) {
-            return $config['columns'];
-        }
-
-        return $request->query('columns', []);
     }
 
     private function buildBaseQuery(array $filters = [])
@@ -1524,6 +1552,15 @@ class ExportEnrolleesController extends Controller
             if ($enrollee->enrollment_status === 'SUBMITTED') {
                 $enrollee->enrollment_status = 'FOR-APPROVAL';
                 $enrollee->save();
+            }
+
+            $enrollee->loadMissing('dependents');
+
+            foreach ($enrollee->dependents ?? [] as $dependent) {
+                if ($dependent && $dependent->enrollment_status === 'SUBMITTED') {
+                    $dependent->enrollment_status = 'FOR-APPROVAL';
+                    $dependent->save();
+                }
             }
         }
     }
