@@ -63,7 +63,7 @@ class ActionLogController extends Controller
     }
 
     /**
-     * Get all action logs for a specific enrollment (max 100)
+     * Get paginated action logs for a specific enrollment
      * 
      * @param Request $request
      * @return JsonResponse
@@ -71,6 +71,10 @@ class ActionLogController extends Controller
     public function getAllForEnrollment(Request $request): JsonResponse
     {
         $enrollmentId = $request->query('enrollment_id');
+        $page = max(1, (int) $request->query('page', 1));
+        $perPage = (int) $request->query('per_page', 10);
+        $perPage = max(1, min($perPage, 100));
+        $search = trim((string) $request->query('search', ''));
 
         if (!$enrollmentId) {
             return response()->json([
@@ -88,11 +92,26 @@ class ActionLogController extends Controller
         $query = ActionLog::where('model_type', 'Modules\ClientMasterlist\App\Models\Enrollee')
             ->whereIn('model_id', $enrolleeIds);
 
-        // Get action logs for all enrollees in this enrollment
-        $actionLogs = $query
+        if ($search !== '') {
+            $query->where(function ($searchQuery) use ($search) {
+                $likeSearch = '%' . $search . '%';
+
+                $searchQuery->where('action_type', 'like', $likeSearch)
+                    ->orWhere('status', 'like', $likeSearch)
+                    ->orWhere('description', 'like', $likeSearch)
+                    ->orWhere('user_name', 'like', $likeSearch)
+                    ->orWhere('user_email', 'like', $likeSearch)
+                    ->orWhereRaw('CAST(old_values AS CHAR) LIKE ?', [$likeSearch])
+                    ->orWhereRaw('CAST(new_values AS CHAR) LIKE ?', [$likeSearch]);
+            });
+        }
+
+        // Get paginated action logs for all enrollees in this enrollment
+        $paginatedLogs = $query
             ->orderBy('created_at', 'desc')
-            ->limit(100)
-            ->get()
+            ->paginate($perPage, ['*'], 'page', $page);
+
+        $actionLogs = collect($paginatedLogs->items())
             ->map(function ($log) {
                 return [
                     'id' => $log->id,
@@ -112,7 +131,10 @@ class ActionLogController extends Controller
         return response()->json([
             'success' => true,
             'data' => $actionLogs,
-            'total' => $actionLogs->count()
+            'total' => $paginatedLogs->total(),
+            'current_page' => $paginatedLogs->currentPage(),
+            'last_page' => $paginatedLogs->lastPage(),
+            'per_page' => $paginatedLogs->perPage(),
         ]);
     }
 }
