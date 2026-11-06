@@ -14,6 +14,7 @@ class Kernel extends ConsoleKernel
      */
     protected $commands = [
         \Modules\ClientMasterlist\App\Console\Commands\SendScheduledNotifications::class,
+        \App\Console\Commands\CleanupStaleSubmittedEnrollments::class,
     ];
     /**
      * Define the application's command schedule.
