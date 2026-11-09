@@ -24,6 +24,7 @@ class BillingController extends Controller
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'include_reports' => ['nullable', 'boolean'],
         ]);
 
         $query = BillingRecord::query()->with(['enrollment', 'importedBy']);
@@ -49,7 +50,52 @@ class BillingController extends Controller
             ->limit($validated['per_page'] ?? 200)
             ->get();
 
-        return response()->json($records);
+        $includeReports = (bool) ($validated['include_reports'] ?? false);
+
+        if (!$includeReports) {
+            return response()->json($records);
+        }
+
+        $billingType = $validated['billing_type'] ?? null;
+        $reports = [
+            'recon_report_1' => [],
+            'recon_report_2' => [],
+            'recon_report_3' => [],
+        ];
+
+        if (
+            !is_null($billingType) &&
+            in_array($billingType, ['modal_billing', 'adjustment_billing', 'looker_file_validation', 'active_list_validation'], true)
+        ) {
+            $reports = $this->buildReportsFromStoredRecords(
+                $records,
+                $billingType,
+                (int) ($validated['enrollment_id'] ?? 0)
+            );
+        }
+
+        $latestRecord = $records->sortByDesc(static fn ($record) => $record->updated_at ?? $record->created_at)->first();
+        $latestImport = null;
+
+        if ($latestRecord) {
+            $latestImport = [
+                'billing_type' => $latestRecord->billing_type,
+                'billing_month' => $latestRecord->billing_month,
+                'billing_year' => $latestRecord->billing_year,
+                'source_file_name' => $latestRecord->source_file_name,
+                'sheet_name' => $latestRecord->sheet_name,
+                'imported_at' => $latestRecord->updated_at ?? $latestRecord->created_at,
+                'imported_by_user_id' => $latestRecord->imported_by_user_id,
+                'imported_by_name' => $latestRecord->importedBy?->name,
+                'imported_by_email' => $latestRecord->importedBy?->email,
+            ];
+        }
+
+        return response()->json([
+            'records' => $records,
+            'reports' => $reports,
+            'latest_import' => $latestImport,
+        ]);
     }
 
     public function store(Request $request): JsonResponse
@@ -656,6 +702,237 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => $isDependent ? 'DEPENDENT' : 'PRINCIPAL',
                 'birth_date' => $birthDate,
+                'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
+                'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
+                'SYSTEM_STATUS' => 'NOT_FOUND',
+            ];
+        }
+
+        return $reportRows;
+    }
+
+    private function buildReportsFromStoredRecords($records, string $billingType, int $enrollmentId): array
+    {
+        $reconReport1 = [];
+        $reconReport3 = [];
+
+        $importedPrincipalIds = [];
+        $importedDependentIds = [];
+
+        foreach ($records as $record) {
+            $rowData = $this->buildModalReconReportRowData((array) ($record->row_data ?? []));
+            $status = strtoupper(trim((string) ($rowData['SYSTEM_STATUS'] ?? '')));
+
+            $rowData['SOURCE_ROW_NUMBER'] = $record->source_row_number;
+
+            if (in_array($status, ['ACTIVE', 'INACTIVE', 'NOT_FOUND', 'PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
+                $reconReport1[] = $rowData;
+            }
+
+            if (in_array($status, ['PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
+                $reconReport3[] = $rowData;
+            }
+
+            if (!is_null($record->principal_id)) {
+                $importedPrincipalIds[(int) $record->principal_id] = true;
+            }
+
+            if (!is_null($record->dependent_id)) {
+                $importedDependentIds[(int) $record->dependent_id] = true;
+            }
+        }
+
+        $reconReport2 = [];
+
+        if ($billingType === 'modal_billing' || $billingType === 'adjustment_billing') {
+            $reconReport2 = $this->buildModalSystemNotFoundReportFromStoredRecords(
+                $enrollmentId,
+                $importedPrincipalIds,
+                $importedDependentIds
+            );
+        } elseif (in_array($billingType, ['looker_file_validation', 'active_list_validation'], true)) {
+            $reconReport2 = $this->buildLookerSystemNotFoundReportFromStoredRecords(
+                $enrollmentId,
+                $importedPrincipalIds
+            );
+        }
+
+        return [
+            'recon_report_1' => $reconReport1,
+            'recon_report_2' => $reconReport2,
+            'recon_report_3' => $reconReport3,
+        ];
+    }
+
+    private function buildModalSystemNotFoundReportFromStoredRecords(
+        int $enrollmentId,
+        array $importedPrincipalIds,
+        array $importedDependentIds
+    ): array {
+        $systemRows = DB::table('cm_health_insurance as hi')
+            ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
+            ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
+            ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
+            ->where(function ($query) use ($enrollmentId) {
+                $query->where(function ($principalQuery) use ($enrollmentId) {
+                    $principalQuery
+                        ->whereNotNull('hi.principal_id')
+                        ->where('p.enrollment_id', $enrollmentId)
+                        ->whereNull('p.deleted_at');
+                })->orWhere(function ($dependentQuery) use ($enrollmentId) {
+                    $dependentQuery
+                        ->whereNotNull('hi.dependent_id')
+                        ->where('dp.enrollment_id', $enrollmentId)
+                        ->whereNull('d.deleted_at')
+                        ->whereNull('dp.deleted_at');
+                });
+            })
+            ->select([
+                'hi.id as health_insurance_id',
+                'hi.principal_id',
+                'hi.dependent_id',
+                'hi.coverage_start_date',
+                'hi.certificate_number',
+                'p.employee_id as principal_employee_id',
+                'p.first_name as principal_first_name',
+                'p.middle_name as principal_middle_name',
+                'p.last_name as principal_last_name',
+                'p.suffix as principal_suffix',
+                'p.birth_date as principal_birth_date',
+                'd.employee_id as dependent_employee_id',
+                'd.first_name as dependent_first_name',
+                'd.middle_name as dependent_middle_name',
+                'd.last_name as dependent_last_name',
+                'd.suffix as dependent_suffix',
+                'd.birth_date as dependent_birth_date',
+                DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
+            ])
+            ->orderByDesc('hi.id')
+            ->get();
+
+        $seenSystemRows = [];
+        $reportRows = [];
+
+        foreach ($systemRows as $systemRow) {
+            $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
+            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+                continue;
+            }
+
+            $principalId = !is_null($systemRow->principal_id) ? (int) $systemRow->principal_id : null;
+            $dependentId = !is_null($systemRow->dependent_id) ? (int) $systemRow->dependent_id : null;
+
+            if (is_null($principalId) && is_null($dependentId)) {
+                continue;
+            }
+
+            $identityKey = 'P:' . ($principalId ?? 0) . '|D:' . ($dependentId ?? 0);
+            if (isset($seenSystemRows[$identityKey])) {
+                continue;
+            }
+            $seenSystemRows[$identityKey] = true;
+
+            if (!is_null($dependentId) && isset($importedDependentIds[$dependentId])) {
+                continue;
+            }
+
+            if (is_null($dependentId) && !is_null($principalId) && isset($importedPrincipalIds[$principalId])) {
+                continue;
+            }
+
+            $isDependent = !is_null($dependentId);
+            $employeeId = $this->normalizeIdentityValue(
+                $isDependent ? $systemRow->dependent_employee_id : $systemRow->principal_employee_id
+            );
+            $birthDate = $this->normalizeDateValue(
+                $isDependent ? $systemRow->dependent_birth_date : $systemRow->principal_birth_date
+            );
+
+            $fullName = $this->buildPersonFullName(
+                $isDependent ? $systemRow->dependent_first_name : $systemRow->principal_first_name,
+                $isDependent ? $systemRow->dependent_middle_name : $systemRow->principal_middle_name,
+                $isDependent ? $systemRow->dependent_last_name : $systemRow->principal_last_name,
+                $isDependent ? $systemRow->dependent_suffix : $systemRow->principal_suffix
+            );
+
+            $reportRows[] = [
+                'employee_id' => $employeeId !== '' ? $employeeId : null,
+                'full_name' => $fullName,
+                'relation' => $isDependent ? 'DEPENDENT' : 'PRINCIPAL',
+                'birth_date' => $birthDate,
+                'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
+                'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
+                'SYSTEM_STATUS' => 'NOT_FOUND',
+            ];
+        }
+
+        return $reportRows;
+    }
+
+    private function buildLookerSystemNotFoundReportFromStoredRecords(
+        int $enrollmentId,
+        array $importedPrincipalIds
+    ): array {
+        $systemRows = DB::table('cm_principal as p')
+            ->leftJoin('cm_health_insurance as hi', 'hi.principal_id', '=', 'p.id')
+            ->where('p.enrollment_id', $enrollmentId)
+            ->whereNull('p.deleted_at')
+            ->select([
+                'p.id as principal_id',
+                'p.employee_id',
+                'p.member_id',
+                'p.first_name',
+                'p.middle_name',
+                'p.last_name',
+                'p.suffix',
+                'p.birth_date',
+                'p.enrollment_status',
+                'hi.coverage_start_date',
+                'hi.certificate_number',
+            ])
+            ->orderByRaw('hi.id IS NULL ASC')
+            ->orderByDesc('hi.id')
+            ->get();
+
+        $seenPrincipalIds = [];
+        $reportRows = [];
+
+        foreach ($systemRows as $systemRow) {
+            $principalId = (int) ($systemRow->principal_id ?? 0);
+            if ($principalId <= 0 || isset($seenPrincipalIds[$principalId])) {
+                continue;
+            }
+            $seenPrincipalIds[$principalId] = true;
+
+            if (isset($importedPrincipalIds[$principalId])) {
+                continue;
+            }
+
+            $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
+            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+                continue;
+            }
+
+            $employeeId = $this->normalizeIdentityValue($systemRow->employee_id ?? null);
+            $memberId = $this->normalizeIdentityValue($systemRow->member_id ?? null);
+
+            if ($employeeId === '' && $memberId === '') {
+                continue;
+            }
+
+            $fullName = $this->buildPersonFullName(
+                $systemRow->first_name,
+                $systemRow->middle_name,
+                $systemRow->last_name,
+                $systemRow->suffix
+            );
+
+            $reportRows[] = [
+                'employee_id' => $employeeId !== '' ? $employeeId : null,
+                'member_id' => $memberId !== '' ? $memberId : null,
+                'full_name' => $fullName,
+                'relation' => 'PRINCIPAL',
+                'birth_date' => $this->normalizeDateValue($systemRow->birth_date),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
