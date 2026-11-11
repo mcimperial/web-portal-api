@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Database\Schema\Blueprint;
@@ -23,7 +24,9 @@ class BillingControllerLookerValidationStatusTest extends TestCase
             $table->string('employee_id')->nullable();
             $table->string('member_id')->nullable();
             $table->string('enrollment_status')->nullable();
+            $table->dateTime('submission_date')->nullable();
             $table->softDeletes();
+            $table->timestamps();
         });
 
         Schema::create('cm_health_insurance', function (Blueprint $table): void {
@@ -191,5 +194,47 @@ class BillingControllerLookerValidationStatusTest extends TestCase
 
         $this->assertSame('WAIVED', $result['row_data']['SYSTEM_STATUS']);
         $this->assertTrue($result['row_data']['MATCHED']);
+    }
+
+    public function test_pending_employee_days_are_counted_from_created_at(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 11, 11, 12, 0, 0));
+
+        try {
+            $controller = new BillingController();
+            $method = new \ReflectionMethod($controller, 'buildModalReconReportRowData');
+            $method->setAccessible(true);
+
+            $result = $method->invoke($controller, [
+                'SYSTEM_STATUS' => 'PENDING_EMPLOYEE',
+                'CREATED_AT' => '2026-11-01',
+                'SUBMISSION_DATE' => '2026-11-09',
+            ]);
+
+            $this->assertSame(10, $result['DAY(S)']);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_pending_hmo_days_are_counted_from_submission_date(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 11, 11, 12, 0, 0));
+
+        try {
+            $controller = new BillingController();
+            $method = new \ReflectionMethod($controller, 'buildModalReconReportRowData');
+            $method->setAccessible(true);
+
+            $result = $method->invoke($controller, [
+                'SYSTEM_STATUS' => 'PENDING_HMO',
+                'CREATED_AT' => '2026-10-01',
+                'SUBMISSION_DATE' => '2026-11-07',
+            ]);
+
+            $this->assertSame(4, $result['DAY(S)']);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 }

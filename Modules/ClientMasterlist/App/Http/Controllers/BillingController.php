@@ -50,6 +50,16 @@ class BillingController extends Controller
             ->limit($validated['per_page'] ?? 200)
             ->get();
 
+        $records = $records->map(function (BillingRecord $record) {
+            $record->row_data = $this->enrichRowDataWithPrincipalPendingDates(
+                (array) ($record->row_data ?? []),
+                $record->principal_id,
+                $record->dependent_id
+            );
+
+            return $record;
+        });
+
         $includeReports = (bool) ($validated['include_reports'] ?? false);
 
         if (!$includeReports) {
@@ -351,6 +361,8 @@ class BillingController extends Controller
                 'hi.coverage_start_date',
                 'hi.coverage_end_date',
                 'hi.certificate_number',
+                DB::raw('COALESCE(dp.created_at, p.created_at) as principal_created_at'),
+                DB::raw('COALESCE(dp.submission_date, p.submission_date) as principal_submission_date'),
                 DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
             ])
             ->orderByDesc('hi.id')
@@ -375,6 +387,8 @@ class BillingController extends Controller
         $rowData['ACCOUNT_NO'] = $healthRecord->certificate_number ?: null;
         $rowData['COVERAGE_START_DATE'] = $resolvedCoverageStartDate;
         $rowData['COVERAGE_END_DATE'] = $resolvedCoverageEndDate;
+        $rowData['CREATED_AT'] = $this->normalizeDateValue($healthRecord->principal_created_at ?? null);
+        $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($healthRecord->principal_submission_date ?? null);
 
         $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
 
@@ -437,6 +451,8 @@ class BillingController extends Controller
             })
             ->select([
                 'p.id as principal_id',
+                'p.created_at as principal_created_at',
+                'p.submission_date as principal_submission_date',
                 'hi.coverage_start_date',
                 'hi.coverage_end_date',
                 'hi.certificate_number',
@@ -465,6 +481,8 @@ class BillingController extends Controller
         $rowData['ACCOUNT_NO'] = $healthRecord->certificate_number ?: null;
         $rowData['COVERAGE_START_DATE'] = $resolvedCoverageStartDate;
         $rowData['COVERAGE_END_DATE'] = $resolvedCoverageEndDate;
+        $rowData['CREATED_AT'] = $this->normalizeDateValue($healthRecord->principal_created_at ?? null);
+        $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($healthRecord->principal_submission_date ?? null);
 
         $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
         $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
@@ -656,6 +674,51 @@ class BillingController extends Controller
         }
 
         return '';
+    }
+
+    private function enrichRowDataWithPrincipalPendingDates(array $rowData, mixed $principalId, mixed $dependentId): array
+    {
+        $hasCreatedAt = !is_null($this->findRowValueByTokens($rowData, ['createdat']));
+        $hasSubmissionDate = !is_null($this->findRowValueByTokens($rowData, ['submissiondate']));
+
+        if ($hasCreatedAt && $hasSubmissionDate) {
+            return $rowData;
+        }
+
+        $resolvedPrincipalId = !is_null($principalId) ? (int) $principalId : null;
+
+        if (is_null($resolvedPrincipalId) && !is_null($dependentId)) {
+            $resolvedPrincipalId = DB::table('cm_dependent')
+                ->where('id', (int) $dependentId)
+                ->whereNull('deleted_at')
+                ->value('principal_id');
+
+            $resolvedPrincipalId = !is_null($resolvedPrincipalId) ? (int) $resolvedPrincipalId : null;
+        }
+
+        if (is_null($resolvedPrincipalId) || $resolvedPrincipalId <= 0) {
+            return $rowData;
+        }
+
+        $principal = DB::table('cm_principal')
+            ->where('id', $resolvedPrincipalId)
+            ->whereNull('deleted_at')
+            ->select(['created_at', 'submission_date'])
+            ->first();
+
+        if (!$principal) {
+            return $rowData;
+        }
+
+        if (!$hasCreatedAt) {
+            $rowData['CREATED_AT'] = $this->normalizeDateValue($principal->created_at ?? null);
+        }
+
+        if (!$hasSubmissionDate) {
+            $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($principal->submission_date ?? null);
+        }
+
+        return $rowData;
     }
 
     private function findRowValueByTokens(array $rowData, array $candidateTokens): mixed
