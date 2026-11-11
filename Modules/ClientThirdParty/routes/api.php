@@ -52,6 +52,7 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
     Route::prefix('third-party/credentials')->name('credentials.')->controller(ApiCredentialController::class)->group(function () {
         Route::get('/',             'index')->middleware('rbac:third_party_api,view')->name('index');
         Route::post('/',            'store')->middleware('rbac:third_party_api,create')->name('store');
+        Route::get('/{id}/usage-logs', 'usageLogs')->middleware('rbac:third_party_api,view')->name('usage-logs');
         Route::get('/{id}',         'show')->middleware('rbac:third_party_api,view')->name('show');
         Route::put('/{id}',         'update')->middleware('rbac:third_party_api,update')->name('update');
         Route::delete('/{id}',      'destroy')->middleware('rbac:third_party_api,delete')->name('destroy');
@@ -62,15 +63,17 @@ Route::middleware(['auth:sanctum'])->prefix('v1')->name('api.')->group(function 
 // -----------------------------------------------------------------------
 // Third-party / external API endpoints — protected by X-API-Key header
 // -----------------------------------------------------------------------
-Route::middleware(['api.key:enrollment:read'])->prefix('v1/third-party')->name('third-party.')->group(function () {
+Route::prefix('v1/third-party')->name('third-party.')->group(function () {
 
-    // Enrollment listing & detail
-    Route::get('enrollments',                                          [EnrollmentApiController::class, 'indexEnrollments'])->name('enrollments.index');
-    Route::get('enrollments/{id}',                                     [EnrollmentApiController::class, 'showEnrollment'])->name('enrollments.show');
-    Route::get('enrollments/{id}/summary',                             [EnrollmentApiController::class, 'summary'])->name('enrollments.summary');
-    Route::get('enrollments/{id}/principals',                          [EnrollmentApiController::class, 'principals'])->name('principals.index');
-    Route::get('enrollments/{id}/principals/{principalId}/dependents', [EnrollmentApiController::class, 'dependents'])->name('dependents.index');
+    // Enrollment listing & detail (title-based)
+    Route::get('enrollments',                                          [EnrollmentApiController::class, 'indexEnrollments'])->middleware('api.key:enrollment:read')->name('enrollments.index');
+    Route::get('enrollments/{enrollmentTitle}',                        [EnrollmentApiController::class, 'showEnrollmentPrincipals'])->middleware('api.key:principal:read')->name('enrollments.show');
+    Route::get('enrollments/{enrollmentTitle}/details',                [EnrollmentApiController::class, 'showEnrollment'])->middleware('api.key:enrollment:read')->name('enrollments.details');
+    Route::get('enrollments/{enrollmentTitle}/summary',                [EnrollmentApiController::class, 'summary'])->middleware('api.key:enrollment:read')->name('enrollments.summary');
 
-    // Principal search across all (or a single) enrollment
-    Route::get('principals/search',                                    [EnrollmentApiController::class, 'searchPrincipals'])->name('principals.search');
+    // Principal endpoints
+    Route::get('enrollments/{enrollmentTitle}/principals',             [EnrollmentApiController::class, 'principals'])->middleware('api.key:principal:read')->name('principals.index');
+
+    // Dependent endpoints
+    Route::get('enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents', [EnrollmentApiController::class, 'dependents'])->middleware('api.key:dependent:read')->name('dependents.index');
 });

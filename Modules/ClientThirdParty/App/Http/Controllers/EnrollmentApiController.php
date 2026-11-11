@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\Enrollee;
 use Modules\ClientMasterlist\App\Models\Dependent;
+use Modules\ClientThirdParty\App\Models\ApiCredential;
 
 /**
  * @group Third-Party Enrollment API
@@ -16,7 +17,8 @@ use Modules\ClientMasterlist\App\Models\Dependent;
  * principals (employees), dependents, and summaries.
  *
  * All routes are prefixed with `/api/v1/third-party` and require
- * Bearer token authentication with the `enrollment:read` permission
+ * `X-API-Key` authentication with route-level permissions
+ * (`enrollment:read`, `principal:read`, `dependent:read`)
  * unless otherwise noted.
  */
 class EnrollmentApiController extends Controller
@@ -28,9 +30,12 @@ class EnrollmentApiController extends Controller
      * `company_id` and/or `status`.
      *
      * @authenticated
+    *
+    * Required API key permission: `enrollment:read`
      *
      * @queryParam company_id  integer  Filter by company ID. Example: 5
      * @queryParam status      string   Filter by enrollment status (e.g. `active`, `inactive`). Example: active
+        * @queryParam enrollment_title string Filter by enrollment title (single or comma-separated). Example: Acme 2026 Enrollment
      * @queryParam per_page    integer  Number of results per page (max 100, default 15). Example: 15
      *
      * @response 200 {
@@ -46,9 +51,15 @@ class EnrollmentApiController extends Controller
      */
     public function indexEnrollments(Request $request): JsonResponse
     {
+        $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
+
         $query = Enrollment::with(['insuranceProvider', 'company'])
             ->when($request->filled('company_id'), fn ($q) => $q->where('company_id', $request->company_id))
             ->when($request->filled('status'),     fn ($q) => $q->where('status', $request->status));
+
+        if (!empty($allowedEnrollmentTitles)) {
+            $this->applyEnrollmentTitleFilter($query, $allowedEnrollmentTitles);
+        }
 
         $perPage = min((int) $request->get('per_page', 15), 100);
         $result  = $query->paginate($perPage);
@@ -72,6 +83,8 @@ class EnrollmentApiController extends Controller
      * insurance provider and company relationships.
      *
      * @authenticated
+    *
+    * Required API key permission: `enrollment:read`
      *
      * @urlParam id integer required The enrollment ID. Example: 1
      *
@@ -81,14 +94,27 @@ class EnrollmentApiController extends Controller
      * }
      * @response 404 { "message": "No query results for model [Enrollment] 999" }
      */
-    public function showEnrollment(int $id): JsonResponse
+    public function showEnrollment(Request $request, string $enrollmentTitle): JsonResponse
     {
-        $enrollment = Enrollment::with(['insuranceProvider', 'company'])->findOrFail($id);
+        $enrollment = $this->resolveEnrollmentByTitle($enrollmentTitle);
+        $enrollment->load(['insuranceProvider', 'company']);
+
+        if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This API key is not allowed to access the requested enrollment.',
+            ], 403);
+        }
 
         return response()->json([
             'success' => true,
             'data'    => $enrollment,
         ]);
+    }
+
+    public function showEnrollmentPrincipals(Request $request, string $enrollmentTitle): JsonResponse
+    {
+        return $this->principals($request, $enrollmentTitle);
     }
 
     /**
@@ -99,6 +125,8 @@ class EnrollmentApiController extends Controller
      * `enrollment_status` or `employee_id`.
      *
      * @authenticated
+    *
+    * Required API key permission: `principal:read`
      *
      * @urlParam id             integer required The enrollment ID. Example: 1
      * @queryParam enrollment_status string  Filter by the principal's enrollment status. Example: active
@@ -116,9 +144,18 @@ class EnrollmentApiController extends Controller
      *   }
      * }
      */
-    public function principals(Request $request, int $enrollmentId): JsonResponse
+    public function principals(Request $request, string $enrollmentTitle): JsonResponse
     {
-        $query = Enrollee::where('enrollment_id', $enrollmentId)
+        $enrollment = $this->resolveEnrollmentByTitle($enrollmentTitle);
+
+        if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This API key is not allowed to access the requested enrollment.',
+            ], 403);
+        }
+
+        $query = Enrollee::where('enrollment_id', $enrollment->id)
             ->when($request->filled('enrollment_status'), fn ($q) => $q->where('enrollment_status', $request->enrollment_status))
             ->when($request->filled('employee_id'),       fn ($q) => $q->where('employee_id', $request->employee_id));
 
@@ -127,6 +164,9 @@ class EnrollmentApiController extends Controller
 
         return response()->json([
             'success' => true,
+            'enrollment' => [
+                'title' => $enrollment->title,
+            ],
             'data'    => $result->items(),
             'meta'    => [
                 'current_page' => $result->currentPage(),
@@ -144,6 +184,8 @@ class EnrollmentApiController extends Controller
      * within the given enrollment.
      *
      * @authenticated
+    *
+    * Required API key permission: `dependent:read`
      *
      * @urlParam id          integer required The enrollment ID. Example: 1
      * @urlParam principalId integer required The principal (enrollee) ID. Example: 10
@@ -154,14 +196,36 @@ class EnrollmentApiController extends Controller
      *   "total": 2
      * }
      */
-    public function dependents(Request $request, int $enrollmentId, int $principalId): JsonResponse
+    public function dependents(Request $request, string $enrollmentTitle, string $principalEmployeeId): JsonResponse
     {
-        $dependents = Dependent::where('enrollment_id', $enrollmentId)
-            ->where('principal_id', $principalId)
-            ->get();
+        $enrollment = $this->resolveEnrollmentByTitle($enrollmentTitle);
+
+        if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This API key is not allowed to access the requested enrollment.',
+            ], 403);
+        }
+
+        $principal = Enrollee::query()
+            ->where('enrollment_id', $enrollment->id)
+            ->where('employee_id', $principalEmployeeId)
+            ->first();
+
+        if (!$principal) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Principal employee_id not found for the requested enrollment.',
+            ], 404);
+        }
+
+        $dependents = Dependent::where('principal_id', $principal->id)->get();
 
         return response()->json([
             'success' => true,
+            'enrollment' => [
+                'title' => $enrollment->title,
+            ],
             'data'    => $dependents,
             'total'   => $dependents->count(),
         ]);
@@ -175,6 +239,8 @@ class EnrollmentApiController extends Controller
      * their `enrollment_status`.
      *
      * @authenticated
+    *
+    * Required API key permission: `enrollment:read`
      *
      * @urlParam id integer required The enrollment ID. Example: 1
      *
@@ -189,12 +255,19 @@ class EnrollmentApiController extends Controller
      * }
      * @response 404 { "message": "No query results for model [Enrollment] 999" }
      */
-    public function summary(int $id): JsonResponse
+    public function summary(Request $request, string $enrollmentTitle): JsonResponse
     {
-        $enrollment = Enrollment::findOrFail($id);
+        $enrollment = $this->resolveEnrollmentByTitle($enrollmentTitle);
 
-        $principals = Enrollee::where('enrollment_id', $id);
-        $dependents = Dependent::where('enrollment_id', $id);
+        if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This API key is not allowed to access the requested enrollment.',
+            ], 403);
+        }
+
+        $principals = Enrollee::where('enrollment_id', $enrollment->id);
+        $dependents = Dependent::where('enrollment_id', $enrollment->id);
 
         return response()->json([
             'success' => true,
@@ -210,93 +283,65 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    /**
-     * Search Principals
-     *
-     * Searches principals (employees) across all enrollments.
-     * At least one of `employee_id`, `name`, or `birth_date` must be provided.
-     * Results include each principal's dependents.
-     *
-     * @authenticated
-     *
-     * @queryParam employee_id   string  Exact match on employee ID. Example: EMP-0042
-     * @queryParam name          string  Partial match on first, last, or middle name (min 2 chars). Example: John
-     * @queryParam birth_date    string  Exact date match in `YYYY-MM-DD` format. Example: 1990-05-14
-     * @queryParam enrollment_id integer Narrow search to a specific enrollment. Example: 1
-     * @queryParam per_page      integer Number of results per page (max 100, default 20). Example: 20
-     *
-     * @response 200 {
-     *   "success": true,
-     *   "data": [{
-     *     "id": 10,
-     *     "employee_id": "EMP-0042",
-     *     "first_name": "John",
-     *     "last_name": "Doe",
-     *     "dependents": []
-     *   }],
-     *   "meta": {
-     *     "current_page": 1,
-     *     "last_page": 1,
-     *     "per_page": 20,
-     *     "total": 1
-     *   }
-     * }
-     * @response 422 {
-     *   "success": false,
-     *   "message": "Provide at least one search parameter: employee_id, name, or birth_date."
-     * }
-     */
-    public function searchPrincipals(Request $request): JsonResponse
+    private function getAllowedEnrollmentTitles(Request $request): array
     {
-        $request->validate([
-            'employee_id'   => 'nullable|string',
-            'name'          => 'nullable|string|min:2',
-            'birth_date'    => 'nullable|date_format:Y-m-d',
-            'enrollment_id' => 'nullable|integer',
-        ]);
+        $credential = $request->attributes->get('api_credential');
 
-        // At least one search parameter must be provided
-        if (!$request->filled('employee_id') &&
-            !$request->filled('name') &&
-            !$request->filled('birth_date')) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Provide at least one search parameter: employee_id, name, or birth_date.',
-            ], 422);
+        if (!$credential instanceof ApiCredential) {
+            return [];
         }
 
-        $query = Enrollee::with('dependents')
-            ->when($request->filled('enrollment_id'), fn ($q) =>
-                $q->where('enrollment_id', $request->enrollment_id)
-            )
-            ->when($request->filled('employee_id'), fn ($q) =>
-                $q->where('employee_id', $request->employee_id)
-            )
-            ->when($request->filled('name'), function ($q) use ($request) {
-                $term = '%' . $request->name . '%';
-                $q->where(function ($inner) use ($term) {
-                    $inner->where('first_name',  'LIKE', $term)
-                          ->orWhere('last_name',   'LIKE', $term)
-                          ->orWhere('middle_name', 'LIKE', $term)
-                          ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [$term]);
-                });
-            })
-            ->when($request->filled('birth_date'), fn ($q) =>
-                $q->whereDate('birth_date', $request->birth_date)
-            );
+        if (!is_array($credential->params ?? null)) {
+            return [];
+        }
 
-        $perPage = min((int) $request->get('per_page', 20), 100);
-        $result  = $query->paginate($perPage);
+        return $this->normalizeInputTitles($credential->params['enrollment_titles'] ?? []);
+    }
 
-        return response()->json([
-            'success' => true,
-            'data'    => $result->items(),
-            'meta'    => [
-                'current_page' => $result->currentPage(),
-                'last_page'    => $result->lastPage(),
-                'per_page'     => $result->perPage(),
-                'total'        => $result->total(),
-            ],
-        ]);
+    private function normalizeInputTitles(mixed $value): array
+    {
+        $items = is_array($value)
+            ? $value
+            : (is_string($value) ? explode(',', $value) : []);
+
+        return collect($items)
+            ->map(fn ($title) => trim((string) $title))
+            ->filter()
+            ->unique(fn ($title) => mb_strtolower($title))
+            ->values()
+            ->all();
+    }
+
+    private function applyEnrollmentTitleFilter($query, array $titles): void
+    {
+        $query->where(function ($innerQuery) use ($titles) {
+            foreach ($titles as $title) {
+                $innerQuery->orWhereRaw('LOWER(title) = ?', [mb_strtolower($title)]);
+            }
+        });
+    }
+
+    private function isEnrollmentAllowed(Request $request, ?string $enrollmentTitle): bool
+    {
+        $allowedTitles = $this->getAllowedEnrollmentTitles($request);
+
+        if (empty($allowedTitles)) {
+            return true;
+        }
+
+        if (!$enrollmentTitle) {
+            return false;
+        }
+
+        return in_array(mb_strtolower(trim($enrollmentTitle)), array_map('mb_strtolower', $allowedTitles), true);
+    }
+
+    private function resolveEnrollmentByTitle(string $enrollmentTitle): Enrollment
+    {
+        $normalized = trim($enrollmentTitle);
+
+        return Enrollment::query()
+            ->whereRaw('LOWER(title) = ?', [mb_strtolower($normalized)])
+            ->firstOrFail();
     }
 }

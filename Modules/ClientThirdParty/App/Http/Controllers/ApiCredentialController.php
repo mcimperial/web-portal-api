@@ -50,10 +50,17 @@ class ApiCredentialController extends Controller
             'permissions.*' => 'string',
             'allowed_ips'   => 'nullable|array',
             'allowed_ips.*' => 'ip',
+            'params'        => 'nullable|array',
+            'params.enrollment_titles' => 'nullable|array',
+            'params.enrollment_titles.*' => 'string|max:255',
             'expires_at'    => 'nullable|date',
             'notes'         => 'nullable|string',
             'status'        => 'nullable|in:ACTIVE,INACTIVE',
         ]);
+
+        if (array_key_exists('params', $validated)) {
+            $validated['params'] = $this->normalizeParams($validated['params']);
+        }
 
         // Store the plain-text secret temporarily to show it once
         $plainSecret = ApiCredential::generateApiSecret();
@@ -87,10 +94,17 @@ class ApiCredentialController extends Controller
             'permissions.*' => 'string',
             'allowed_ips'   => 'nullable|array',
             'allowed_ips.*' => 'ip',
+            'params'        => 'sometimes|nullable|array',
+            'params.enrollment_titles' => 'nullable|array',
+            'params.enrollment_titles.*' => 'string|max:255',
             'expires_at'    => 'nullable|date',
             'notes'         => 'nullable|string',
             'status'        => 'nullable|in:ACTIVE,INACTIVE,REVOKED',
         ]);
+
+        if (array_key_exists('params', $validated)) {
+            $validated['params'] = $this->normalizeParams($validated['params']);
+        }
 
         $credential->update($validated);
 
@@ -144,5 +158,61 @@ class ApiCredentialController extends Controller
                 'api_secret' => $newSecret,  // plain-text shown only here
             ]),
         ]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Usage logs for a specific credential
+    // -----------------------------------------------------------------------
+    public function usageLogs(Request $request, int $id): JsonResponse
+    {
+        $credential = ApiCredential::findOrFail($id);
+
+        $validated = $request->validate([
+            'status' => 'nullable|in:success,failed',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
+
+        $perPage = (int) ($validated['per_page'] ?? 20);
+
+        $logsQuery = $credential->usageLogs()->orderByDesc('created_at');
+
+        if (!empty($validated['status'])) {
+            $logsQuery->where('status', $validated['status']);
+        }
+
+        $logs = $logsQuery->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $logs->items(),
+            'meta' => [
+                'current_page' => $logs->currentPage(),
+                'last_page' => $logs->lastPage(),
+                'per_page' => $logs->perPage(),
+                'total' => $logs->total(),
+            ],
+        ]);
+    }
+
+    private function normalizeParams(?array $params): ?array
+    {
+        if ($params === null) {
+            return null;
+        }
+
+        $enrollmentTitles = collect($params['enrollment_titles'] ?? [])
+            ->map(fn ($title) => trim((string) $title))
+            ->filter()
+            ->unique(fn ($title) => mb_strtolower($title))
+            ->values()
+            ->all();
+
+        if (empty($enrollmentTitles)) {
+            return null;
+        }
+
+        return [
+            'enrollment_titles' => $enrollmentTitles,
+        ];
     }
 }

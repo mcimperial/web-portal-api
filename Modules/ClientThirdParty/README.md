@@ -26,11 +26,11 @@ This module provides functionality to sync data between the main application dat
   - [7. Get Member Data](#7-get-member-data)
 - [Enrollment API](#enrollment-api)
   - [1. List Enrollments](#1-list-enrollments)
-  - [2. Show Enrollment](#2-show-enrollment)
-  - [3. List Principals](#3-list-principals)
-  - [4. List Dependents](#4-list-dependents)
-  - [5. Enrollment Summary](#5-enrollment-summary)
-  - [6. Search Principals](#6-search-principals)
+  - [2. Show Enrollment Principals (Landing Endpoint)](#2-show-enrollment-principals-landing-endpoint)
+  - [3. Show Enrollment Details](#3-show-enrollment-details)
+  - [4. List Principals](#4-list-principals)
+  - [5. List Dependents](#5-list-dependents)
+  - [6. Enrollment Summary](#6-enrollment-summary)
 - [Error Handling](#error-handling)
 - [Security](#security)
 
@@ -261,11 +261,34 @@ All endpoints return error responses in the following format:
 Read-only endpoints for third-party integrations to access enrollment data.
 
 **Base URL:** `/api/v1/third-party`  
-**Authentication:** Bearer token with `enrollment:read` permission required on all routes.
+**Authentication:** `X-API-Key` with route-specific permissions.
 
 ```http
-Authorization: Bearer <your-token>
+X-API-Key: <your-api-key>
 ```
+
+**Credential Params (Enrollment Restriction)**
+
+Admins can restrict one API key to multiple enrollment titles:
+
+```json
+{
+  "name": "ACME HR Integration",
+  "permissions": ["enrollment:read"],
+  "params": {
+    "enrollment_titles": [
+      "Acme 2026 Enrollment",
+      "Beta Group Enrollment"
+    ]
+  }
+}
+```
+
+**Route Permissions**
+
+- `enrollment:read` → enrollment listing/detail/summary
+- `principal:read` → principals listing/search
+- `dependent:read` → dependents listing
 
 ---
 
@@ -276,6 +299,8 @@ GET /api/v1/third-party/enrollments
 ```
 
 Returns a paginated list of enrollments with their associated insurance provider and company.
+
+Required permission: `enrollment:read`
 
 **Query Parameters**
 
@@ -291,7 +316,7 @@ Returns a paginated list of enrollments with their associated insurance provider
 {
   "success": true,
   "data": [
-    { "id": 1, "company_id": 5, "status": "active" }
+    { "id": 1, "title": "TEST - MAXICARE", "company_id": 5, "status": "ACTIVE" }
   ],
   "meta": {
     "current_page": 1,
@@ -304,26 +329,37 @@ Returns a paginated list of enrollments with their associated insurance provider
 
 ---
 
-### 2. Show Enrollment
+### 2. Show Enrollment Principals (Landing Endpoint)
 
 ```
-GET /api/v1/third-party/enrollments/{id}
+GET /api/v1/third-party/enrollments/{enrollmentTitle}
 ```
 
-Returns the details of a single enrollment including its insurance provider and company relationships.
+Returns principals (enrollees) for the selected enrollment title.
+
+Required permission: `principal:read`
 
 **URL Parameters**
 
 | Parameter | Type    | Required | Description       | Example |
 |-----------|---------|----------|-------------------|---------|
-| `id`      | integer | Yes      | The enrollment ID | `1`     |
+| `enrollmentTitle` | string | Yes | Enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
 
-**Success Response `200`**
+**Sample JSON Response `200`**
 
 ```json
 {
   "success": true,
-  "data": { "id": 1, "company_id": 5, "status": "active" }
+  "enrollment": { "title": "TEST - MAXICARE" },
+  "data": [
+    {
+      "id": 10,
+      "employee_id": "EMP-0042",
+      "first_name": "John",
+      "last_name": "Doe"
+    }
+  ],
+  "meta": { "current_page": 1, "last_page": 1, "per_page": 20, "total": 1 }
 }
 ```
 
@@ -335,19 +371,42 @@ Returns the details of a single enrollment including its insurance provider and 
 
 ---
 
-### 3. List Principals
+### 3. Show Enrollment Details
 
 ```
-GET /api/v1/third-party/enrollments/{id}/principals
+GET /api/v1/third-party/enrollments/{enrollmentTitle}/details
+```
+
+Returns the details of a single enrollment including its insurance provider and company relationships.
+
+Required permission: `enrollment:read`
+
+**Success Response `200`**
+
+```json
+{
+  "success": true,
+  "data": { "id": 1, "title": "TEST - MAXICARE", "company_id": 5, "status": "ACTIVE" }
+}
+```
+
+---
+
+### 4. List Principals
+
+```
+GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals
 ```
 
 Returns a paginated list of enrolled principals (employees) belonging to the given enrollment.
+
+Required permission: `principal:read`
 
 **URL Parameters**
 
 | Parameter | Type    | Required | Description       | Example |
 |-----------|---------|----------|-------------------|---------|
-| `id`      | integer | Yes      | The enrollment ID | `1`     |
+| `enrollmentTitle` | string | Yes | The enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
 
 **Query Parameters**
 
@@ -362,6 +421,7 @@ Returns a paginated list of enrolled principals (employees) belonging to the giv
 ```json
 {
   "success": true,
+  "enrollment": { "title": "TEST - MAXICARE" },
   "data": [
     {
       "id": 10,
@@ -382,20 +442,22 @@ Returns a paginated list of enrolled principals (employees) belonging to the giv
 
 ---
 
-### 4. List Dependents
+### 5. List Dependents
 
 ```
-GET /api/v1/third-party/enrollments/{id}/principals/{principalId}/dependents
+GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents
 ```
 
 Returns all dependents registered under a specific principal within the given enrollment.
+
+Required permission: `dependent:read`
 
 **URL Parameters**
 
 | Parameter     | Type    | Required | Description                 | Example |
 |---------------|---------|----------|-----------------------------|---------|
-| `id`          | integer | Yes      | The enrollment ID           | `1`     |
-| `principalId` | integer | Yes      | The principal (enrollee) ID | `10`    |
+| `enrollmentTitle` | string | Yes    | The enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
+| `principalEmployeeId` | string | Yes | Principal employee ID | `EMP-0042` |
 
 **Success Response `200`**
 
@@ -403,27 +465,30 @@ Returns all dependents registered under a specific principal within the given en
 {
   "success": true,
   "data": [
-    { "id": 20, "principal_id": 10, "first_name": "Jane", "last_name": "Doe" }
+    { "id": 20, "principal_id": 10, "employee_id": "EMP-0042", "first_name": "Jane", "last_name": "Doe" }
   ],
+  "enrollment": { "title": "TEST - MAXICARE" },
   "total": 2
 }
 ```
 
 ---
 
-### 5. Enrollment Summary
+### 6. Enrollment Summary
 
 ```
-GET /api/v1/third-party/enrollments/{id}/summary
+GET /api/v1/third-party/enrollments/{enrollmentTitle}/summary
 ```
 
 Returns quick statistics for an enrollment: total principals, total dependents, and a breakdown of principals grouped by `enrollment_status`.
+
+Required permission: `enrollment:read`
 
 **URL Parameters**
 
 | Parameter | Type    | Required | Description       | Example |
 |-----------|---------|----------|-------------------|---------|
-| `id`      | integer | Yes      | The enrollment ID | `1`     |
+| `enrollmentTitle` | string | Yes | Enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
 
 **Success Response `200`**
 
@@ -450,57 +515,7 @@ Returns quick statistics for an enrollment: total principals, total dependents, 
 
 ---
 
-### 6. Search Principals
-
-```
-GET /api/v1/third-party/principals/search
-```
-
-Searches principals (employees) across all enrollments. Results include each principal's dependents.
-
-> **At least one** of `employee_id`, `name`, or `birth_date` must be provided.
-
-**Query Parameters**
-
-| Parameter       | Type    | Required               | Description                                                | Example      |
-|-----------------|---------|------------------------|------------------------------------------------------------|--------------|
-| `employee_id`   | string  | Conditional (see note) | Exact match on employee ID                                 | `EMP-0042`   |
-| `name`          | string  | Conditional (see note) | Partial match on first, last, or middle name (min 2 chars) | `John`       |
-| `birth_date`    | string  | Conditional (see note) | Exact date match — format `YYYY-MM-DD`                     | `1990-05-14` |
-| `enrollment_id` | integer | No                     | Narrow search to a specific enrollment                     | `1`          |
-| `per_page`      | integer | No                     | Results per page — max `100`, default `20`                 | `20`         |
-
-**Success Response `200`**
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": 10,
-      "employee_id": "EMP-0042",
-      "first_name": "John",
-      "last_name": "Doe",
-      "dependents": []
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "last_page": 1,
-    "per_page": 20,
-    "total": 1
-  }
-}
-```
-
-**Error Response `422`**
-
-```json
-{
-  "success": false,
-  "message": "Provide at least one search parameter: employee_id, name, or birth_date."
-}
-```
+Use `GET /api/v1/third-party/enrollments/{enrollmentTitle}` as the landing endpoint for principals, or call `/principals` directly with filters.
 
 ---
 
@@ -508,8 +523,8 @@ Searches principals (employees) across all enrollments. Results include each pri
 
 | HTTP Status | Meaning                                              |
 |-------------|------------------------------------------------------|
-| `401`       | Unauthenticated — missing or invalid Bearer token    |
-| `403`       | Forbidden — token lacks `enrollment:read` permission |
+| `401`       | Unauthenticated — missing or invalid `X-API-Key`     |
+| `403`       | Forbidden — API key lacks required route permission or enrollment access |
 | `404`       | Record not found                                     |
 | `422`       | Validation failed — see `message` for details        |
 | `500`       | Internal server error                                |

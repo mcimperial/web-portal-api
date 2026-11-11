@@ -27,6 +27,7 @@ class Enrollee extends Model
         'position',
         'employment_start_date',
         'employment_end_date',
+        'temp_end_date',
         'submission_date',
         'back_date',
         'first_name',
@@ -56,6 +57,7 @@ class Enrollee extends Model
         'with_dependents' => 'boolean',
         'employment_start_date' => 'date:Y-m-d',
         'employment_end_date' => 'date:Y-m-d',
+        'temp_end_date' => 'date:Y-m-d',
         'submission_date' => 'datetime',
         'back_date' => 'date:Y-m-d',
     ];

@@ -5,7 +5,9 @@ namespace Modules\ClientThirdParty\App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Modules\ClientThirdParty\App\Models\ApiCredential;
+use Modules\ClientThirdParty\App\Models\ApiUsageLog;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 class ValidateApiKey
 {
@@ -23,6 +25,7 @@ class ValidateApiKey
         $apiKey = $request->header('X-API-Key');
 
         if (empty($apiKey)) {
+            $this->logUsageAttempt($request, null, null, 401, 'failed', 'missing_api_key');
             return response()->json([
                 'success' => false,
                 'message' => 'Missing API key. Provide it in the X-API-Key header.',
@@ -33,6 +36,7 @@ class ValidateApiKey
         $credential = ApiCredential::where('api_key', $apiKey)->first();
 
         if (!$credential) {
+            $this->logUsageAttempt($request, null, $apiKey, 401, 'failed', 'invalid_api_key');
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid API key.',
@@ -40,6 +44,7 @@ class ValidateApiKey
         }
 
         if (!$credential->isValid()) {
+            $this->logUsageAttempt($request, $credential, $apiKey, 403, 'failed', 'inactive_or_expired_key');
             return response()->json([
                 'success' => false,
                 'message' => 'API key is inactive or expired.',
@@ -48,6 +53,7 @@ class ValidateApiKey
 
         // IP whitelist check
         if (!$credential->allowsIp($request->ip())) {
+            $this->logUsageAttempt($request, $credential, $apiKey, 403, 'failed', 'ip_not_allowed');
             return response()->json([
                 'success' => false,
                 'message' => 'Access from your IP address is not permitted.',
@@ -56,6 +62,7 @@ class ValidateApiKey
 
         // Permission check (if the middleware was given a required permission)
         if ($permission && !$credential->hasPermission($permission)) {
+            $this->logUsageAttempt($request, $credential, $apiKey, 403, 'failed', 'missing_permission:' . $permission);
             return response()->json([
                 'success' => false,
                 'message' => "API key does not have the required permission: {$permission}",
@@ -68,6 +75,61 @@ class ValidateApiKey
         // Attach the credential to the request so downstream controllers can use it
         $request->attributes->set('api_credential', $credential);
 
-        return $next($request);
+        $response = $next($request);
+
+        $this->logUsageAttempt(
+            $request,
+            $credential,
+            $apiKey,
+            $response->getStatusCode(),
+            $response->getStatusCode() < 400 ? 'success' : 'failed',
+            $response->getStatusCode() < 400 ? null : 'downstream_error'
+        );
+
+        return $response;
+    }
+
+    private function logUsageAttempt(
+        Request $request,
+        ?ApiCredential $credential,
+        ?string $apiKey,
+        int $responseStatus,
+        string $status,
+        ?string $failureReason
+    ): void {
+        try {
+            $route = $request->route();
+            $routeName = $route?->getName();
+            $process = $routeName ?: $request->path();
+
+            ApiUsageLog::create([
+                'api_credential_id' => $credential?->id,
+                'api_key_last4' => $this->maskApiKey($apiKey),
+                'process' => $process,
+                'route_name' => $routeName,
+                'method' => strtoupper($request->method()),
+                'endpoint' => '/' . ltrim($request->path(), '/'),
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'response_status' => $responseStatus,
+                'status' => $status,
+                'failure_reason' => $failureReason,
+                'metadata' => [
+                    'query' => $request->query(),
+                ],
+            ]);
+        } catch (Throwable $e) {
+        }
+    }
+
+    private function maskApiKey(?string $apiKey): ?string
+    {
+        if (!$apiKey) {
+            return null;
+        }
+
+        $suffix = substr($apiKey, -4);
+
+        return $suffix ? ('***' . $suffix) : null;
     }
 }
