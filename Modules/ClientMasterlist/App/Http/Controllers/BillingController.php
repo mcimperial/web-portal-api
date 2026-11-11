@@ -616,34 +616,81 @@ class BillingController extends Controller
 
         if ($normalizedStatus === 'APPROVED') {
             $rowData['SYSTEM_STATUS'] = 'NOT_FOUND';
-            return $rowData;
-        }
+        } else {
+            $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedStatus);
 
-        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedStatus);
-        if ($mappedPendingStatus !== null) {
-            $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
-            return $rowData;
-        }
+            if ($mappedPendingStatus !== null) {
+                $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+            } elseif ($normalizedStatus === 'RESIGNED') {
+                $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($rowData['ACCOUNT_NO'] ?? null);
+            } elseif ($normalizedStatus === 'OPTED-OUT') {
+                $rowData['SYSTEM_STATUS'] = 'WAIVED';
+            } elseif (in_array($normalizedStatus, ['ACTIVE', 'INACTIVE', 'TERMINATED', 'WAIVED', 'INACTIVE-DID-NOT-TAKE-ACTION', 'NOT-FOUND'], true)) {
+                $rowData['SYSTEM_STATUS'] = $normalizedStatus === 'NOT-FOUND' ? 'NOT_FOUND' : $normalizedStatus;
 
-        if ($normalizedStatus === 'RESIGNED') {
-            $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($rowData['ACCOUNT_NO'] ?? null);
-            return $rowData;
-        }
-
-        if ($normalizedStatus === 'OPTED-OUT') {
-            $rowData['SYSTEM_STATUS'] = 'WAIVED';
-            return $rowData;
-        }
-
-        if (in_array($normalizedStatus, ['ACTIVE', 'INACTIVE', 'TERMINATED', 'WAIVED', 'INACTIVE-DID-NOT-TAKE-ACTION', 'NOT-FOUND'], true)) {
-            $rowData['SYSTEM_STATUS'] = $normalizedStatus === 'NOT-FOUND' ? 'NOT_FOUND' : $normalizedStatus;
-
-            if ($normalizedStatus === 'INACTIVE-DID-NOT-TAKE-ACTION') {
-                $rowData['SYSTEM_STATUS'] = 'INACTIVE - DID NOT TAKE ACTION';
+                if ($normalizedStatus === 'INACTIVE-DID-NOT-TAKE-ACTION') {
+                    $rowData['SYSTEM_STATUS'] = 'INACTIVE - DID NOT TAKE ACTION';
+                }
             }
         }
 
+        $rowData['DAY(S)'] = $this->computePendingDays((string) ($rowData['SYSTEM_STATUS'] ?? ''), $rowData);
+
         return $rowData;
+    }
+
+    private function computePendingDays(string $systemStatus, array $rowData): string|int
+    {
+        if ($systemStatus === 'PENDING_EMPLOYEE') {
+            $createdAtValue = $this->findRowValueByTokens($rowData, ['createdat']);
+            $days = $this->calculateElapsedDaysFromDateValue($createdAtValue);
+
+            return is_null($days) ? '' : $days;
+        }
+
+        if ($systemStatus === 'PENDING_HMO') {
+            $submissionDateValue = $this->findRowValueByTokens($rowData, ['submissiondate']);
+            $days = $this->calculateElapsedDaysFromDateValue($submissionDateValue);
+
+            return is_null($days) ? '' : $days;
+        }
+
+        return '';
+    }
+
+    private function findRowValueByTokens(array $rowData, array $candidateTokens): mixed
+    {
+        foreach ($rowData as $key => $value) {
+            $normalizedKey = preg_replace('/[^a-z0-9]/', '', strtolower(trim((string) $key))) ?? '';
+
+            if ($normalizedKey !== '' && in_array($normalizedKey, $candidateTokens, true)) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function calculateElapsedDaysFromDateValue(mixed $value): ?int
+    {
+        if (is_null($value) || $value === '') {
+            return null;
+        }
+
+        try {
+            $sourceDate = Carbon::parse((string) $value)->startOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $today = Carbon::today()->startOfDay();
+        $days = $sourceDate->diffInDays($today, false);
+
+        if ($days < 0) {
+            return 0;
+        }
+
+        return $days;
     }
 
     private function buildModalSystemNotFoundReport(
@@ -770,11 +817,18 @@ class BillingController extends Controller
 
         foreach ($records as $record) {
             $rowData = $this->buildModalReconReportRowData((array) ($record->row_data ?? []));
+
+            $resolvedStoredStatus = $this->resolveStoredRecordSystemStatus($record, $billingType);
+            if (!is_null($resolvedStoredStatus)) {
+                $rowData['SYSTEM_STATUS'] = $resolvedStoredStatus;
+                $rowData = $this->buildModalReconReportRowData($rowData);
+            }
+
             $status = strtoupper(trim((string) ($rowData['SYSTEM_STATUS'] ?? '')));
 
             $rowData['SOURCE_ROW_NUMBER'] = $record->source_row_number;
 
-            if (in_array($status, ['ACTIVE', 'INACTIVE', 'NOT_FOUND', 'PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
+            if (in_array($status, ['ACTIVE', 'INACTIVE', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION', 'WAIVED', 'NOT_FOUND', 'PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
                 $reconReport1[] = $rowData;
             }
 
@@ -811,6 +865,109 @@ class BillingController extends Controller
             'recon_report_2' => $reconReport2,
             'recon_report_3' => $reconReport3,
         ];
+    }
+
+    private function resolveStoredRecordSystemStatus(BillingRecord $record, string $billingType): ?string
+    {
+        $principalId = $record->principal_id;
+        $dependentId = $record->dependent_id;
+
+        if (is_null($principalId) && is_null($dependentId)) {
+            return null;
+        }
+
+        $healthRecord = DB::table('cm_health_insurance as hi')
+            ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
+            ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
+            ->where(function ($query) use ($principalId, $dependentId) {
+                if (!is_null($principalId)) {
+                    $query->orWhere(function ($principalQuery) use ($principalId) {
+                        $principalQuery
+                            ->whereNotNull('hi.principal_id')
+                            ->where('hi.principal_id', $principalId)
+                            ->whereNull('p.deleted_at');
+                    });
+                }
+
+                if (!is_null($dependentId)) {
+                    $query->orWhere(function ($dependentQuery) use ($dependentId) {
+                        $dependentQuery
+                            ->whereNotNull('hi.dependent_id')
+                            ->where('hi.dependent_id', $dependentId)
+                            ->whereNull('d.deleted_at');
+                    });
+                }
+            })
+            ->select([
+                'hi.coverage_end_date',
+                'hi.certificate_number',
+                DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
+            ])
+            ->orderByDesc('hi.id')
+            ->first();
+
+        if (!$healthRecord) {
+            return null;
+        }
+
+        $resolvedCoverageEndDate = $healthRecord->coverage_end_date
+            ? Carbon::parse($healthRecord->coverage_end_date)->format('Y-m-d')
+            : null;
+
+        $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
+        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
+        $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
+
+        if ($mappedPendingStatus !== null) {
+            return $billingType === 'active_list_validation' ? 'PENDING_EMPLOYEE' : $mappedPendingStatus;
+        }
+
+        if ($normalizedSystemStatus === 'RESIGNED') {
+            return $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
+        }
+
+        if ($normalizedSystemStatus === 'OPTED-OUT') {
+            return 'WAIVED';
+        }
+
+        if ($billingType === 'active_list_validation') {
+            if ($normalizedSystemStatus === 'APPROVED') {
+                return 'ACTIVE';
+            }
+
+            if (!is_null($resolvedCoverageEndDate)) {
+                return 'INACTIVE';
+            }
+
+            return 'ACTIVE';
+        }
+
+        if ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+            return 'ACTIVE';
+        }
+
+        if ($billingType === 'looker_file_validation') {
+            if ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
+                return 'ACTIVE';
+            }
+
+            return 'INACTIVE';
+        }
+
+        $billingMonth = (int) ($record->billing_month ?? 0);
+        $billingYear = (int) ($record->billing_year ?? 0);
+
+        if (
+            $resolvedCoverageEndDate &&
+            $billingMonth >= 1 &&
+            $billingMonth <= 12 &&
+            $billingYear >= 2000 &&
+            $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)
+        ) {
+            return 'ACTIVE';
+        }
+
+        return 'INACTIVE';
     }
 
     private function buildModalSystemNotFoundReportFromStoredRecords(
