@@ -1236,6 +1236,21 @@ class ImportEnrolleeController extends Controller
         $enrolleeData['enrollment_status'] = 'AWAITING-DELETION-APPROVAL';
     }
 
+    private function shouldApplyAwaitingDeletionApproval(?Enrollment $enrollment): bool
+    {
+        if (!$enrollment) {
+            return true;
+        }
+
+        $configuredValue = $enrollment->getAttribute('with_awaiting_deletion_approval');
+
+        if ($configuredValue === null) {
+            return true;
+        }
+
+        return (bool) $configuredValue;
+    }
+
     /**
      * Get normalized notes token from a temp row.
      */
@@ -1699,6 +1714,9 @@ class ImportEnrolleeController extends Controller
                 throw new \Exception('Enrollment ID is required for import.');
             }
 
+            $targetEnrollment = Enrollment::find((int) $enrollmentId);
+            $applyAwaitingDeletionApproval = $this->shouldApplyAwaitingDeletionApproval($targetEnrollment);
+
             $this->storeTempImportRowsForEnrollment((int) $enrollmentId, $enrollees, $importColumns);
 
             $sourceFile = $this->storeImportSourceFile($request, $enrollmentId ? (int) $enrollmentId : null, $enrollees);
@@ -1837,11 +1855,13 @@ class ImportEnrolleeController extends Controller
                         continue;
                     }
 
-                    $this->applyAwaitingDeletionApprovalState(
-                        $enrolleeData,
-                        $healthInsuranceData,
-                        $dateAnalysis['recommended_format']
-                    );
+                    if ($applyAwaitingDeletionApproval) {
+                        $this->applyAwaitingDeletionApprovalState(
+                            $enrolleeData,
+                            $healthInsuranceData,
+                            $dateAnalysis['recommended_format']
+                        );
+                    }
 
                     $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $enrollmentId, $employeeId, $dateAnalysis['recommended_format']);
 
@@ -2126,6 +2146,8 @@ class ImportEnrolleeController extends Controller
             $principalMap = [];
             $affectedEnrollmentIds = [];
             $tempRowsByEnrollment = [];
+            $enrollmentCache = [];
+            $awaitingDeletionApprovalByEnrollmentId = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
 
             foreach ($enrollees as $enrolleeData) {
@@ -2148,6 +2170,16 @@ class ImportEnrolleeController extends Controller
                     $currentEnrollmentId = $this->findEnrollmentByCompanyAndProvider($enrolleeCompanyCode, $enrolleeInsuranceProviderTitle);
                 } catch (\Exception $e) {
                     return response()->json(['message' => $e->getMessage()], 404);
+                }
+
+                if (!array_key_exists($currentEnrollmentId, $awaitingDeletionApprovalByEnrollmentId)) {
+                    if (!array_key_exists($currentEnrollmentId, $enrollmentCache)) {
+                        $enrollmentCache[$currentEnrollmentId] = Enrollment::find((int) $currentEnrollmentId);
+                    }
+
+                    $awaitingDeletionApprovalByEnrollmentId[$currentEnrollmentId] = $this->shouldApplyAwaitingDeletionApproval(
+                        $enrollmentCache[$currentEnrollmentId] ?? null
+                    );
                 }
 
                 if (!in_array($currentEnrollmentId, $affectedEnrollmentIds, true)) {
@@ -2211,11 +2243,13 @@ class ImportEnrolleeController extends Controller
                 // Process health insurance data
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
 
-                $this->applyAwaitingDeletionApprovalState(
-                    $enrolleeData,
-                    $healthInsuranceData,
-                    $dateAnalysis['recommended_format']
-                );
+                if (($awaitingDeletionApprovalByEnrollmentId[$currentEnrollmentId] ?? true) === true) {
+                    $this->applyAwaitingDeletionApprovalState(
+                        $enrolleeData,
+                        $healthInsuranceData,
+                        $dateAnalysis['recommended_format']
+                    );
+                }
 
                 // Determine whether this principal already exists (for logging purposes)
                 $principalExistedBefore = Enrollee::withTrashed()
