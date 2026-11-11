@@ -34,8 +34,13 @@ class Enrollment extends Model
         'dependent_room_and_board',
         'export_type',
         'with_optout',
+        'with_lowercase_output',
         'status',
         'deleted_by',
+    ];
+
+    protected $casts = [
+        'with_lowercase_output' => 'boolean',
     ];
 
     /**

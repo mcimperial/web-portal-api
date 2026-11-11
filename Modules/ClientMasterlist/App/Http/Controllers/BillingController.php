@@ -9,6 +9,7 @@ use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Modules\ClientMasterlist\App\Models\BillingRecord;
+use Modules\ClientMasterlist\App\Models\Enrollment;
 
 class BillingController extends Controller
 {
@@ -26,6 +27,11 @@ class BillingController extends Controller
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
             'include_reports' => ['nullable', 'boolean'],
         ]);
+
+        $selectedEnrollmentId = isset($validated['enrollment_id'])
+            ? (int) $validated['enrollment_id']
+            : null;
+        $withLowercaseOutput = $this->shouldLowercaseOutputForEnrollment($selectedEnrollmentId);
 
         $query = BillingRecord::query()->with(['enrollment', 'importedBy']);
 
@@ -60,6 +66,10 @@ class BillingController extends Controller
             return $record;
         });
 
+        if ($withLowercaseOutput) {
+            $records = $records->map(fn(BillingRecord $record) => $this->lowercaseBillingRecordOutput($record));
+        }
+
         $includeReports = (bool) ($validated['include_reports'] ?? false);
 
         if (!$includeReports) {
@@ -84,6 +94,10 @@ class BillingController extends Controller
             );
         }
 
+        if ($withLowercaseOutput) {
+            $reports = $this->lowercaseOutputValue($reports);
+        }
+
         $latestRecord = $records->sortByDesc(static fn ($record) => $record->updated_at ?? $record->created_at)->first();
         $latestImport = null;
 
@@ -104,7 +118,7 @@ class BillingController extends Controller
         return response()->json([
             'records' => $records,
             'reports' => $reports,
-            'latest_import' => $latestImport,
+            'latest_import' => $withLowercaseOutput ? $this->lowercaseOutputValue($latestImport) : $latestImport,
         ]);
     }
 
@@ -134,6 +148,8 @@ class BillingController extends Controller
             'rows.*.dependent_id' => ['nullable', 'integer'],
             'rows.*.row_data' => ['required', 'array'],
         ]);
+
+        $withLowercaseOutput = $this->shouldLowercaseOutputForEnrollment((int) $validated['enrollment_id']);
 
         $billingType = $validated['billing_type'] ?? 'credit_memo';
         $isPrincipalOnlyValidationBilling = in_array($billingType, ['looker_file_validation', 'active_list_validation'], true);
@@ -278,7 +294,7 @@ class BillingController extends Controller
             );
         }
 
-        return response()->json([
+        $responsePayload = [
             'message' => 'Billing rows imported successfully.',
             'billing_type' => $billingType,
             'count' => count($importedRows),
@@ -288,7 +304,53 @@ class BillingController extends Controller
                 'recon_report_2' => $modalReconReport2,
                 'recon_report_3' => $modalReconReport3,
             ],
-        ], 201);
+        ];
+
+        if ($withLowercaseOutput) {
+            $responsePayload['records'] = array_map(
+                fn($record) => $this->lowercaseBillingRecordOutput($record),
+                $responsePayload['records']
+            );
+            $responsePayload['reports'] = $this->lowercaseOutputValue($responsePayload['reports']);
+        }
+
+        return response()->json($responsePayload, 201);
+    }
+
+    private function shouldLowercaseOutputForEnrollment(?int $enrollmentId): bool
+    {
+        if (empty($enrollmentId)) {
+            return false;
+        }
+
+        $enrollment = Enrollment::query()
+            ->select(['id', 'with_lowercase_output'])
+            ->find($enrollmentId);
+
+        return (bool) ($enrollment?->with_lowercase_output ?? false);
+    }
+
+    private function lowercaseBillingRecordOutput(BillingRecord $record): BillingRecord
+    {
+        $record->row_data = $this->lowercaseOutputValue((array) ($record->row_data ?? []));
+        return $record;
+    }
+
+    private function lowercaseOutputValue($value)
+    {
+        if (is_string($value)) {
+            return mb_strtolower($value, 'UTF-8');
+        }
+
+        if (is_array($value)) {
+            $lowercased = [];
+            foreach ($value as $key => $item) {
+                $lowercased[$key] = $this->lowercaseOutputValue($item);
+            }
+            return $lowercased;
+        }
+
+        return $value;
     }
 
     private function resolveModalBillingStatus(

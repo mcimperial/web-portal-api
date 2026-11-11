@@ -36,6 +36,7 @@ abstract class BaseEnrollmentRequest extends FormRequest
             'with_skip_hierarchy' => 'nullable|boolean',
             'export_type' => 'nullable|string',
             'with_optout' => 'nullable|boolean',
+            'with_lowercase_output' => 'nullable|boolean',
             'status' => 'nullable|string',
         ];
     }

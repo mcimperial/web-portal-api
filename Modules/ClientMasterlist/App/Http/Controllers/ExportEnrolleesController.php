@@ -75,6 +75,7 @@ class ExportEnrolleesController extends Controller
         $exportContext = $this->getExportContext($filters['enrollment_id']);
         $exportType = $exportContext['export_type'];
         $compareRules = $exportContext['compare_rules'];
+        $withLowercaseOutput = $exportContext['with_lowercase_output'];
 
         $billingContext = $includeBillingColumns
             ? $this->buildBillingContext($enrollees, $withDependents, $filters['enrollment_id'])
@@ -95,6 +96,9 @@ class ExportEnrolleesController extends Controller
         // Use DEFAULT column values when use_selected_columns is checked
         $useDefaultValues = $this->requestBoolean($request, 'use_selected_columns');
         $rows = $this->generateRows($enrollees, $columns, $withDependents, $exportType, $useDefaultValues, $isRenewal, $compareRules, $billingContext);
+        if ($withLowercaseOutput) {
+            $rows = $this->applyLowercaseToRows($rows);
+        }
         $csv = $this->generateCsv($headers, $rows);
 
         // Only mark rows as FOR-APPROVAL when the export actually generated data rows.
@@ -153,6 +157,7 @@ class ExportEnrolleesController extends Controller
             return [
                 'export_type' => 'DEFAULT',
                 'compare_rules' => [],
+                'with_lowercase_output' => false,
             ];
         }
 
@@ -161,7 +166,26 @@ class ExportEnrolleesController extends Controller
         return [
             'export_type' => $enrollment?->export_type ? strtoupper($enrollment->export_type) : 'DEFAULT',
             'compare_rules' => $this->parseCompareConfiguration($enrollment?->export_compare_configuration),
+            'with_lowercase_output' => (bool) ($enrollment?->with_lowercase_output ?? false),
         ];
+    }
+
+    private function applyLowercaseToRows(array $rows): array
+    {
+        return array_map(fn($row) => $this->applyLowercaseToValue($row), $rows);
+    }
+
+    private function applyLowercaseToValue($value)
+    {
+        if (is_string($value)) {
+            return mb_strtolower($value, 'UTF-8');
+        }
+
+        if (is_array($value)) {
+            return array_map(fn($item) => $this->applyLowercaseToValue($item), $value);
+        }
+
+        return $value;
     }
 
     private function isCustomExportType(string $exportType): bool

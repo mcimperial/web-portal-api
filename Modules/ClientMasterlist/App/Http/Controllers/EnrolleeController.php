@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Modules\ClientMasterlist\App\Models\Enrollee;
+use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\HealthInsurance;
 use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
@@ -38,6 +39,10 @@ class EnrolleeController extends Controller
         $query = $this->buildSelectQuery($filters);
 
         $enrollees = $this->formatSelectEnrollees($query->get());
+
+        if ($this->shouldLowercaseOutputForEnrollment($filters['enrollment_id'] ?? null)) {
+            $enrollees = $this->lowercaseOutputValue($enrollees);
+        }
 
         return response()->json($enrollees);
     }
@@ -357,6 +362,36 @@ class EnrolleeController extends Controller
                 'email1' => $enrollee->email1,
             ];
         })->toArray();
+    }
+
+    private function shouldLowercaseOutputForEnrollment(?string $enrollmentId): bool
+    {
+        if (!$enrollmentId) {
+            return false;
+        }
+
+        $enrollment = Enrollment::query()
+            ->select(['id', 'with_lowercase_output'])
+            ->find((int) $enrollmentId);
+
+        return (bool) ($enrollment?->with_lowercase_output ?? false);
+    }
+
+    private function lowercaseOutputValue($value)
+    {
+        if (is_string($value)) {
+            return mb_strtolower($value, 'UTF-8');
+        }
+
+        if (is_array($value)) {
+            $lowercased = [];
+            foreach ($value as $key => $item) {
+                $lowercased[$key] = $this->lowercaseOutputValue($item);
+            }
+            return $lowercased;
+        }
+
+        return $value;
     }
 
     /**
