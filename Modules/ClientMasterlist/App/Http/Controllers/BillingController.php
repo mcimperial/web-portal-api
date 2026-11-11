@@ -203,7 +203,7 @@ class BillingController extends Controller
                     $reportRowData = $this->buildModalReconReportRowData($rowData);
                     $statusBucket = strtoupper(trim((string) ($reportRowData['SYSTEM_STATUS'] ?? '')));
 
-                    if (in_array($statusBucket, ['ACTIVE', 'INACTIVE', 'NOT_FOUND', 'PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
+                    if (in_array($statusBucket, ['ACTIVE', 'INACTIVE', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION', 'WAIVED', 'NOT_FOUND', 'PENDING_EMPLOYEE', 'PENDING_HMO'], true)) {
                         $modalReconReport1[] = $reportRowData;
                     }
 
@@ -384,7 +384,9 @@ class BillingController extends Controller
         if ($mappedPendingStatus !== null) {
             $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
         } elseif ($normalizedSystemStatus === 'RESIGNED') {
-            $rowData['SYSTEM_STATUS'] = 'INACTIVE';
+            $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
+        } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
+            $rowData['SYSTEM_STATUS'] = 'WAIVED';
         } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
             $rowData['SYSTEM_STATUS'] = 'ACTIVE';
         } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
@@ -472,9 +474,13 @@ class BillingController extends Controller
 
             if ($mappedPendingStatus !== null) {
                 $rowData['SYSTEM_STATUS'] = 'PENDING_EMPLOYEE';
+            } elseif ($normalizedSystemStatus === 'RESIGNED') {
+                $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
+            } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
+                $rowData['SYSTEM_STATUS'] = 'WAIVED';
             } elseif ($normalizedSystemStatus === 'APPROVED') {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-            } elseif ($normalizedSystemStatus === 'RESIGNED' || !is_null($resolvedCoverageEndDate)) {
+            } elseif (!is_null($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'INACTIVE';
             } else {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
@@ -484,6 +490,10 @@ class BillingController extends Controller
 
             if ($mappedPendingStatus !== null) {
                 $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
+            } elseif ($normalizedSystemStatus === 'RESIGNED') {
+                $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
+            } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
+                $rowData['SYSTEM_STATUS'] = 'WAIVED';
             } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
@@ -501,7 +511,7 @@ class BillingController extends Controller
 
             if ($expectedSystemStatus === 'PENDING_ANY') {
                 $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
-            } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE'], true)) {
+            } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE', 'WAIVED', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true)) {
                 $isMatched = $systemStatus === $expectedSystemStatus;
             }
 
@@ -527,8 +537,20 @@ class BillingController extends Controller
             return 'ACTIVE';
         }
 
-        if (in_array($normalized, ['NOT-ENROLLED', 'EXPIRED', 'OPTED-OUT', 'INACTIVE'], true)) {
+        if (in_array($normalized, ['NOT-ENROLLED', 'EXPIRED', 'INACTIVE'], true)) {
             return 'INACTIVE';
+        }
+
+        if (in_array($normalized, ['OPTED-OUT', 'WAIVED'], true)) {
+            return 'WAIVED';
+        }
+
+        if ($normalized === 'TERMINATED') {
+            return 'TERMINATED';
+        }
+
+        if (in_array($normalized, ['INACTIVE-DID-NOT-TAKE-ACTION', 'INACTIVE-DIDNT-TAKE-ACTION'], true)) {
+            return 'INACTIVE - DID NOT TAKE ACTION';
         }
 
         if (in_array($normalized, ['AWAITING-ENROLLMENT', 'PENDING-HMO', 'PENDING-EMPLOYEE', 'AWAITING'], true)) {
@@ -556,7 +578,9 @@ class BillingController extends Controller
 
     private function normalizeStatusToken(string $status): string
     {
-        return strtoupper(str_replace(['_', ' '], '-', trim($status)));
+        $normalized = strtoupper(str_replace(['_', ' '], '-', trim($status)));
+
+        return preg_replace('/-+/', '-', $normalized) ?? $normalized;
     }
 
     private function mapEnrollmentStatusToPendingSystemStatus(string $status): ?string
@@ -572,6 +596,17 @@ class BillingController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveResignedSystemStatus(mixed $certificateNumber): string
+    {
+        $normalizedCertificate = trim((string) ($certificateNumber ?? ''));
+
+        if ($normalizedCertificate !== '') {
+            return 'TERMINATED';
+        }
+
+        return 'INACTIVE - DID NOT TAKE ACTION';
     }
 
     private function buildModalReconReportRowData(array $rowData): array
@@ -590,8 +625,22 @@ class BillingController extends Controller
             return $rowData;
         }
 
-        if (in_array($normalizedStatus, ['ACTIVE', 'INACTIVE', 'NOT-FOUND'], true)) {
+        if ($normalizedStatus === 'RESIGNED') {
+            $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($rowData['ACCOUNT_NO'] ?? null);
+            return $rowData;
+        }
+
+        if ($normalizedStatus === 'OPTED-OUT') {
+            $rowData['SYSTEM_STATUS'] = 'WAIVED';
+            return $rowData;
+        }
+
+        if (in_array($normalizedStatus, ['ACTIVE', 'INACTIVE', 'TERMINATED', 'WAIVED', 'INACTIVE-DID-NOT-TAKE-ACTION', 'NOT-FOUND'], true)) {
             $rowData['SYSTEM_STATUS'] = $normalizedStatus === 'NOT-FOUND' ? 'NOT_FOUND' : $normalizedStatus;
+
+            if ($normalizedStatus === 'INACTIVE-DID-NOT-TAKE-ACTION') {
+                $rowData['SYSTEM_STATUS'] = 'INACTIVE - DID NOT TAKE ACTION';
+            }
         }
 
         return $rowData;

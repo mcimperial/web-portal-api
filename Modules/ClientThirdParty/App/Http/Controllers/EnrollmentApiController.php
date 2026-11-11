@@ -18,7 +18,7 @@ use Modules\ClientThirdParty\App\Models\ApiCredential;
  *
  * All routes are prefixed with `/api/v1/third-party` and require
  * `X-API-Key` authentication with route-level permissions
- * (`enrollment:read`, `principal:read`, `dependent:read`)
+ * (`enrollment:read`, `principal:list:read`, `principal:read`, `dependent:read`)
  * unless otherwise noted.
  */
 class EnrollmentApiController extends Controller
@@ -102,8 +102,8 @@ class EnrollmentApiController extends Controller
         if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
             return response()->json([
                 'success' => false,
-                'message' => 'This API key is not allowed to access the requested enrollment.',
-            ], 403);
+                'message' => 'Enrollment not found.',
+            ], 404);
         }
 
         return response()->json([
@@ -112,30 +112,32 @@ class EnrollmentApiController extends Controller
         ]);
     }
 
-    public function showEnrollmentPrincipals(Request $request, string $enrollmentTitle): JsonResponse
-    {
-        return $this->principals($request, $enrollmentTitle);
-    }
-
     /**
-     * List Principals
+     * List Principals (Categorized)
      *
-     * Returns a paginated list of enrolled principals (employees)
-     * belonging to the given enrollment. Optionally filter by
-     * `enrollment_status` or `employee_id`.
+     * Returns a paginated list of principals grouped by enrollment title.
+     * The result is always scoped by the API key's `params.enrollment_titles`
+     * when configured.
      *
      * @authenticated
     *
-    * Required API key permission: `principal:read`
+    * Required API key permission: `principal:list:read`
      *
-     * @urlParam id             integer required The enrollment ID. Example: 1
+     * @queryParam enrollment_title string Optional enrollment title filter (must be within allowed titles). Example: Acme 2026 Enrollment
      * @queryParam enrollment_status string  Filter by the principal's enrollment status. Example: active
      * @queryParam employee_id        string  Filter by employee ID. Example: EMP-0042
+     * @queryParam search             string  Search by employee_id / first_name / last_name / middle_name. Example: EMP-0042
      * @queryParam per_page           integer Number of results per page (max 100, default 20). Example: 20
      *
      * @response 200 {
      *   "success": true,
-     *   "data": [{ "id": 10, "enrollment_id": 1, "employee_id": "EMP-0042", "...": "..." }],
+     *   "data": [
+     *     {
+     *       "enrollment_title": "Acme 2026 Enrollment",
+     *       "total": 1,
+     *       "principals": [{ "id": 10, "employee_id": "EMP-0042", "...": "..." }]
+     *     }
+     *   ],
      *   "meta": {
      *     "current_page": 1,
      *     "last_page": 2,
@@ -144,36 +146,160 @@ class EnrollmentApiController extends Controller
      *   }
      * }
      */
-    public function principals(Request $request, string $enrollmentTitle): JsonResponse
+    public function listPrincipals(Request $request): JsonResponse
     {
-        $enrollment = $this->resolveEnrollmentByTitle($enrollmentTitle);
+        $validated = $request->validate([
+            'enrollment_title' => 'nullable|string|max:255',
+            'enrollment_status' => 'nullable|string|max:255',
+            'employee_id' => 'nullable|string|max:255',
+            'search' => 'nullable|string|max:255',
+            'per_page' => 'nullable|integer|min:1|max:100',
+        ]);
 
-        if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
+        $requestedEnrollmentTitle = isset($validated['enrollment_title'])
+            ? trim((string) $validated['enrollment_title'])
+            : null;
+
+        if ($requestedEnrollmentTitle !== null && $requestedEnrollmentTitle !== '' && !$this->isEnrollmentAllowed($request, $requestedEnrollmentTitle)) {
             return response()->json([
                 'success' => false,
-                'message' => 'This API key is not allowed to access the requested enrollment.',
-            ], 403);
+                'message' => 'Enrollment not found within the selected enrollments.',
+            ], 404);
         }
 
-        $query = Enrollee::where('enrollment_id', $enrollment->id)
-            ->when($request->filled('enrollment_status'), fn ($q) => $q->where('enrollment_status', $request->enrollment_status))
-            ->when($request->filled('employee_id'),       fn ($q) => $q->where('employee_id', $request->employee_id));
+        $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
 
-        $perPage = min((int) $request->get('per_page', 20), 100);
+        $query = Enrollee::query()
+            ->with(['enrollment:id,title', 'dependents'])
+            ->when(!empty($allowedEnrollmentTitles), function ($q) use ($allowedEnrollmentTitles) {
+                $q->whereHas('enrollment', function ($enrollmentQuery) use ($allowedEnrollmentTitles) {
+                    $this->applyEnrollmentTitleFilter($enrollmentQuery, $allowedEnrollmentTitles);
+                });
+            })
+            ->when(!empty($requestedEnrollmentTitle), function ($q) use ($requestedEnrollmentTitle) {
+                $q->whereHas('enrollment', function ($enrollmentQuery) use ($requestedEnrollmentTitle) {
+                    $enrollmentQuery->whereRaw('LOWER(title) = ?', [mb_strtolower($requestedEnrollmentTitle)]);
+                });
+            })
+            ->when(!empty($validated['enrollment_status']), fn ($q) => $q->where('enrollment_status', $validated['enrollment_status']))
+            ->when(!empty($validated['employee_id']), fn ($q) => $q->where('employee_id', $validated['employee_id']))
+            ->when(!empty($validated['search']), function ($q) use ($validated) {
+                $searchTerm = '%' . trim((string) $validated['search']) . '%';
+
+                $q->where(function ($searchQuery) use ($searchTerm) {
+                    $searchQuery
+                        ->where('employee_id', 'like', $searchTerm)
+                        ->orWhere('first_name', 'like', $searchTerm)
+                        ->orWhere('last_name', 'like', $searchTerm)
+                        ->orWhere('middle_name', 'like', $searchTerm)
+                        ->orWhereHas('enrollment', function ($enrollmentQuery) use ($searchTerm) {
+                            $enrollmentQuery->where('title', 'like', $searchTerm);
+                        });
+                });
+            })
+            ->orderBy('enrollment_id')
+            ->orderBy('last_name')
+            ->orderBy('first_name');
+
+        $perPage = (int) ($validated['per_page'] ?? 20);
         $result  = $query->paginate($perPage);
+
+        $grouped = collect($result->items())
+            ->groupBy(fn (Enrollee $principal) => $principal->enrollment?->title ?? 'Unknown Enrollment')
+            ->map(function ($items, $title) {
+                return [
+                    'enrollment_title' => $title,
+                    'total' => $items->count(),
+                    'principals' => $items->map(fn (Enrollee $principal) => $principal->toArray())->values()->all(),
+                ];
+            })
+            ->values()
+            ->all();
 
         return response()->json([
             'success' => true,
-            'enrollment' => [
-                'title' => $enrollment->title,
+            'filters' => [
+                'enrollment_title' => $requestedEnrollmentTitle,
+                'enrollment_status' => $validated['enrollment_status'] ?? null,
+                'employee_id' => $validated['employee_id'] ?? null,
+                'search' => $validated['search'] ?? null,
             ],
-            'data'    => $result->items(),
+            'data'    => $grouped,
             'meta'    => [
                 'current_page' => $result->currentPage(),
                 'last_page'    => $result->lastPage(),
                 'per_page'     => $result->perPage(),
                 'total'        => $result->total(),
             ],
+        ]);
+    }
+
+    /**
+     * Show Single Principal (Read)
+     *
+     * Returns one principal record by params, scoped to selected enrollments.
+     *
+     * @authenticated
+    *
+    * Required API key permission: `principal:read`
+     *
+     * @queryParam employee_id string required Principal employee ID. Example: EMP-0042
+     * @queryParam enrollment_title string Optional enrollment title filter (must be within allowed titles). Example: Acme 2026 Enrollment
+     *
+     * @response 200 {
+     *   "success": true,
+     *   "data": { "id": 10, "employee_id": "EMP-0042", "...": "..." }
+     * }
+     */
+    public function showPrincipal(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'employee_id' => 'required|string|max:255',
+            'enrollment_title' => 'nullable|string|max:255',
+        ]);
+
+        $requestedEnrollmentTitle = isset($validated['enrollment_title'])
+            ? trim((string) $validated['enrollment_title'])
+            : null;
+
+        if ($requestedEnrollmentTitle !== null && $requestedEnrollmentTitle !== '' && !$this->isEnrollmentAllowed($request, $requestedEnrollmentTitle)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Principal not found.',
+            ], 404);
+        }
+
+        $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
+
+        $principal = Enrollee::query()
+            ->with(['enrollment:id,title', 'dependents'])
+            ->where('employee_id', $validated['employee_id'])
+            ->when(!empty($allowedEnrollmentTitles), function ($q) use ($allowedEnrollmentTitles) {
+                $q->whereHas('enrollment', function ($enrollmentQuery) use ($allowedEnrollmentTitles) {
+                    $this->applyEnrollmentTitleFilter($enrollmentQuery, $allowedEnrollmentTitles);
+                });
+            })
+            ->when(!empty($requestedEnrollmentTitle), function ($q) use ($requestedEnrollmentTitle) {
+                $q->whereHas('enrollment', function ($enrollmentQuery) use ($requestedEnrollmentTitle) {
+                    $enrollmentQuery->whereRaw('LOWER(title) = ?', [mb_strtolower($requestedEnrollmentTitle)]);
+                });
+            })
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$principal) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Principal not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'enrollment' => [
+                'title' => $principal->enrollment?->title,
+            ],
+            'data' => $principal,
         ]);
     }
 
@@ -203,8 +329,8 @@ class EnrollmentApiController extends Controller
         if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
             return response()->json([
                 'success' => false,
-                'message' => 'This API key is not allowed to access the requested enrollment.',
-            ], 403);
+                'message' => 'Enrollment not found.',
+            ], 404);
         }
 
         $principal = Enrollee::query()
@@ -262,8 +388,8 @@ class EnrollmentApiController extends Controller
         if (!$this->isEnrollmentAllowed($request, $enrollment->title)) {
             return response()->json([
                 'success' => false,
-                'message' => 'This API key is not allowed to access the requested enrollment.',
-            ], 403);
+                'message' => 'Enrollment not found.',
+            ], 404);
         }
 
         $principals = Enrollee::where('enrollment_id', $enrollment->id);

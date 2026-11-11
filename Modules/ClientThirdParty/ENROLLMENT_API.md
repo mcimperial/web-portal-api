@@ -22,7 +22,8 @@ X-API-Key: <your-api-key>
 
 > API permissions are route-specific:
 > - `enrollment:read` for enrollment endpoints
-> - `principal:read` for principal endpoints
+> - `principal:list:read` for principals listing/search endpoint
+> - `principal:read` for single principal read endpoint
 > - `dependent:read` for dependent endpoints
 
 ### Credential Params (Enrollment Restriction)
@@ -90,32 +91,29 @@ Required permission: `enrollment:read`
 
 ---
 
-Use each enrollment `title` as the next path parameter for principals, details, and summary routes.
+Use each enrollment `title` for details, summary, and dependents routes.
 
 ---
 
-### 2. Show Enrollment Principals (Landing Endpoint)
+### 2. List Principals (Categorized)
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}
+GET /api/v1/third-party/principals
 ```
 
-Returns principals (enrollees) for the selected enrollment title.
+Returns principals grouped by enrollment title, scoped by selected enrollment permissions.
+Each principal record includes its `dependents` array.
 
-Required permission: `principal:read`
-
-#### URL Parameters
-
-| Parameter | Type   | Required | Description                            | Example |
-|-----------|--------|----------|----------------------------------------|---------|
-| `enrollmentTitle` | string | Yes | Enrollment title (URL-encoded) | `TEST%20-%20MAXICARE` |
+Required permission: `principal:list:read`
 
 #### Query Parameters
 
 | Parameter           | Type    | Required | Description                                | Example    |
 |---------------------|---------|----------|--------------------------------------------|------------|
+| `enrollment_title`  | string  | No       | Restrict to one allowed enrollment title   | `TEST - MAXICARE` |
 | `enrollment_status` | string  | No       | Filter by principal's enrollment status    | `ACTIVE`   |
-| `employee_id`       | string  | No       | Filter by employee ID                      | `EMP-0042` |
+| `employee_id`       | string  | No       | Exact employee ID filter                   | `EMP-0042` |
+| `search`            | string  | No       | Search by employee ID, name, enrollment    | `john` |
 | `per_page`          | integer | No       | Results per page — max `100`, default `20` | `20`       |
 
 #### Sample JSON Response `200`
@@ -123,17 +121,33 @@ Required permission: `principal:read`
 ```json
 {
   "success": true,
-  "enrollment": {
-    "title": "TEST - MAXICARE"
+  "filters": {
+    "enrollment_title": null,
+    "enrollment_status": null,
+    "employee_id": null,
+    "search": "EMP-0042"
   },
   "data": [
     {
-      "id": 10,
-      "enrollment_id": 2,
-      "employee_id": "EMP-0042",
-      "first_name": "John",
-      "last_name": "Doe",
-      "enrollment_status": "ACTIVE"
+      "enrollment_title": "TEST - MAXICARE",
+      "total": 1,
+      "principals": [
+        {
+          "id": 10,
+          "employee_id": "EMP-0042",
+          "first_name": "John",
+          "last_name": "Doe",
+          "enrollment_status": "ACTIVE",
+          "dependents": [
+            {
+              "id": 20,
+              "principal_id": 10,
+              "first_name": "Jane",
+              "last_name": "Doe"
+            }
+          ]
+        }
+      ]
     }
   ],
   "meta": {
@@ -186,29 +200,23 @@ Required permission: `enrollment:read`
 
 ---
 
-### 4. List Principals
+### 4. Read Single Principal
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals
+GET /api/v1/third-party/principals/read
 ```
 
-Returns a paginated list of enrolled principals (employees) belonging to the given enrollment.
+Returns a single principal record by params, scoped by selected enrollment permissions.
+The returned principal always includes its `dependents` array.
 
 Required permission: `principal:read`
 
-#### URL Parameters
-
-| Parameter | Type    | Required | Description       | Example |
-|-----------|---------|----------|-------------------|---------|
-| `enrollmentTitle` | string | Yes | The enrollment title (URL-encoded) | `TEST%20-%20MAXICARE` |
-
 #### Query Parameters
 
-| Parameter           | Type    | Required | Description                                | Example    |
-|---------------------|---------|----------|--------------------------------------------|------------|
-| `enrollment_status` | string  | No       | Filter by principal's enrollment status    | `active`   |
-| `employee_id`       | string  | No       | Filter by employee ID                      | `EMP-0042` |
-| `per_page`          | integer | No       | Results per page — max `100`, default `20` | `20`       |
+| Parameter          | Type   | Required | Description                                      | Example    |
+|--------------------|--------|----------|--------------------------------------------------|------------|
+| `employee_id`      | string | Yes      | Principal employee ID                            | `EMP-0042` |
+| `enrollment_title` | string | No       | Optional allowed enrollment title filter         | `TEST - MAXICARE` |
 
 #### Sample JSON Response `200`
 
@@ -218,32 +226,27 @@ Required permission: `principal:read`
   "enrollment": {
     "title": "TEST - MAXICARE"
   },
-  "data": [
-    {
-      "id": 10,
-      "enrollment_id": 1,
-      "employee_id": "EMP-0042",
-      "first_name": "John",
-      "last_name": "Doe"
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "last_page": 2,
-    "per_page": 20,
-    "total": 35
+  "data": {
+    "id": 10,
+    "employee_id": "EMP-0042",
+    "first_name": "John",
+    "last_name": "Doe",
+    "dependents": [
+      {
+        "id": 20,
+        "principal_id": 10,
+        "first_name": "Jane",
+        "last_name": "Doe"
+      }
+    ]
   }
 }
 ```
 
-  "enrollment": {
-    "title": "TEST - MAXICARE"
-  },
 ### 5. List Dependents
 
 ```
 GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents
-      "employee_id": "EMP-0042",
 ```
 
 Returns all dependents registered under a specific principal within the given enrollment.
@@ -321,7 +324,7 @@ Required permission: `enrollment:read`
 
 ---
 
-Use `GET /enrollments/{enrollmentTitle}` (landing route) or `GET /enrollments/{enrollmentTitle}/principals` with filters for enrollment-scoped principal lookups.
+Use `GET /principals` for categorized listing and `GET /principals/read` for single principal reads by params.
 
 ---
 
