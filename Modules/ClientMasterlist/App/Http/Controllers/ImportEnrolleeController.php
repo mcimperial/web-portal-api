@@ -1188,6 +1188,55 @@ class ImportEnrolleeController extends Controller
     }
 
     /**
+     * Resolve an import row's mapped end date candidate and normalize it.
+     */
+    private function resolveTempEndDateFromImport(array $enrolleeData, array $healthInsuranceData, string $dateFormat = 'auto'): ?string
+    {
+        $candidates = [
+            $enrolleeData['employment_end_date'] ?? null,
+            $healthInsuranceData['coverage_end_date'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_null($candidate)) {
+                continue;
+            }
+
+            $candidateText = trim((string) $candidate);
+            if ($candidateText === '') {
+                continue;
+            }
+
+            $parsed = $this->sanitizeDateWithFormat($candidateText, $dateFormat);
+            if (!empty($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Move mapped employment/coverage end date values into temp_end_date so
+     * final resignation is deferred for explicit user confirmation.
+     */
+    private function applyAwaitingDeletionApprovalState(array &$enrolleeData, array &$healthInsuranceData, string $dateFormat = 'auto'): void
+    {
+        $tempEndDate = $this->resolveTempEndDateFromImport($enrolleeData, $healthInsuranceData, $dateFormat);
+
+        if (empty($tempEndDate)) {
+            return;
+        }
+
+        $enrolleeData['temp_end_date'] = $tempEndDate;
+        unset($enrolleeData['employment_end_date']);
+        unset($healthInsuranceData['coverage_end_date']);
+
+        $enrolleeData['status'] = 'ACTIVE';
+        $enrolleeData['enrollment_status'] = 'AWAITING-DELETION-APPROVAL';
+    }
+
+    /**
      * Get normalized notes token from a temp row.
      */
     private function normalizeTempNotesToken(array $tempRow): string
@@ -1788,6 +1837,12 @@ class ImportEnrolleeController extends Controller
                         continue;
                     }
 
+                    $this->applyAwaitingDeletionApprovalState(
+                        $enrolleeData,
+                        $healthInsuranceData,
+                        $dateAnalysis['recommended_format']
+                    );
+
                     $principal = $this->createOrUpdatePrincipalWithSoftDelete($enrolleeData, $enrollmentId, $employeeId, $dateAnalysis['recommended_format']);
 
                     // Verify principal was created/updated successfully
@@ -1813,11 +1868,6 @@ class ImportEnrolleeController extends Controller
 
                     // Attach health insurance if data exists
                     if (!empty($healthInsuranceData)) {
-                        // Set coverage_end_date from employment_end_date if employee is INACTIVE
-                        if (isset($enrolleeData['employment_end_date'])) {
-                            $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
-                        }
-
                         $this->attachHealthInsurance(new Request([
                             'enrollee_id' => $principal->id,
                             'insurance' => $healthInsuranceData
@@ -2077,12 +2127,8 @@ class ImportEnrolleeController extends Controller
             $affectedEnrollmentIds = [];
             $tempRowsByEnrollment = [];
             $insuranceFields = (new HealthInsurance())->getFillable();
-            $uploadDate = now();
-            $uploadMonthYear = $uploadDate->format('Y-m');
-            $uploadDateString = $uploadDate->toDateString();
 
             foreach ($enrollees as $enrolleeData) {
-                $forceCoverageEndDateNow = false;
                 $employeeId = $enrolleeData['employee_id'] ?? null;
                 $enrolleeCompanyCode = $enrolleeData['company_code'] ?? null;
                 $enrolleeInsuranceProviderTitle = $enrolleeData['insurance_provider_title'] ?? null;
@@ -2143,41 +2189,6 @@ class ImportEnrolleeController extends Controller
                 // Remove company_code and insurance_provider_title from enrollee data
                 unset($enrolleeData['company_code'], $enrolleeData['insurance_provider_title']);
 
-                // Multi-provider special rule:
-                // If mapped employment_end_date month/year is earlier than the
-                // upload month/year, move that mapped date to back_date, then
-                // set employee_end_date and coverage_end_date to upload date (today).
-                if (!empty($enrolleeData['employment_end_date'])) {
-                    $mappedEmploymentEndDate = $this->sanitizeDateWithFormat(
-                        $enrolleeData['employment_end_date'],
-                        $dateAnalysis['recommended_format']
-                    );
-
-                    if (!empty($mappedEmploymentEndDate)) {
-                        $mappedEndMonthYear = date('Y-m', strtotime($mappedEmploymentEndDate));
-                        $isPriorMonthYear = $mappedEndMonthYear < $uploadMonthYear;
-                        $isSameMonthYearPastDay = $mappedEndMonthYear === $uploadMonthYear
-                            && $mappedEmploymentEndDate < $uploadDateString;
-
-                        if ($isPriorMonthYear || $isSameMonthYearPastDay) {
-                            $enrolleeData['back_date'] = $mappedEmploymentEndDate;
-                            $enrolleeData['employment_end_date'] = $uploadDateString;
-                            $forceCoverageEndDateNow = true;
-
-                            Log::info('Multi-provider end-date conversion applied', [
-                                'employee_id' => $employeeId,
-                                'enrollment_id' => $currentEnrollmentId,
-                                'mapped_employment_end_date' => $mappedEmploymentEndDate,
-                                'back_date_set_to' => $mappedEmploymentEndDate,
-                                'employment_end_date_set_to' => $uploadDateString,
-                                'coverage_end_date_set_to' => $uploadDateString,
-                                'upload_month_year' => $uploadMonthYear,
-                                'mapped_month_year' => $mappedEndMonthYear,
-                            ]);
-                        }
-                    }
-                }
-
                 // If the frontend included leftover (unmapped) Excel columns as
                 // delimited text, track which user imported them so the data
                 // can be scoped/filtered per user.
@@ -2197,15 +2208,14 @@ class ImportEnrolleeController extends Controller
                     }
                 }
 
-                // Handle employment end date for health insurance
-                if ($forceCoverageEndDateNow) {
-                    $healthInsuranceData['coverage_end_date'] = $uploadDateString;
-                } elseif (isset($enrolleeData['employment_end_date']) && !empty($enrolleeData['employment_end_date'])) {
-                    $healthInsuranceData['coverage_end_date'] = $enrolleeData['employment_end_date'];
-                }
-
                 // Process health insurance data
                 $healthInsuranceData = $this->processHealthInsuranceData($healthInsuranceData, false);
+
+                $this->applyAwaitingDeletionApprovalState(
+                    $enrolleeData,
+                    $healthInsuranceData,
+                    $dateAnalysis['recommended_format']
+                );
 
                 // Determine whether this principal already exists (for logging purposes)
                 $principalExistedBefore = Enrollee::withTrashed()
@@ -2332,7 +2342,7 @@ class ImportEnrolleeController extends Controller
         $enrolleeData['enrollment_id'] = $enrollmentId;
         $originalEmploymentEndDate = $enrolleeData['employment_end_date'] ?? null;
 
-        $enrolleeDateFields = ['birth_date', 'employment_start_date', 'employment_end_date'];
+        $enrolleeDateFields = ['birth_date', 'employment_start_date', 'employment_end_date', 'temp_end_date'];
         foreach ($enrolleeDateFields as $dateField) {
             if (!array_key_exists($dateField, $enrolleeData)) {
                 continue;
@@ -2728,6 +2738,120 @@ class ImportEnrolleeController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json(['message' => 'Failed to attach health insurance', 'error' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Apply a temp-end-date decision for a principal imported from Looker.
+     *
+     * Supported actions:
+     * - confirm_deletion: transfer temp_end_date to real end dates + resigned
+     * - retract_deletion: clear temp_end_date and return to active/approved
+     * - opted_out: mark as opted-out and clear temp_end_date
+     */
+    public function applyTempEndDateAction(Request $request): JsonResponse
+    {
+        $enrolleeId = (int) $request->input('enrollee_id');
+        $action = strtolower(trim((string) $request->input('action', '')));
+
+        $allowedActions = ['confirm_deletion', 'retract_deletion', 'opted_out'];
+
+        if ($enrolleeId <= 0) {
+            return response()->json(['message' => 'enrollee_id is required.'], 400);
+        }
+
+        if (!in_array($action, $allowedActions, true)) {
+            return response()->json(['message' => 'Invalid action.'], 400);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $principal = Enrollee::with('healthInsurance')->find($enrolleeId);
+
+            if (!$principal) {
+                DB::rollBack();
+                return response()->json(['message' => 'Enrollee not found.'], 404);
+            }
+
+            $today = now()->toDateString();
+            $tempEndDate = $principal->temp_end_date
+                ? date('Y-m-d', strtotime((string) $principal->temp_end_date))
+                : null;
+
+            if ($action === 'confirm_deletion') {
+                if (empty($tempEndDate)) {
+                    DB::rollBack();
+                    return response()->json(['message' => 'No temp_end_date found for this enrollee.'], 422);
+                }
+
+                $effectiveEndDate = $tempEndDate;
+                $backDateToSet = null;
+
+                $mappedEndMonthYear = date('Y-m', strtotime($tempEndDate));
+                $currentMonthYear = date('Y-m');
+                $isPriorMonthYear = $mappedEndMonthYear < $currentMonthYear;
+                $isSameMonthYearPastDay = $mappedEndMonthYear === $currentMonthYear
+                    && $tempEndDate < $today;
+
+                if ($isPriorMonthYear || $isSameMonthYearPastDay) {
+                    $backDateToSet = $tempEndDate;
+                    $effectiveEndDate = $today;
+                }
+
+                $principalUpdate = [
+                    'employment_end_date' => $effectiveEndDate,
+                    'temp_end_date' => null,
+                    'status' => 'INACTIVE',
+                    'enrollment_status' => 'RESIGNED',
+                ];
+
+                if ($backDateToSet && empty($principal->back_date)) {
+                    $principalUpdate['back_date'] = $backDateToSet;
+                }
+
+                $principal->update($principalUpdate);
+
+                if ($principal->healthInsurance) {
+                    $principal->healthInsurance->update([
+                        'coverage_end_date' => $effectiveEndDate,
+                    ]);
+                }
+            }
+
+            if ($action === 'retract_deletion') {
+                $updatedEnrollmentStatus = $this->normalizeStatusValue($principal->enrollment_status) === 'AWAITING DELETION APPROVAL'
+                    ? 'APPROVED'
+                    : (string) ($principal->enrollment_status ?? 'APPROVED');
+
+                $principal->update([
+                    'temp_end_date' => null,
+                    'status' => 'ACTIVE',
+                    'enrollment_status' => $updatedEnrollmentStatus,
+                ]);
+            }
+
+            if ($action === 'opted_out') {
+                $principal->update([
+                    'temp_end_date' => null,
+                    'status' => 'ACTIVE',
+                    'enrollment_status' => 'OPTED-OUT',
+                ]);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Temp end date action applied successfully.',
+                'enrollee' => $principal->fresh(['healthInsurance']),
+            ], 200);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => 'Failed to apply temp end date action.',
+                'error' => $e->getMessage(),
+            ], 500);
         }
     }
 

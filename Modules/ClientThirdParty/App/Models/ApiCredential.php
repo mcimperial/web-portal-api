@@ -3,6 +3,7 @@
 namespace Modules\ClientThirdParty\App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -25,6 +26,7 @@ class ApiCredential extends Model
         'last_used_at',
         'request_count',
         'status',
+        'params',
         'notes',
         'deleted_by',
     ];
@@ -38,6 +40,7 @@ class ApiCredential extends Model
     protected $casts = [
         'permissions'   => 'array',
         'allowed_ips'   => 'array',
+        'params'        => 'array',
         'expires_at'    => 'datetime',
         'last_used_at'  => 'datetime',
         'request_count' => 'integer',
@@ -150,5 +153,10 @@ class ApiCredential extends Model
         $this->increment('request_count');
         $this->update(['last_used_at' => now()]);
         $this->timestamps = true;
+    }
+
+    public function usageLogs(): HasMany
+    {
+        return $this->hasMany(ApiUsageLog::class, 'api_credential_id');
     }
 }

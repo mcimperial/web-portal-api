@@ -7,5 +7,6 @@ Route::post('import', [ImportEnrolleeController::class, 'import'])->middleware('
 Route::post('import-with-company-and-provider', [ImportEnrolleeController::class, 'importWithCompanyAndProvider'])->middleware('rbac:imports,create');
 Route::get('import-logs', [ImportEnrolleeController::class, 'getImportLogs'])->middleware('rbac:imports,view');
 Route::post('import-temp/compare', [ImportEnrolleeController::class, 'compareTempImportData'])->middleware('rbac:imports,view');
+Route::post('import-temp/action', [ImportEnrolleeController::class, 'applyTempEndDateAction'])->middleware('rbac:imports,update');
 Route::get('import-logs/{id}/download', [ImportEnrolleeController::class, 'downloadImportLog'])->middleware('rbac:imports,export');
 Route::get('imported-files', [ImportEnrolleeController::class, 'getImportedFiles'])->middleware('rbac:imports,view');
