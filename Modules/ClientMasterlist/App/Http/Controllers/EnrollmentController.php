@@ -100,7 +100,38 @@ class EnrollmentController extends Controller
         if ($user instanceof \Illuminate\Http\JsonResponse) {
             return $user;
         }
+
+        $awaitingDeletionApproval = $request->boolean('awaiting_deletion_approval', true);
         $enrollment = Enrollment::findOrFail($id);
+
+        if ($awaitingDeletionApproval) {
+            $oldValues = $enrollment->toArray();
+
+            if (Schema::hasColumn($enrollment->getTable(), 'temp_end_date')) {
+                $enrollment->temp_end_date = now();
+            }
+
+            if (Schema::hasColumn($enrollment->getTable(), 'status')) {
+                $enrollment->status = 'awaiting-deletion-approval';
+            }
+
+            if (Schema::hasColumn($enrollment->getTable(), 'deleted_by')) {
+                $enrollment->deleted_by = $user ? $user->id : null;
+            }
+
+            $enrollment->save();
+
+            $this->logUpdate($enrollment, $oldValues, [
+                'action' => 'awaiting_deletion_approval',
+                'awaiting_deletion_approval' => true,
+                'deleted_by' => $user ? $user->id : null,
+            ]);
+
+            return response()->json([
+                'message' => 'Marked as awaiting deletion approval',
+            ]);
+        }
+
         // If the model has a deleted_by column, set it
         if (Schema::hasColumn($enrollment->getTable(), 'deleted_by')) {
             $enrollment->deleted_by = $user ? $user->id : null;

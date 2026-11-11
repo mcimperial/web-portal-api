@@ -35,12 +35,14 @@ class Enrollment extends Model
         'export_type',
         'with_optout',
         'with_lowercase_output',
+        'with_awaiting_deletion_approval',
         'status',
         'deleted_by',
     ];
 
     protected $casts = [
         'with_lowercase_output' => 'boolean',
+        'with_awaiting_deletion_approval' => 'boolean',
     ];
 
     /**
