@@ -1809,7 +1809,6 @@ class SendNotificationController extends Controller
 
             $query = Enrollee::query()
                 ->where('enrollment_id', $enrollmentId)
-                ->where('status', 'ACTIVE')
                 ->whereNull('deleted_at')
                 ->where(function ($subQuery) {
                     $subQuery->where('enrollment_status', 'AWAITING-DELETION-APPROVAL')
