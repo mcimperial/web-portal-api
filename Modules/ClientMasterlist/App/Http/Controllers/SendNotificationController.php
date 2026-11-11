@@ -434,6 +434,28 @@ class SendNotificationController extends Controller
                 }
             }
         }
+        else if ($notification->notification_type === 'REPORT: ATTACHMENT (AWAITING-DELETION-APPROVAL OR TEMP END DATE)' && !$placeholderMessage) {
+            if ($csvAttachment && is_array($csvAttachment) && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                $csvAttachments = [$csvAttachment];
+            } else if (!$csvAttachment) {
+                $statusResult = $this->checkNotificationStatus($notification->notification_type, $notification->enrollment_id ?? null, $notification);
+
+                if (is_array($statusResult) && isset($statusResult['type']) && $statusResult['type'] === 'csv_generation') {
+                    $csvAttachment = $this->generateCsvAttachment($statusResult);
+
+                    if ($csvAttachment && isset($csvAttachment['has_data']) && $csvAttachment['has_data']) {
+                        $csvAttachments = [$csvAttachment];
+                    } else if ($csvAttachment) {
+                        if (isset($csvAttachment['path']) && file_exists($csvAttachment['path'])) {
+                            @unlink($csvAttachment['path']);
+                        }
+                        if (isset($csvAttachment['temp_path'])) {
+                            @unlink($csvAttachment['temp_path']);
+                        }
+                    }
+                }
+            }
+        }
 
         $replacements = $this->getVariableReplacements($notification, $data);
         
@@ -1019,6 +1041,15 @@ class SendNotificationController extends Controller
                     'employee_end_date_equals_import_date' => true,
                     'columns' => $columns
                 ];
+            case 'REPORT: ATTACHMENT (AWAITING-DELETION-APPROVAL OR TEMP END DATE)':
+                return [
+                    'type' => 'csv_generation',
+                    'enrollment_id' => $enrollmentId,
+                    'awaiting_deletion_approval_or_temp_end_date' => true,
+                    'date_from' => $dateRange['from'],
+                    'date_to' => $dateRange['to'],
+                    'columns' => $columns
+                ];
 
             case 'CLOSE ENROLLMENT':
                 // Set the enrollment status to INACTIVE
@@ -1524,6 +1555,10 @@ class SendNotificationController extends Controller
     private function generateCsvAttachment($statusResult)
     {
         try {
+            if (!empty($statusResult['awaiting_deletion_approval_or_temp_end_date'])) {
+                return $this->generateAwaitingDeletionApprovalCsvAttachment($statusResult);
+            }
+
             if (!empty($statusResult['employee_end_date_equals_import_date'])) {
                 return $this->generateEmployeeEndDateImportCsvAttachment($statusResult);
             }
@@ -1752,6 +1787,72 @@ class SendNotificationController extends Controller
             ];
         } catch (\Exception $e) {
             Log::error('Failed to generate employee_end_date import CSV attachment', [
+                'error' => $e->getMessage(),
+                'exception' => $e->getTraceAsString(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Generate CSV for enrollees awaiting deletion approval or with temp end date.
+     * Columns: employee_id, name, temp_end_date
+     */
+    private function generateAwaitingDeletionApprovalCsvAttachment($statusResult)
+    {
+        try {
+            $enrollmentId = $statusResult['enrollment_id'] ?? null;
+            if (!$enrollmentId) {
+                return null;
+            }
+
+            $query = Enrollee::query()
+                ->where('enrollment_id', $enrollmentId)
+                ->where('status', 'ACTIVE')
+                ->whereNull('deleted_at')
+                ->where(function ($subQuery) {
+                    $subQuery->where('enrollment_status', 'AWAITING-DELETION-APPROVAL')
+                        ->orWhereNotNull('temp_end_date');
+                });
+
+            $enrollees = $query->orderBy('employee_id')->get();
+
+            $tmpPath = tempnam(sys_get_temp_dir(), 'csv_attachment_');
+            $csvPath = $tmpPath . '.csv';
+            $file = fopen($csvPath, 'w');
+
+            fputcsv($file, [
+                'EMPLOYEE ID',
+                'NAME',
+                'TEMP END DATE',
+            ]);
+
+            foreach ($enrollees as $enrollee) {
+                $fullName = trim(implode(' ', array_filter([
+                    $enrollee->first_name ?? '',
+                    $enrollee->middle_name ?? '',
+                    $enrollee->last_name ?? '',
+                ])));
+
+                fputcsv($file, [
+                    $enrollee->employee_id ?? '',
+                    $fullName,
+                    $enrollee->temp_end_date ? \Carbon\Carbon::parse($enrollee->temp_end_date)->format('Y-m-d') : '',
+                ]);
+            }
+
+            fclose($file);
+
+            return [
+                'path' => $csvPath,
+                'name' => 'ENROLLEES_AWAITING_DELETION_APPROVAL_' . date('Ymd_His') . '.csv',
+                'temp_path' => $tmpPath,
+                'has_data' => $enrollees->count() > 0,
+                'data_rows' => $enrollees->count(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Failed to generate awaiting-deletion-approval CSV attachment', [
                 'error' => $e->getMessage(),
                 'exception' => $e->getTraceAsString(),
             ]);
