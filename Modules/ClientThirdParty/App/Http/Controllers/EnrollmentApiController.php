@@ -244,7 +244,6 @@ class EnrollmentApiController extends Controller
     * Required API key permission: `principal:read`
      *
      * @queryParam employee_id string required Principal employee ID. Example: EMP-0042
-     * @queryParam enrollment_title string Optional enrollment title filter (must be within allowed titles). Example: Acme 2026 Enrollment
      *
      * @response 200 {
      *   "success": true,
@@ -255,19 +254,7 @@ class EnrollmentApiController extends Controller
     {
         $validated = $request->validate([
             'employee_id' => 'required|string|max:255',
-            'enrollment_title' => 'nullable|string|max:255',
         ]);
-
-        $requestedEnrollmentTitle = isset($validated['enrollment_title'])
-            ? trim((string) $validated['enrollment_title'])
-            : null;
-
-        if ($requestedEnrollmentTitle !== null && $requestedEnrollmentTitle !== '' && !$this->isEnrollmentAllowed($request, $requestedEnrollmentTitle)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Principal not found.',
-            ], 404);
-        }
 
         $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
 
@@ -277,11 +264,6 @@ class EnrollmentApiController extends Controller
             ->when(!empty($allowedEnrollmentTitles), function ($q) use ($allowedEnrollmentTitles) {
                 $q->whereHas('enrollment', function ($enrollmentQuery) use ($allowedEnrollmentTitles) {
                     $this->applyEnrollmentTitleFilter($enrollmentQuery, $allowedEnrollmentTitles);
-                });
-            })
-            ->when(!empty($requestedEnrollmentTitle), function ($q) use ($requestedEnrollmentTitle) {
-                $q->whereHas('enrollment', function ($enrollmentQuery) use ($requestedEnrollmentTitle) {
-                    $enrollmentQuery->whereRaw('LOWER(title) = ?', [mb_strtolower($requestedEnrollmentTitle)]);
                 });
             })
             ->orderByDesc('id')

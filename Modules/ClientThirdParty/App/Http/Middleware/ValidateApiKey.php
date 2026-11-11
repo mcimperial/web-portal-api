@@ -115,6 +115,8 @@ class ValidateApiKey
                 'status' => $status,
                 'failure_reason' => $failureReason,
                 'metadata' => [
+                    'request_uri' => '/' . ltrim($request->getRequestUri(), '/'),
+                    'query_string' => (string) $request->server('QUERY_STRING', ''),
                     'query' => $request->query(),
                 ],
             ]);
