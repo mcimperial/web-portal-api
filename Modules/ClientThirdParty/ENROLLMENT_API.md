@@ -216,7 +216,6 @@ Required permission: `principal:read`
 | Parameter          | Type   | Required | Description                                      | Example    |
 |--------------------|--------|----------|--------------------------------------------------|------------|
 | `employee_id`      | string | Yes      | Principal employee ID                            | `EMP-0042` |
-| `enrollment_title` | string | No       | Optional allowed enrollment title filter         | `TEST - MAXICARE` |
 
 #### Sample JSON Response `200`
 
