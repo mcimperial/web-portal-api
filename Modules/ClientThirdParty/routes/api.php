@@ -67,12 +67,12 @@ Route::prefix('v1/third-party')->name('third-party.')->group(function () {
 
     // Enrollment listing & detail (title-based)
     Route::get('enrollments',                                          [EnrollmentApiController::class, 'indexEnrollments'])->middleware('api.key:enrollment:read')->name('enrollments.index');
-    Route::get('enrollments/{enrollmentTitle}',                        [EnrollmentApiController::class, 'showEnrollmentPrincipals'])->middleware('api.key:principal:read')->name('enrollments.show');
     Route::get('enrollments/{enrollmentTitle}/details',                [EnrollmentApiController::class, 'showEnrollment'])->middleware('api.key:enrollment:read')->name('enrollments.details');
     Route::get('enrollments/{enrollmentTitle}/summary',                [EnrollmentApiController::class, 'summary'])->middleware('api.key:enrollment:read')->name('enrollments.summary');
 
     // Principal endpoints
-    Route::get('enrollments/{enrollmentTitle}/principals',             [EnrollmentApiController::class, 'principals'])->middleware('api.key:principal:read')->name('principals.index');
+    Route::get('principals',                                            [EnrollmentApiController::class, 'listPrincipals'])->middleware('api.key:principal:list:read')->name('principals.index');
+    Route::get('principals/read',                                       [EnrollmentApiController::class, 'showPrincipal'])->middleware('api.key:principal:read')->name('principals.read');
 
     // Dependent endpoints
     Route::get('enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents', [EnrollmentApiController::class, 'dependents'])->middleware('api.key:dependent:read')->name('dependents.index');

@@ -26,9 +26,9 @@ This module provides functionality to sync data between the main application dat
   - [7. Get Member Data](#7-get-member-data)
 - [Enrollment API](#enrollment-api)
   - [1. List Enrollments](#1-list-enrollments)
-  - [2. Show Enrollment Principals (Landing Endpoint)](#2-show-enrollment-principals-landing-endpoint)
+  - [2. List Principals (Categorized)](#2-list-principals-categorized)
   - [3. Show Enrollment Details](#3-show-enrollment-details)
-  - [4. List Principals](#4-list-principals)
+  - [4. Read Single Principal](#4-read-single-principal)
   - [5. List Dependents](#5-list-dependents)
   - [6. Enrollment Summary](#6-enrollment-summary)
 - [Error Handling](#error-handling)
@@ -287,7 +287,8 @@ Admins can restrict one API key to multiple enrollment titles:
 **Route Permissions**
 
 - `enrollment:read` → enrollment listing/detail/summary
-- `principal:read` → principals listing/search
+- `principal:list:read` → principals list/search (categorized by enrollment)
+- `principal:read` → single principal read by params
 - `dependent:read` → dependents listing
 
 ---
@@ -329,44 +330,62 @@ Required permission: `enrollment:read`
 
 ---
 
-### 2. Show Enrollment Principals (Landing Endpoint)
+### 2. List Principals (Categorized)
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}
+GET /api/v1/third-party/principals
 ```
 
-Returns principals (enrollees) for the selected enrollment title.
+Returns principals grouped by enrollment title, scoped by selected enrollment permissions.
+Each principal record includes its `dependents` array.
 
-Required permission: `principal:read`
+Required permission: `principal:list:read`
 
-**URL Parameters**
+**Query Parameters**
 
-| Parameter | Type    | Required | Description       | Example |
-|-----------|---------|----------|-------------------|---------|
-| `enrollmentTitle` | string | Yes | Enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
+| Parameter           | Type    | Required | Description                                                 | Example    |
+|---------------------|---------|----------|-------------------------------------------------------------|------------|
+| `enrollment_title`  | string  | No       | Filter to one allowed enrollment title                      | `Acme 2026 Enrollment` |
+| `enrollment_status` | string  | No       | Filter by principal's enrollment status                     | `ACTIVE`   |
+| `employee_id`       | string  | No       | Exact employee ID filter                                    | `EMP-0042` |
+| `search`            | string  | No       | Search by employee ID, name, and enrollment title          | `john`     |
+| `per_page`          | integer | No       | Results per page — max `100`, default `20`                 | `20`       |
 
 **Sample JSON Response `200`**
 
 ```json
 {
   "success": true,
-  "enrollment": { "title": "TEST - MAXICARE" },
+  "filters": {
+    "enrollment_title": null,
+    "enrollment_status": null,
+    "employee_id": null,
+    "search": "EMP-0042"
+  },
   "data": [
     {
-      "id": 10,
-      "employee_id": "EMP-0042",
-      "first_name": "John",
-      "last_name": "Doe"
+      "enrollment_title": "TEST - MAXICARE",
+      "total": 1,
+      "principals": [
+        {
+          "id": 10,
+          "employee_id": "EMP-0042",
+          "first_name": "John",
+          "last_name": "Doe",
+          "dependents": [
+            {
+              "id": 20,
+              "principal_id": 10,
+              "first_name": "Jane",
+              "last_name": "Doe"
+            }
+          ]
+        }
+      ]
     }
   ],
   "meta": { "current_page": 1, "last_page": 1, "per_page": 20, "total": 1 }
 }
-```
-
-**Error Response `404`**
-
-```json
-{ "message": "No query results for model [Enrollment] 999" }
 ```
 
 ---
@@ -392,29 +411,23 @@ Required permission: `enrollment:read`
 
 ---
 
-### 4. List Principals
+### 4. Read Single Principal
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals
+GET /api/v1/third-party/principals/read
 ```
 
-Returns a paginated list of enrolled principals (employees) belonging to the given enrollment.
+Returns one principal record by params, scoped by selected enrollment permissions.
+The returned principal always includes its `dependents` array.
 
 Required permission: `principal:read`
 
-**URL Parameters**
-
-| Parameter | Type    | Required | Description       | Example |
-|-----------|---------|----------|-------------------|---------|
-| `enrollmentTitle` | string | Yes | The enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
-
 **Query Parameters**
 
-| Parameter           | Type    | Required | Description                                | Example    |
-|---------------------|---------|----------|--------------------------------------------|------------|
-| `enrollment_status` | string  | No       | Filter by principal's enrollment status    | `active`   |
-| `employee_id`       | string  | No       | Filter by employee ID                      | `EMP-0042` |
-| `per_page`          | integer | No       | Results per page — max `100`, default `20` | `20`       |
+| Parameter          | Type   | Required | Description                                    | Example               |
+|--------------------|--------|----------|------------------------------------------------|-----------------------|
+| `employee_id`      | string | Yes      | Principal employee ID                          | `EMP-0042`            |
+| `enrollment_title` | string | No       | Optional allowed enrollment title filter       | `Acme 2026 Enrollment` |
 
 **Success Response `200`**
 
@@ -422,20 +435,19 @@ Required permission: `principal:read`
 {
   "success": true,
   "enrollment": { "title": "TEST - MAXICARE" },
-  "data": [
-    {
-      "id": 10,
-      "enrollment_id": 1,
-      "employee_id": "EMP-0042",
-      "first_name": "John",
-      "last_name": "Doe"
-    }
-  ],
-  "meta": {
-    "current_page": 1,
-    "last_page": 2,
-    "per_page": 20,
-    "total": 35
+  "data": {
+    "id": 10,
+    "employee_id": "EMP-0042",
+    "first_name": "John",
+    "last_name": "Doe",
+    "dependents": [
+      {
+        "id": 20,
+        "principal_id": 10,
+        "first_name": "Jane",
+        "last_name": "Doe"
+      }
+    ]
   }
 }
 ```
@@ -515,7 +527,7 @@ Required permission: `enrollment:read`
 
 ---
 
-Use `GET /api/v1/third-party/enrollments/{enrollmentTitle}` as the landing endpoint for principals, or call `/principals` directly with filters.
+Use `GET /api/v1/third-party/principals` for categorized principal listing and `GET /api/v1/third-party/principals/read` for single principal reads by params.
 
 ---
 
