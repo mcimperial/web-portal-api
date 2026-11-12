@@ -24,7 +24,7 @@ class BillingController extends Controller
             'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation,active_list_validation'],
             'billing_month' => ['nullable', 'integer', 'min:1', 'max:12'],
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
-            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'include_reports' => ['nullable', 'boolean'],
         ]);
 
@@ -51,10 +51,13 @@ class BillingController extends Controller
             $query->where('billing_year', $validated['billing_year']);
         }
 
-        $records = $query
-            ->orderByDesc('id')
-            ->limit($validated['per_page'] ?? 200)
-            ->get();
+        $query->orderByDesc('id');
+
+        if (!empty($validated['per_page'])) {
+            $query->limit((int) $validated['per_page']);
+        }
+
+        $records = $query->get();
 
         $records = $records->map(function (BillingRecord $record) {
             $record->row_data = $this->enrichRowDataWithPrincipalPendingDates(
