@@ -586,10 +586,13 @@ class BillingController extends Controller
         if ($billingType === 'looker_file_validation') {
             $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
             $lookerStatusRaw = $statusColumnKey ? ($rowData[$statusColumnKey] ?? null) : null;
+            $normalizedLookerStatus = $this->normalizeStatusToken((string) ($lookerStatusRaw ?? ''));
             $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
             $isMatched = false;
 
-            if ($expectedSystemStatus === 'PENDING_ANY') {
+            if (in_array($normalizedLookerStatus, ['NOT-ENROLLED', 'NOT-ENROLLED-YES'], true)) {
+                $isMatched = in_array($systemStatus, ['INACTIVE', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true);
+            } elseif ($expectedSystemStatus === 'PENDING_ANY') {
                 $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
             } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE', 'WAIVED', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true)) {
                 $isMatched = $systemStatus === $expectedSystemStatus;

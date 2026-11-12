@@ -118,6 +118,45 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         $this->assertTrue($result['row_data']['MATCHED']);
     }
 
+    public function test_looker_validation_treats_not_enrolled_as_match_for_terminated(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 105,
+            'enrollment_id' => 99,
+            'employee_id' => 'not-enrolled-terminated',
+            'member_id' => null,
+            'enrollment_status' => 'RESIGNED',
+            'deleted_at' => null,
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 205,
+            'principal_id' => 105,
+            'coverage_start_date' => '2025-11-01',
+            'coverage_end_date' => '2025-11-30',
+            'certificate_number' => 'CERT-1005',
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'resolveLookerFileValidationStatus');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => 'not-enrolled-terminated',
+                'STATUS' => 'NOT_ENROLLED',
+            ],
+            'EMPLOYEE_ID',
+            'STATUS',
+            'looker_file_validation'
+        );
+
+        $this->assertSame('TERMINATED', $result['row_data']['SYSTEM_STATUS']);
+        $this->assertTrue($result['row_data']['MATCHED']);
+    }
+
     public function test_looker_validation_maps_resigned_without_certificate_to_inactive_did_not_take_action(): void
     {
         DB::table('cm_principal')->insert([
@@ -147,6 +186,45 @@ class BillingControllerLookerValidationStatusTest extends TestCase
             [
                 'EMPLOYEE_ID' => 'resigned-no-cert',
                 'STATUS' => 'INACTIVE - DID NOT TAKE ACTION',
+            ],
+            'EMPLOYEE_ID',
+            'STATUS',
+            'looker_file_validation'
+        );
+
+        $this->assertSame('INACTIVE - DID NOT TAKE ACTION', $result['row_data']['SYSTEM_STATUS']);
+        $this->assertTrue($result['row_data']['MATCHED']);
+    }
+
+    public function test_looker_validation_treats_not_enrolled_as_match_for_inactive_did_not_take_action(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 106,
+            'enrollment_id' => 99,
+            'employee_id' => 'not-enrolled-inactive-dnta',
+            'member_id' => null,
+            'enrollment_status' => 'RESIGNED',
+            'deleted_at' => null,
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 206,
+            'principal_id' => 106,
+            'coverage_start_date' => '2025-11-01',
+            'coverage_end_date' => null,
+            'certificate_number' => null,
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'resolveLookerFileValidationStatus');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => 'not-enrolled-inactive-dnta',
+                'STATUS' => 'NOT_ENROLLED',
             ],
             'EMPLOYEE_ID',
             'STATUS',
