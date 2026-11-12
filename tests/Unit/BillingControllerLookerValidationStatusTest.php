@@ -235,6 +235,17 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         $this->assertTrue($result['row_data']['MATCHED']);
     }
 
+    public function test_looker_not_enrolled_matches_terminated_inactive_and_inactive_did_not_take_action(): void
+    {
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'isLookerStatusMatched');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke($controller, 'TERMINATED', 'NOT_ENROLLED'));
+        $this->assertTrue($method->invoke($controller, 'INACTIVE', 'NOT_ENROLLED'));
+        $this->assertTrue($method->invoke($controller, 'INACTIVE - DID NOT TAKE ACTION', 'NOT_ENROLLED'));
+    }
+
     public function test_looker_validation_maps_opted_out_to_waived(): void
     {
         DB::table('cm_principal')->insert([

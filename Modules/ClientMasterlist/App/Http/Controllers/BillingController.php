@@ -586,19 +586,7 @@ class BillingController extends Controller
         if ($billingType === 'looker_file_validation') {
             $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
             $lookerStatusRaw = $statusColumnKey ? ($rowData[$statusColumnKey] ?? null) : null;
-            $normalizedLookerStatus = $this->normalizeStatusToken((string) ($lookerStatusRaw ?? ''));
-            $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
-            $isMatched = false;
-
-            if (in_array($normalizedLookerStatus, ['NOT-ENROLLED', 'NOT-ENROLLED-YES'], true)) {
-                $isMatched = in_array($systemStatus, ['INACTIVE', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true);
-            } elseif ($expectedSystemStatus === 'PENDING_ANY') {
-                $isMatched = in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
-            } elseif (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE', 'WAIVED', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true)) {
-                $isMatched = $systemStatus === $expectedSystemStatus;
-            }
-
-            $rowData['MATCHED'] = $isMatched;
+            $rowData['MATCHED'] = $this->isLookerStatusMatched($systemStatus, $lookerStatusRaw);
         }
 
         return [
@@ -641,6 +629,26 @@ class BillingController extends Controller
         }
 
         return null;
+    }
+
+    private function isLookerStatusMatched(string $systemStatus, mixed $lookerStatusRaw): bool
+    {
+        $normalizedLookerStatus = $this->normalizeStatusToken((string) ($lookerStatusRaw ?? ''));
+        $expectedSystemStatus = $this->resolveLookerExpectedSystemStatus($lookerStatusRaw);
+
+        if (in_array($normalizedLookerStatus, ['NOT-ENROLLED', 'NOT-ENROLLED-YES'], true)) {
+            return in_array($systemStatus, ['INACTIVE', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true);
+        }
+
+        if ($expectedSystemStatus === 'PENDING_ANY') {
+            return in_array($systemStatus, ['PENDING_HMO', 'PENDING_EMPLOYEE'], true);
+        }
+
+        if (in_array($expectedSystemStatus, ['ACTIVE', 'INACTIVE', 'WAIVED', 'TERMINATED', 'INACTIVE - DID NOT TAKE ACTION'], true)) {
+            return $systemStatus === $expectedSystemStatus;
+        }
+
+        return false;
     }
 
     private function isCoverageEndDateOnOrAfterToday(string $coverageEndDate): bool
@@ -953,6 +961,11 @@ class BillingController extends Controller
             }
 
             $status = strtoupper(trim((string) ($rowData['SYSTEM_STATUS'] ?? '')));
+
+            if ($billingType === 'looker_file_validation') {
+                $lookerStatusRaw = $this->findRowValueByTokens($rowData, ['status', 'enrollmentstatus', 'memberstatus']);
+                $rowData['MATCHED'] = $this->isLookerStatusMatched($status, $lookerStatusRaw);
+            }
 
             $rowData['SOURCE_ROW_NUMBER'] = $record->source_row_number;
 
