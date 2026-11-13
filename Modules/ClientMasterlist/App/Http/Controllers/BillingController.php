@@ -195,20 +195,10 @@ class BillingController extends Controller
         $modalReconReport3 = [];
 
         DB::transaction(function () use (&$importedRows, &$modalReconReport1, &$modalReconReport2, &$modalReconReport3, $validated, $request, $billingType, $isStatusDrivenBilling, $isPrincipalOnlyValidationBilling, $resolvedBillingMonth, $resolvedBillingYear) {
-            if ($isStatusDrivenBilling) {
-                $deleteQuery = BillingRecord::query()
-                    ->where('enrollment_id', $validated['enrollment_id'])
-                    ->where('billing_type', $billingType);
-
-                if (in_array($billingType, ['modal_billing', 'adjustment_billing'], true)) {
-                    $deleteQuery
-                        ->where('billing_month', $resolvedBillingMonth)
-                        ->where('billing_year', $resolvedBillingYear)
-                        ->delete();
-                } elseif ($isPrincipalOnlyValidationBilling) {
-                    $deleteQuery->delete();
-                }
-            }
+            BillingRecord::query()
+                ->where('enrollment_id', $validated['enrollment_id'])
+                ->where('billing_type', $billingType)
+                ->delete();
 
             foreach ($validated['rows'] as $row) {
                 $principalId = $row['principal_id'] ?? null;
