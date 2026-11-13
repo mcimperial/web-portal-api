@@ -8,6 +8,8 @@ use Modules\ClientMasterlist\App\Http\Controllers\ExportEnrolleesController;
 Route::get('enrollees/export', [ExportEnrolleesController::class, 'exportEnrollees'])->middleware('rbac:applications,export');
 Route::get('enrollees/export-with-update', [ExportEnrolleesController::class, 'exportAndUpdateEnrollees'])->middleware('rbac:applications,export');
 Route::get('enrollees/select', [EnrolleeController::class, 'getAllForSelect'])->middleware('rbac:applications,view');
+Route::get('enrollees/deleted', [EnrolleeController::class, 'deleted'])->middleware('rbac:applications,view');
+Route::post('enrollees/retract-deletions', [EnrolleeController::class, 'retractDeletions'])->middleware('rbac:applications,update');
 
 Route::get('enrollees', [EnrolleeController::class, 'index'])->middleware('rbac:applications,view');
 Route::post('enrollees', [EnrolleeController::class, 'store'])->middleware('rbac:applications,create');

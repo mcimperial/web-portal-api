@@ -88,6 +88,11 @@ class Enrollee extends Model
         return $this->hasMany(Dependent::class, 'principal_id')->whereNull('deleted_at');
     }
 
+    public function dependentsWithDeleted()
+    {
+        return $this->hasMany(Dependent::class, 'principal_id')->withTrashed();
+    }
+
     // Principal has one insurance provider through enrollment
     public function insuranceProvider()
     {
