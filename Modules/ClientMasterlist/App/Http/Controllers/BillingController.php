@@ -578,6 +578,8 @@ class BillingController extends Controller
                 'hi.certificate_number',
                 DB::raw('COALESCE(dp.created_at, p.created_at) as principal_created_at'),
                 DB::raw('COALESCE(dp.submission_date, p.submission_date) as principal_submission_date'),
+                'd.enrollment_status as dependent_enrollment_status',
+                DB::raw('COALESCE(dp.enrollment_status, p.enrollment_status) as principal_enrollment_status'),
                 DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
             ])
             ->orderByDesc('hi.id')
@@ -605,7 +607,8 @@ class BillingController extends Controller
         $rowData['CREATED_AT'] = $this->normalizeDateValue($healthRecord->principal_created_at ?? null);
         $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($healthRecord->principal_submission_date ?? null);
 
-        $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
+        $effectiveEnrollmentStatus = $this->resolveEffectiveEnrollmentStatusForHealthRecord($healthRecord);
+        $normalizedEnrollmentStatus = strtoupper((string) $effectiveEnrollmentStatus);
 
         $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
         $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
@@ -827,6 +830,30 @@ class BillingController extends Controller
         $normalized = strtoupper(str_replace(['_', ' '], '-', trim($status)));
 
         return preg_replace('/-+/', '-', $normalized) ?? $normalized;
+    }
+
+    private function resolveEffectiveEnrollmentStatusForHealthRecord(object $healthRecord): string
+    {
+        $rawEnrollmentStatus = (string) ($healthRecord->enrollment_status ?? '');
+        $normalizedEnrollmentStatus = strtoupper($rawEnrollmentStatus);
+
+        $dependentId = $healthRecord->dependent_id ?? null;
+
+        if (is_null($dependentId)) {
+            return $normalizedEnrollmentStatus;
+        }
+
+        $normalizedDependentStatus = strtoupper((string) ($healthRecord->dependent_enrollment_status ?? ''));
+        $normalizedPrincipalStatus = strtoupper((string) ($healthRecord->principal_enrollment_status ?? ''));
+
+        $dependentMappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedDependentStatus);
+        $principalIsActiveEquivalent = $this->isEnrollmentStatusActiveEquivalent($normalizedPrincipalStatus);
+
+        if (!is_null($dependentMappedPendingStatus) && $principalIsActiveEquivalent) {
+            return $normalizedPrincipalStatus;
+        }
+
+        return $normalizedEnrollmentStatus;
     }
 
     private function isTerminatedOrResignedStatus(mixed $status): bool
@@ -1196,6 +1223,7 @@ class BillingController extends Controller
         $healthRecord = DB::table('cm_health_insurance as hi')
             ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
             ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
+            ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
             ->where(function ($query) use ($principalId, $dependentId) {
                 if (!is_null($principalId)) {
                     $query->orWhere(function ($principalQuery) use ($principalId) {
@@ -1216,8 +1244,11 @@ class BillingController extends Controller
                 }
             })
             ->select([
+                'hi.dependent_id',
                 'hi.coverage_end_date',
                 'hi.certificate_number',
+                'd.enrollment_status as dependent_enrollment_status',
+                DB::raw('COALESCE(dp.enrollment_status, p.enrollment_status) as principal_enrollment_status'),
                 DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
             ])
             ->orderByDesc('hi.id')
@@ -1231,7 +1262,8 @@ class BillingController extends Controller
             ? Carbon::parse($healthRecord->coverage_end_date)->format('Y-m-d')
             : null;
 
-        $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
+        $effectiveEnrollmentStatus = $this->resolveEffectiveEnrollmentStatusForHealthRecord($healthRecord);
+        $normalizedEnrollmentStatus = strtoupper((string) $effectiveEnrollmentStatus);
         $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
         $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
 

@@ -16,6 +16,7 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         parent::setUp();
 
         Schema::dropIfExists('cm_health_insurance');
+        Schema::dropIfExists('cm_dependent');
         Schema::dropIfExists('cm_principal');
 
         Schema::create('cm_principal', function (Blueprint $table): void {
@@ -23,6 +24,7 @@ class BillingControllerLookerValidationStatusTest extends TestCase
             $table->unsignedInteger('enrollment_id');
             $table->string('employee_id')->nullable();
             $table->string('member_id')->nullable();
+            $table->date('birth_date')->nullable();
             $table->string('enrollment_status')->nullable();
             $table->dateTime('submission_date')->nullable();
             $table->softDeletes();
@@ -32,10 +34,78 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         Schema::create('cm_health_insurance', function (Blueprint $table): void {
             $table->increments('id');
             $table->unsignedInteger('principal_id')->nullable();
+            $table->unsignedInteger('dependent_id')->nullable();
             $table->date('coverage_start_date')->nullable();
             $table->date('coverage_end_date')->nullable();
             $table->string('certificate_number')->nullable();
         });
+
+        Schema::create('cm_dependent', function (Blueprint $table): void {
+            $table->increments('id');
+            $table->unsignedInteger('principal_id');
+            $table->string('employee_id')->nullable();
+            $table->date('birth_date')->nullable();
+            $table->string('enrollment_status')->nullable();
+            $table->softDeletes();
+            $table->timestamps();
+        });
+    }
+
+    public function test_modal_billing_dependent_pending_uses_principal_approved_status(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 301,
+            'enrollment_id' => 99,
+            'employee_id' => 'principal-301',
+            'member_id' => null,
+            'enrollment_status' => 'APPROVED',
+            'submission_date' => Carbon::now()->subDays(3),
+            'deleted_at' => null,
+            'created_at' => Carbon::now()->subDays(5),
+            'updated_at' => Carbon::now()->subDays(5),
+        ]);
+
+        DB::table('cm_dependent')->insert([
+            'id' => 401,
+            'principal_id' => 301,
+            'employee_id' => 'mwp6dg9',
+            'birth_date' => '1970-02-13',
+            'enrollment_status' => 'FOR-APPROVAL',
+            'deleted_at' => null,
+            'created_at' => Carbon::now()->subDays(2),
+            'updated_at' => Carbon::now()->subDays(2),
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 501,
+            'principal_id' => null,
+            'dependent_id' => 401,
+            'coverage_start_date' => '2026-11-01',
+            'coverage_end_date' => null,
+            'certificate_number' => '1168011146916708',
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'resolveModalBillingStatus');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_NO' => 'mwp6dg9',
+                'BIRTH_DATE' => '1970-02-13',
+            ],
+            'EMPLOYEE_NO',
+            'BIRTH_DATE',
+            11,
+            2026
+        );
+
+        $this->assertSame('ACTIVE', $result['row_data']['SYSTEM_STATUS']);
+        $this->assertSame('1168011146916708', $result['row_data']['ACCOUNT_NO']);
+        $this->assertSame('2026-11-01', $result['row_data']['COVERAGE_START_DATE']);
+        $this->assertNull($result['row_data']['COVERAGE_END_DATE']);
     }
 
     public function test_looker_validation_marks_approved_without_end_date_as_active_and_matched(): void
