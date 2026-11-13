@@ -466,7 +466,7 @@ class BillingController extends Controller
             $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
         } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
             $rowData['SYSTEM_STATUS'] = 'WAIVED';
-        } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+        } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
             $rowData['SYSTEM_STATUS'] = 'ACTIVE';
         } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
             $rowData['SYSTEM_STATUS'] = 'ACTIVE';
@@ -561,7 +561,7 @@ class BillingController extends Controller
                 $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
             } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
                 $rowData['SYSTEM_STATUS'] = 'WAIVED';
-            } elseif ($normalizedSystemStatus === 'APPROVED') {
+            } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             } elseif (!is_null($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'INACTIVE';
@@ -577,7 +577,9 @@ class BillingController extends Controller
                 $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
             } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
                 $rowData['SYSTEM_STATUS'] = 'WAIVED';
-            } elseif ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+            } elseif ($normalizedSystemStatus === 'AWAITING-DELETION-APPROVAL') {
+                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
+            } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
             } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
                 $rowData['SYSTEM_STATUS'] = 'ACTIVE';
@@ -675,6 +677,13 @@ class BillingController extends Controller
         $normalized = strtoupper(str_replace(['_', ' '], '-', trim($status)));
 
         return preg_replace('/-+/', '-', $normalized) ?? $normalized;
+    }
+
+    private function isEnrollmentStatusActiveEquivalent(string $status): bool
+    {
+        $normalized = $this->normalizeStatusToken($status);
+
+        return in_array($normalized, ['ACTIVE', 'APPROVED', 'AWAITING-DELETION-APPROVAL'], true);
     }
 
     private function mapEnrollmentStatusToPendingSystemStatus(string $status): ?string
@@ -898,7 +907,7 @@ class BillingController extends Controller
 
         foreach ($systemRows as $systemRow) {
             $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
-            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+            if (!$this->isEnrollmentStatusActiveEquivalent($enrollmentStatus)) {
                 continue;
             }
 
@@ -1075,7 +1084,7 @@ class BillingController extends Controller
         }
 
         if ($billingType === 'active_list_validation') {
-            if ($normalizedSystemStatus === 'APPROVED') {
+            if ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
                 return 'ACTIVE';
             }
 
@@ -1086,7 +1095,11 @@ class BillingController extends Controller
             return 'ACTIVE';
         }
 
-        if ($normalizedSystemStatus === 'APPROVED' && is_null($resolvedCoverageEndDate)) {
+        if ($billingType === 'looker_file_validation' && $normalizedSystemStatus === 'AWAITING-DELETION-APPROVAL') {
+            return 'ACTIVE';
+        }
+
+        if ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
             return 'ACTIVE';
         }
 
@@ -1165,7 +1178,7 @@ class BillingController extends Controller
 
         foreach ($systemRows as $systemRow) {
             $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
-            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+            if (!$this->isEnrollmentStatusActiveEquivalent($enrollmentStatus)) {
                 continue;
             }
 
@@ -1259,7 +1272,7 @@ class BillingController extends Controller
             }
 
             $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
-            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+            if (!$this->isEnrollmentStatusActiveEquivalent($enrollmentStatus)) {
                 continue;
             }
 
@@ -1342,7 +1355,7 @@ class BillingController extends Controller
             $seenPrincipalIds[$principalId] = true;
 
             $enrollmentStatus = strtoupper(trim((string) ($systemRow->enrollment_status ?? '')));
-            if (!in_array($enrollmentStatus, ['ACTIVE', 'APPROVED'], true)) {
+            if (!$this->isEnrollmentStatusActiveEquivalent($enrollmentStatus)) {
                 continue;
             }
 
