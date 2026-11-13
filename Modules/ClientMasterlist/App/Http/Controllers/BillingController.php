@@ -608,27 +608,14 @@ class BillingController extends Controller
         $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($healthRecord->principal_submission_date ?? null);
 
         $effectiveEnrollmentStatus = $this->resolveEffectiveEnrollmentStatusForHealthRecord($healthRecord);
-        $normalizedEnrollmentStatus = strtoupper((string) $effectiveEnrollmentStatus);
-        $hasCertificateNumber = $this->hasCertificateNumber($healthRecord->certificate_number ?? null);
-
-        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
-        $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
-
-        if ($mappedPendingStatus !== null) {
-            $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
-        } elseif ($normalizedSystemStatus === 'RESIGNED') {
-            $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
-        } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
-            $rowData['SYSTEM_STATUS'] = 'WAIVED';
-        } elseif (!$hasCertificateNumber && $this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
-            $rowData['SYSTEM_STATUS'] = 'PENDING_HMO';
-        } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
-            $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-        } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)) {
-            $rowData['SYSTEM_STATUS'] = $hasCertificateNumber ? 'ACTIVE' : 'PENDING_HMO';
-        } else {
-            $rowData['SYSTEM_STATUS'] = 'INACTIVE';
-        }
+        $rowData['SYSTEM_STATUS'] = $this->resolveSystemStatusByBillingContext(
+            'modal_billing',
+            $effectiveEnrollmentStatus,
+            $healthRecord->certificate_number ?? null,
+            $resolvedCoverageEndDate,
+            $billingMonth,
+            $billingYear
+        );
 
         return [
             'principal_id' => $healthRecord->principal_id,
@@ -705,49 +692,12 @@ class BillingController extends Controller
         $rowData['CREATED_AT'] = $this->normalizeDateValue($healthRecord->principal_created_at ?? null);
         $rowData['SUBMISSION_DATE'] = $this->normalizeDateValue($healthRecord->principal_submission_date ?? null);
 
-        $normalizedEnrollmentStatus = strtoupper((string) ($healthRecord->enrollment_status ?? ''));
-        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
-        $hasCertificateNumber = $this->hasCertificateNumber($healthRecord->certificate_number ?? null);
-
-        if ($billingType === 'active_list_validation') {
-            $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
-
-            if ($mappedPendingStatus !== null) {
-                $rowData['SYSTEM_STATUS'] = 'PENDING_EMPLOYEE';
-            } elseif ($normalizedSystemStatus === 'RESIGNED') {
-                $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
-            } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
-                $rowData['SYSTEM_STATUS'] = 'WAIVED';
-            } elseif (!$hasCertificateNumber && $this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
-                $rowData['SYSTEM_STATUS'] = 'PENDING_HMO';
-            } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
-                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-            } elseif (!is_null($resolvedCoverageEndDate)) {
-                $rowData['SYSTEM_STATUS'] = 'INACTIVE';
-            } else {
-                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-            }
-        } else {
-            $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
-
-            if ($mappedPendingStatus !== null) {
-                $rowData['SYSTEM_STATUS'] = $mappedPendingStatus;
-            } elseif ($normalizedSystemStatus === 'RESIGNED') {
-                $rowData['SYSTEM_STATUS'] = $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
-            } elseif ($normalizedSystemStatus === 'OPTED-OUT') {
-                $rowData['SYSTEM_STATUS'] = 'WAIVED';
-            } elseif (!$hasCertificateNumber && $this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus)) {
-                $rowData['SYSTEM_STATUS'] = 'PENDING_HMO';
-            } elseif ($normalizedSystemStatus === 'AWAITING-DELETION-APPROVAL') {
-                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-            } elseif ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
-                $rowData['SYSTEM_STATUS'] = 'ACTIVE';
-            } elseif ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
-                $rowData['SYSTEM_STATUS'] = $hasCertificateNumber ? 'ACTIVE' : 'PENDING_HMO';
-            } else {
-                $rowData['SYSTEM_STATUS'] = 'INACTIVE';
-            }
-        }
+        $rowData['SYSTEM_STATUS'] = $this->resolveSystemStatusByBillingContext(
+            $billingType,
+            (string) ($healthRecord->enrollment_status ?? ''),
+            $healthRecord->certificate_number ?? null,
+            $resolvedCoverageEndDate
+        );
 
         if ($billingType === 'looker_file_validation') {
             $systemStatus = strtoupper((string) ($rowData['SYSTEM_STATUS'] ?? ''));
@@ -1150,6 +1100,7 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => $isDependent ? 'DEPENDENT' : 'PRINCIPAL',
                 'birth_date' => $birthDate,
+                'enrollment_status' => trim((string) ($systemRow->enrollment_status ?? '')),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
@@ -1275,18 +1226,39 @@ class BillingController extends Controller
             ? Carbon::parse($healthRecord->coverage_end_date)->format('Y-m-d')
             : null;
 
+        $billingMonth = (int) ($record->billing_month ?? 0);
+        $billingYear = (int) ($record->billing_year ?? 0);
         $effectiveEnrollmentStatus = $this->resolveEffectiveEnrollmentStatusForHealthRecord($healthRecord);
-        $normalizedEnrollmentStatus = strtoupper((string) $effectiveEnrollmentStatus);
-        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
+
+        return $this->resolveSystemStatusByBillingContext(
+            $billingType,
+            $effectiveEnrollmentStatus,
+            $healthRecord->certificate_number ?? null,
+            $resolvedCoverageEndDate,
+            $billingMonth,
+            $billingYear
+        );
+    }
+
+    private function resolveSystemStatusByBillingContext(
+        string $billingType,
+        string $enrollmentStatus,
+        mixed $certificateNumber,
+        ?string $coverageEndDate,
+        ?int $billingMonth = null,
+        ?int $billingYear = null
+    ): string {
+        $normalizedEnrollmentStatus = strtoupper(trim($enrollmentStatus));
         $normalizedSystemStatus = $this->normalizeStatusToken($normalizedEnrollmentStatus);
-        $hasCertificateNumber = $this->hasCertificateNumber($healthRecord->certificate_number ?? null);
+        $mappedPendingStatus = $this->mapEnrollmentStatusToPendingSystemStatus($normalizedEnrollmentStatus);
+        $hasCertificateNumber = $this->hasCertificateNumber($certificateNumber);
 
         if ($mappedPendingStatus !== null) {
             return $billingType === 'active_list_validation' ? 'PENDING_EMPLOYEE' : $mappedPendingStatus;
         }
 
         if ($normalizedSystemStatus === 'RESIGNED') {
-            return $this->resolveResignedSystemStatus($healthRecord->certificate_number ?? null);
+            return $this->resolveResignedSystemStatus($certificateNumber);
         }
 
         if ($normalizedSystemStatus === 'OPTED-OUT') {
@@ -1302,11 +1274,7 @@ class BillingController extends Controller
                 return 'ACTIVE';
             }
 
-            if (!is_null($resolvedCoverageEndDate)) {
-                return 'INACTIVE';
-            }
-
-            return 'ACTIVE';
+            return !is_null($coverageEndDate) ? 'INACTIVE' : 'ACTIVE';
         }
 
         if ($billingType === 'looker_file_validation' && $normalizedSystemStatus === 'AWAITING-DELETION-APPROVAL') {
@@ -1317,27 +1285,26 @@ class BillingController extends Controller
             return 'PENDING_HMO';
         }
 
-        if ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($resolvedCoverageEndDate)) {
+        if ($this->isEnrollmentStatusActiveEquivalent($normalizedSystemStatus) && is_null($coverageEndDate)) {
             return 'ACTIVE';
         }
 
         if ($billingType === 'looker_file_validation') {
-            if ($resolvedCoverageEndDate && $this->isCoverageEndDateOnOrAfterToday($resolvedCoverageEndDate)) {
+            if ($coverageEndDate && $this->isCoverageEndDateOnOrAfterToday($coverageEndDate)) {
                 return $hasCertificateNumber ? 'ACTIVE' : 'PENDING_HMO';
             }
 
             return 'INACTIVE';
         }
 
-        $billingMonth = (int) ($record->billing_month ?? 0);
-        $billingYear = (int) ($record->billing_year ?? 0);
-
         if (
-            $resolvedCoverageEndDate &&
+            $coverageEndDate &&
+            !is_null($billingMonth) &&
+            !is_null($billingYear) &&
             $billingMonth >= 1 &&
             $billingMonth <= 12 &&
             $billingYear >= 2000 &&
-            $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $resolvedCoverageEndDate)
+            $this->isCoverageEndDateOnOrAfterBillingMonthYear($billingMonth, $billingYear, $coverageEndDate)
         ) {
             return $hasCertificateNumber ? 'ACTIVE' : 'PENDING_HMO';
         }
@@ -1448,6 +1415,7 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => $isDependent ? 'DEPENDENT' : 'PRINCIPAL',
                 'birth_date' => $birthDate,
+                'enrollment_status' => trim((string) ($systemRow->enrollment_status ?? '')),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
@@ -1631,6 +1599,7 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => 'PRINCIPAL',
                 'birth_date' => $this->normalizeDateValue($systemRow->principal_birth_date),
+                'enrollment_status' => trim((string) ($systemRow->enrollment_status ?? '')),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
@@ -1703,6 +1672,7 @@ class BillingController extends Controller
                 'full_name' => $fullName,
                 'relation' => 'PRINCIPAL',
                 'birth_date' => $this->normalizeDateValue($systemRow->principal_birth_date),
+                'enrollment_status' => trim((string) ($systemRow->enrollment_status ?? '')),
                 'EFFECTIVE_DATE' => $this->normalizeDateValue($systemRow->coverage_start_date),
                 'ACCOUNT_NO' => $systemRow->certificate_number ? trim((string) $systemRow->certificate_number) : null,
                 'SYSTEM_STATUS' => 'NOT_FOUND',
