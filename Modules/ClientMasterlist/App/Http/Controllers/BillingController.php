@@ -159,8 +159,8 @@ class BillingController extends Controller
         $billingType = $validated['billing_type'] ?? 'credit_memo';
         $isPrincipalOnlyValidationBilling = in_array($billingType, ['looker_file_validation', 'active_list_validation'], true);
         $isStatusDrivenBilling = in_array($billingType, ['modal_billing', 'adjustment_billing', 'looker_file_validation', 'active_list_validation'], true);
-        $resolvedBillingMonth = $validated['billing_month'] ?? null;
-        $resolvedBillingYear = $validated['billing_year'] ?? null;
+        $resolvedBillingMonth = isset($validated['billing_month']) ? (int) $validated['billing_month'] : null;
+        $resolvedBillingYear = isset($validated['billing_year']) ? (int) $validated['billing_year'] : null;
 
         if (in_array($billingType, ['modal_billing', 'adjustment_billing'], true)) {
             $request->validate([
@@ -169,6 +169,9 @@ class BillingController extends Controller
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
                 'birthdate_column_key' => ['required', 'string', 'max:255'],
             ]);
+
+            $resolvedBillingMonth = (int) $request->input('billing_month');
+            $resolvedBillingYear = (int) $request->input('billing_year');
         } elseif ($isPrincipalOnlyValidationBilling) {
             $request->validate([
                 'employee_id_column_key' => ['required', 'string', 'max:255'],
@@ -192,13 +195,13 @@ class BillingController extends Controller
                     ->where('enrollment_id', $validated['enrollment_id'])
                     ->where('billing_type', $billingType);
 
-                if ($isPrincipalOnlyValidationBilling) {
-                    $deleteQuery->delete();
-                } else {
+                if (in_array($billingType, ['modal_billing', 'adjustment_billing'], true)) {
                     $deleteQuery
                         ->where('billing_month', $resolvedBillingMonth)
                         ->where('billing_year', $resolvedBillingYear)
                         ->delete();
+                } elseif ($isPrincipalOnlyValidationBilling) {
+                    $deleteQuery->delete();
                 }
             }
 
@@ -514,7 +517,7 @@ class BillingController extends Controller
         int $billingMonth,
         int $billingYear
     ): array {
-        $employeeId = trim((string) ($rowData[$employeeIdColumnKey] ?? ''));
+        $employeeId = $this->normalizeIdentityValue($rowData[$employeeIdColumnKey] ?? null);
         $birthDateRaw = trim((string) ($rowData[$birthdateColumnKey] ?? ''));
         $birthDate = null;
 
@@ -547,12 +550,16 @@ class BillingController extends Controller
                 $identityQuery->where(function ($principalIdentityQuery) use ($employeeId, $birthDate) {
                     $principalIdentityQuery
                         ->whereNotNull('hi.principal_id')
-                        ->where('p.employee_id', $employeeId)
+                        ->where(function ($principalEmployeeQuery) use ($employeeId) {
+                            $principalEmployeeQuery
+                                ->where(DB::raw('UPPER(TRIM(p.employee_id))'), $employeeId)
+                                ->orWhere(DB::raw('UPPER(TRIM(p.member_id))'), $employeeId);
+                        })
                         ->whereDate('p.birth_date', $birthDate);
                 })->orWhere(function ($dependentIdentityQuery) use ($employeeId, $birthDate) {
                     $dependentIdentityQuery
                         ->whereNotNull('hi.dependent_id')
-                        ->where('d.employee_id', $employeeId)
+                        ->where(DB::raw('UPPER(TRIM(d.employee_id))'), $employeeId)
                         ->whereDate('d.birth_date', $birthDate);
                 });
             })
