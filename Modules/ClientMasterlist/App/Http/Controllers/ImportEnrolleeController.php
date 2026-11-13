@@ -1758,8 +1758,18 @@ class ImportEnrolleeController extends Controller
             // Separate principals and dependents
             foreach ($enrollees as $index => $enrolleeData) {
                 $relationRaw = $enrolleeData['relation'] ?? '';
-                $relation = strtoupper(trim($relationRaw));
-                $employeeId = $enrolleeData['employee_id'] ?? null;
+                $relation = strtoupper(trim((string) $relationRaw));
+                $employeeIdRaw = $enrolleeData['employee_id'] ?? null;
+                $employeeId = trim((string) $employeeIdRaw);
+                $employeeId = $employeeId === '' ? null : $employeeId;
+
+                if ($employeeId !== null) {
+                    $enrolleeData['employee_id'] = $employeeId;
+                }
+
+                if ($relation !== '') {
+                    $enrolleeData['relation'] = $relation;
+                }
 
                 // Handle employee_id with generated number format (employee_id-generated_number)
                 $originalEmployeeId = $employeeId;
@@ -2151,7 +2161,20 @@ class ImportEnrolleeController extends Controller
             $insuranceFields = (new HealthInsurance())->getFillable();
 
             foreach ($enrollees as $enrolleeData) {
-                $employeeId = $enrolleeData['employee_id'] ?? null;
+                $relationRaw = $enrolleeData['relation'] ?? '';
+                $relation = strtoupper(trim((string) $relationRaw));
+                $employeeIdRaw = $enrolleeData['employee_id'] ?? null;
+                $employeeId = trim((string) $employeeIdRaw);
+                $employeeId = $employeeId === '' ? null : $employeeId;
+
+                if ($employeeId !== null) {
+                    $enrolleeData['employee_id'] = $employeeId;
+                }
+
+                if ($relation !== '') {
+                    $enrolleeData['relation'] = $relation;
+                }
+
                 $enrolleeCompanyCode = $enrolleeData['company_code'] ?? null;
                 $enrolleeInsuranceProviderTitle = $enrolleeData['insurance_provider_title'] ?? null;
 
@@ -2566,14 +2589,14 @@ class ImportEnrolleeController extends Controller
                 $filtered = $this->uppercaseStrings($filtered);
                 $filtered['principal_id'] = $enrolleeId;
 
-                $dependentQuery = Dependent::withTrashed()->where('principal_id', $enrolleeId);
-                if (isset($filtered['birth_date']) && !empty($filtered['birth_date'])) {
-                    $dependentQuery = $dependentQuery->where('birth_date', $filtered['birth_date']);
-                }
-
-                $existingDependent = $dependentQuery->first();
+                $existingDependent = $this->resolveExistingDependentForImport((int) $enrolleeId, $filtered);
 
                 if ($existingDependent) {
+                    if ($existingDependent->trashed()) {
+                        $existingDependent->restore();
+                        $hasChanges = true;
+                    }
+
                     $dependentHasChanges = false;
 
                     foreach ($filtered as $key => $value) {
@@ -2617,6 +2640,44 @@ class ImportEnrolleeController extends Controller
             DB::rollBack();
             return response()->json(['message' => 'Failed to attach dependents', 'error' => $e->getMessage()], 500);
         }
+    }
+
+    private function resolveExistingDependentForImport(int $principalId, array $filtered): ?Dependent
+    {
+        if (!empty($filtered['member_id']) && !empty($filtered['birth_date'])) {
+            $match = Dependent::withTrashed()
+                ->where('principal_id', $principalId)
+                ->where('member_id', $filtered['member_id'])
+                ->where('birth_date', $filtered['birth_date'])
+                ->orderByDesc('id')
+                ->first();
+
+            if ($match) {
+                return $match;
+            }
+        }
+
+        if (!empty($filtered['member_id'])) {
+            $match = Dependent::withTrashed()
+                ->where('principal_id', $principalId)
+                ->where('member_id', $filtered['member_id'])
+                ->orderByDesc('id')
+                ->first();
+
+            if ($match) {
+                return $match;
+            }
+        }
+
+        if (!empty($filtered['birth_date'])) {
+            return Dependent::withTrashed()
+                ->where('principal_id', $principalId)
+                ->where('birth_date', $filtered['birth_date'])
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        return null;
     }
 
     /**
