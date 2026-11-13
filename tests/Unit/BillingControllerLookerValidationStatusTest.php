@@ -79,6 +79,84 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         $this->assertNull($result['row_data']['COVERAGE_END_DATE']);
     }
 
+    public function test_looker_validation_marks_awaiting_deletion_approval_without_end_date_as_active_and_matched(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 111,
+            'enrollment_id' => 99,
+            'employee_id' => 'awaiting-delete-approval',
+            'member_id' => null,
+            'enrollment_status' => 'AWAITING-DELETION-APPROVAL',
+            'deleted_at' => null,
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 211,
+            'principal_id' => 111,
+            'coverage_start_date' => '2025-12-01',
+            'coverage_end_date' => null,
+            'certificate_number' => 'CERT-111',
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'resolveLookerFileValidationStatus');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => 'awaiting-delete-approval',
+                'STATUS' => 'ENROLLED',
+            ],
+            'EMPLOYEE_ID',
+            'STATUS',
+            'looker_file_validation'
+        );
+
+        $this->assertSame('ACTIVE', $result['row_data']['SYSTEM_STATUS']);
+        $this->assertTrue($result['row_data']['MATCHED']);
+    }
+
+    public function test_looker_validation_keeps_awaiting_deletion_approval_active_even_with_past_end_date(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 112,
+            'enrollment_id' => 99,
+            'employee_id' => '35knree',
+            'member_id' => null,
+            'enrollment_status' => 'AWAITING-DELETION-APPROVAL',
+            'deleted_at' => null,
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 212,
+            'principal_id' => 112,
+            'coverage_start_date' => '2025-10-01',
+            'coverage_end_date' => '2025-10-31',
+            'certificate_number' => 'CERT-112',
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'resolveLookerFileValidationStatus');
+        $method->setAccessible(true);
+
+        $result = $method->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => '35knree',
+                'STATUS' => 'ENROLLED',
+            ],
+            'EMPLOYEE_ID',
+            'STATUS',
+            'looker_file_validation'
+        );
+
+        $this->assertSame('ACTIVE', $result['row_data']['SYSTEM_STATUS']);
+        $this->assertTrue($result['row_data']['MATCHED']);
+    }
+
     public function test_looker_validation_maps_resigned_with_certificate_to_terminated(): void
     {
         DB::table('cm_principal')->insert([

@@ -8,6 +8,10 @@ Route::controller(EnrollmentController::class)->group(function () {
     Route::get('enrollments/get-enrollment-roles', 'getEnrollmentRoles')->middleware('rbac:enrollments,view');
     Route::post('enrollments/assign-user', 'assignUserToEnrollment')->middleware('rbac:enrollments,update');
     Route::delete('enrollments/remove-user/{id}', 'removeUserFromEnrollment')->middleware('rbac:enrollments,update');
+    Route::post('enrollments/{enrollment}/sync/compare', 'compareSync')->middleware('rbac:enrollments,view');
+    Route::get('enrollments/{enrollment}/sync/history', 'getSyncHistory')->middleware('rbac:enrollments,view');
+    Route::post('enrollments/{enrollment}/sync', 'syncToEnrollment')->middleware('rbac:enrollments,update');
+    Route::post('enrollments/{enrollment}/sync/rollback', 'rollbackSync')->middleware('rbac:enrollments,update');
     Route::get('enrollments/{id}/access', 'getEnrollmentAccess')->middleware('rbac:enrollments,view');
 });
 
