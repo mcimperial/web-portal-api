@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Modules\ClientMasterlist\App\Models\Enrollee;
+use Modules\ClientMasterlist\App\Models\Dependent;
 use Modules\ClientMasterlist\App\Models\Enrollment;
 use Modules\ClientMasterlist\App\Models\HealthInsurance;
+use Illuminate\Support\Facades\DB;
 use App\Http\Traits\UppercaseInput;
 use App\Http\Traits\PasswordDeleteValidation;
 use App\Http\Traits\LogsActions;
@@ -54,6 +56,129 @@ class EnrolleeController extends Controller
     {
         $enrollee = Enrollee::with(['dependents', 'healthInsurance', 'resignedImportAudit'])->findOrFail($id);
         return response()->json($enrollee);
+    }
+
+    /**
+     * List soft-deleted enrollees with deleted dependents.
+     */
+    public function deleted(Request $request): JsonResponse
+    {
+        $enrollmentId = $request->query('enrollment_id');
+        $search = trim((string) $request->query('search', ''));
+
+        $query = Enrollee::onlyTrashed()
+            ->with([
+                'dependentsWithDeleted' => function ($q) {
+                    $q->whereNotNull('deleted_at')
+                        ->orderBy('deleted_at', 'desc');
+                },
+            ]);
+
+        if (!empty($enrollmentId)) {
+            $query->where('enrollment_id', $enrollmentId);
+        }
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('employee_id', 'like', "%{$search}%")
+                    ->orWhere('first_name', 'like', "%{$search}%")
+                    ->orWhere('last_name', 'like', "%{$search}%")
+                    ->orWhere('middle_name', 'like', "%{$search}%")
+                    ->orWhereHas('dependentsWithDeleted', function ($subQ) use ($search) {
+                        $subQ->where('first_name', 'like', "%{$search}%")
+                            ->orWhere('last_name', 'like', "%{$search}%")
+                            ->orWhere('middle_name', 'like', "%{$search}%");
+                    });
+            });
+        }
+
+        $deletedEnrollees = $query
+            ->orderBy('deleted_at', 'desc')
+            ->get()
+            ->map(function (Enrollee $enrollee) {
+                return [
+                    'id' => $enrollee->id,
+                    'enrollment_id' => $enrollee->enrollment_id,
+                    'employee_id' => $enrollee->employee_id,
+                    'first_name' => $enrollee->first_name,
+                    'last_name' => $enrollee->last_name,
+                    'middle_name' => $enrollee->middle_name,
+                    'suffix' => $enrollee->suffix,
+                    'deleted_at' => optional($enrollee->deleted_at)->toDateTimeString(),
+                    'dependents' => $enrollee->dependentsWithDeleted->map(function ($dependent) {
+                        return [
+                            'id' => $dependent->id,
+                            'first_name' => $dependent->first_name,
+                            'last_name' => $dependent->last_name,
+                            'middle_name' => $dependent->middle_name,
+                            'suffix' => $dependent->suffix,
+                            'relation' => $dependent->relation,
+                            'deleted_at' => optional($dependent->deleted_at)->toDateTimeString(),
+                        ];
+                    })->values(),
+                ];
+            })
+            ->values();
+
+        return response()->json($deletedEnrollees);
+    }
+
+    /**
+     * Retract soft deletion for multiple enrollees and their dependents.
+     */
+    public function retractDeletions(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'principal_ids' => ['required', 'array', 'min:1'],
+            'principal_ids.*' => ['integer', 'distinct'],
+        ]);
+
+        $principalIds = array_values(array_unique(array_map('intval', $validated['principal_ids'])));
+
+        DB::beginTransaction();
+
+        try {
+            $principals = Enrollee::onlyTrashed()
+                ->whereIn('id', $principalIds)
+                ->get();
+
+            if ($principals->isEmpty()) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'No deleted enrollees found for provided principal_ids.',
+                ], 404);
+            }
+
+            $matchedIds = $principals->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+            Enrollee::withTrashed()
+                ->whereIn('id', $matchedIds)
+                ->update(['deleted_by' => null]);
+
+            $restoredDependentsCount = Dependent::onlyTrashed()
+                ->whereIn('principal_id', $matchedIds)
+                ->restore();
+
+            $restoredPrincipalsCount = Enrollee::onlyTrashed()
+                ->whereIn('id', $matchedIds)
+                ->restore();
+
+            DB::commit();
+
+            return response()->json([
+                'message' => 'Deleted enrollees retracted successfully.',
+                'restored_principals' => (int) $restoredPrincipalsCount,
+                'restored_dependents' => (int) $restoredDependentsCount,
+                'principal_ids' => $matchedIds,
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'message' => 'Failed to retract deleted enrollees.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
