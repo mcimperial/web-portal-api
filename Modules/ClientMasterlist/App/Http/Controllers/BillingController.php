@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 use Modules\ClientMasterlist\App\Models\BillingRecord;
 use Modules\ClientMasterlist\App\Models\Dependent;
 use Modules\ClientMasterlist\App\Models\Enrollee;
@@ -135,6 +136,8 @@ class BillingController extends Controller
             ], 503);
         }
 
+        $this->prepareImportExecutionBudget();
+
         $validated = $request->validate([
             'enrollment_id' => ['required', 'integer', 'exists:cm_enrollment,id'],
             'billing_type' => ['nullable', 'string', 'in:credit_memo,modal_billing,adjustment_billing,looker_file_validation,active_list_validation'],
@@ -183,6 +186,8 @@ class BillingController extends Controller
                 ]);
             }
         }
+
+        $this->validateImportColumnMappings($validated, $billingType);
 
         $importedRows = [];
         $modalReconReport1 = [];
@@ -323,6 +328,67 @@ class BillingController extends Controller
         }
 
         return response()->json($responsePayload, 201);
+    }
+
+    private function prepareImportExecutionBudget(): void
+    {
+        DB::disableQueryLog();
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(300);
+        }
+
+        @ini_set('max_execution_time', '300');
+    }
+
+    private function validateImportColumnMappings(array $validated, string $billingType): void
+    {
+        $availableColumnKeys = [];
+
+        foreach (($validated['columns'] ?? []) as $column) {
+            if (is_string($column)) {
+                $resolvedKey = trim($column);
+            } elseif (is_array($column)) {
+                $resolvedKey = trim((string) ($column['key'] ?? $column['name'] ?? $column['value'] ?? ''));
+            } else {
+                $resolvedKey = '';
+            }
+
+            if ($resolvedKey !== '') {
+                $availableColumnKeys[$resolvedKey] = true;
+            }
+        }
+
+        $requiredMappings = [];
+
+        if (in_array($billingType, ['modal_billing', 'adjustment_billing'], true)) {
+            $requiredMappings[] = 'employee_id_column_key';
+            $requiredMappings[] = 'birthdate_column_key';
+        }
+
+        if (in_array($billingType, ['looker_file_validation', 'active_list_validation'], true)) {
+            $requiredMappings[] = 'employee_id_column_key';
+        }
+
+        if ($billingType === 'looker_file_validation') {
+            $requiredMappings[] = 'status_column_key';
+        }
+
+        $mappingErrors = [];
+
+        foreach ($requiredMappings as $mappingField) {
+            $selectedKey = trim((string) ($validated[$mappingField] ?? ''));
+
+            if ($selectedKey === '' || !isset($availableColumnKeys[$selectedKey])) {
+                $mappingErrors[$mappingField] = [
+                    sprintf('The selected mapping "%s" does not exist in the uploaded columns.', $selectedKey),
+                ];
+            }
+        }
+
+        if (!empty($mappingErrors)) {
+            throw ValidationException::withMessages($mappingErrors);
+        }
     }
 
     public function softDeleteReconReport2Row(Request $request): JsonResponse
