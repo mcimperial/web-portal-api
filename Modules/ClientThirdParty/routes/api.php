@@ -67,13 +67,17 @@ Route::prefix('v1/third-party')->name('third-party.')->group(function () {
 
     // Enrollment listing & detail (title-based)
     Route::get('enrollments',                                          [EnrollmentApiController::class, 'indexEnrollments'])->middleware('api.key:enrollment:read')->name('enrollments.index');
-    Route::get('enrollments/{enrollmentTitle}/details',                [EnrollmentApiController::class, 'showEnrollment'])->middleware('api.key:enrollment:read')->name('enrollments.details');
-    Route::get('enrollments/{enrollmentTitle}/summary',                [EnrollmentApiController::class, 'summary'])->middleware('api.key:enrollment:read')->name('enrollments.summary');
+    Route::get('enrollments/details',                                   [EnrollmentApiController::class, 'showEnrollment'])->middleware('api.key:enrollment:read')->name('enrollments.details');
+    Route::get('enrollments/summary',                                   [EnrollmentApiController::class, 'summary'])->middleware('api.key:enrollment:read')->name('enrollments.summary');
 
     // Principal endpoints
     Route::get('principals',                                            [EnrollmentApiController::class, 'listPrincipals'])->middleware('api.key:principal:list:read')->name('principals.index');
     Route::get('principals/read',                                       [EnrollmentApiController::class, 'showPrincipal'])->middleware('api.key:principal:read')->name('principals.read');
+    Route::post('principals',                                             [EnrollmentApiController::class, 'createPrincipal'])->middleware('api.key:principal:create')->name('principals.create');
+    Route::put('principals/{principalEmployeeId?}',                       [EnrollmentApiController::class, 'updatePrincipal'])->middleware('api.key:principal:update')->name('principals.update');
 
     // Dependent endpoints
-    Route::get('enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents', [EnrollmentApiController::class, 'dependents'])->middleware('api.key:dependent:read')->name('dependents.index');
+    Route::get('principals/{principalEmployeeId}/dependents', [EnrollmentApiController::class, 'dependents'])->middleware('api.key:dependent:read')->name('dependents.index');
+    Route::post('principals/{principalEmployeeId?}/dependents', [EnrollmentApiController::class, 'createDependent'])->middleware('api.key:dependent:create')->name('dependents.create');
+    Route::put('principals/{principalEmployeeId?}/dependents/{dependentId?}', [EnrollmentApiController::class, 'updateDependent'])->middleware('api.key:dependent:update')->name('dependents.update');
 });

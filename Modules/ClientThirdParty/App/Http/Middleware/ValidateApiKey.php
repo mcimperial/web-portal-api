@@ -3,6 +3,7 @@
 namespace Modules\ClientThirdParty\App\Http\Middleware;
 
 use Closure;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Modules\ClientThirdParty\App\Models\ApiCredential;
 use Modules\ClientThirdParty\App\Models\ApiUsageLog;
@@ -118,10 +119,80 @@ class ValidateApiKey
                     'request_uri' => '/' . ltrim($request->getRequestUri(), '/'),
                     'query_string' => (string) $request->server('QUERY_STRING', ''),
                     'query' => $request->query(),
+                    'request_body' => $this->extractRequestBodyForLog($request),
                 ],
             ]);
         } catch (Throwable $e) {
         }
+    }
+
+    private function extractRequestBodyForLog(Request $request)
+    {
+        $method = strtoupper($request->method());
+
+        if (!in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            return null;
+        }
+
+        $payload = $request->all();
+        if ($payload === [] || $payload === null) {
+            return null;
+        }
+
+        return $this->sanitizeLogValue($payload);
+    }
+
+    private function sanitizeLogValue($value)
+    {
+        if ($value instanceof UploadedFile) {
+            return [
+                'file_name' => $value->getClientOriginalName(),
+                'mime_type' => $value->getClientMimeType(),
+                'size' => $value->getSize(),
+            ];
+        }
+
+        if (is_array($value)) {
+            $sanitized = [];
+
+            foreach ($value as $key => $nestedValue) {
+                if (is_string($key) && $this->isSensitiveKey($key)) {
+                    $sanitized[$key] = '[REDACTED]';
+                    continue;
+                }
+
+                $sanitized[$key] = $this->sanitizeLogValue($nestedValue);
+            }
+
+            return $sanitized;
+        }
+
+        if (is_object($value)) {
+            if (method_exists($value, 'toArray')) {
+                return $this->sanitizeLogValue($value->toArray());
+            }
+
+            if ($value instanceof \JsonSerializable) {
+                return $this->sanitizeLogValue($value->jsonSerialize());
+            }
+
+            return (string) json_encode($value, JSON_PARTIAL_OUTPUT_ON_ERROR);
+        }
+
+        return $value;
+    }
+
+    private function isSensitiveKey(string $key): bool
+    {
+        $normalized = strtolower($key);
+
+        foreach (['password', 'secret', 'token', 'api_key', 'authorization'] as $needle) {
+            if (str_contains($normalized, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function maskApiKey(?string $apiKey): ?string
