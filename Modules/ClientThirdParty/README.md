@@ -258,7 +258,7 @@ All endpoints return error responses in the following format:
 
 ## Enrollment API
 
-Read-only endpoints for third-party integrations to access enrollment data.
+Read and write endpoints for third-party integrations to access enrollment data.
 
 **Base URL:** `/api/v1/third-party`  
 **Authentication:** `X-API-Key` with route-specific permissions.
@@ -289,7 +289,12 @@ Admins can restrict one API key to multiple enrollment titles:
 - `enrollment:read` → enrollment listing/detail/summary
 - `principal:list:read` → principals list/search (categorized by enrollment)
 - `principal:read` → single principal read by params
+- `principal:create` → create principal (provider resolved to enrollment)
+- `principal:update` → update principal (provider resolved to enrollment)
+- `principal:resigned:update` → required when setting `employee_end_date` / resigned transition
 - `dependent:read` → dependents listing
+- `dependent:create` → create dependent under principal (provider resolved)
+- `dependent:update` → update dependent under principal (provider resolved)
 
 ---
 
@@ -393,7 +398,7 @@ Required permission: `principal:list:read`
 ### 3. Show Enrollment Details
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}/details
+GET /api/v1/third-party/enrollments/details
 ```
 
 Returns the details of a single enrollment including its insurance provider and company relationships.
@@ -456,7 +461,7 @@ Required permission: `principal:read`
 ### 5. List Dependents
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}/principals/{principalEmployeeId}/dependents
+GET /api/v1/third-party/principals/{principalEmployeeId}/dependents
 ```
 
 Returns all dependents registered under a specific principal within the given enrollment.
@@ -467,8 +472,8 @@ Required permission: `dependent:read`
 
 | Parameter     | Type    | Required | Description                 | Example |
 |---------------|---------|----------|-----------------------------|---------|
-| `enrollmentTitle` | string | Yes    | The enrollment title (URL-encoded) | `Acme%202026%20Enrollment` |
 | `principalEmployeeId` | string | Yes | Principal employee ID | `EMP-0042` |
+| `provider` (query) | string | Yes | Insurance provider title | `MAXICARE` |
 
 **Success Response `200`**
 
@@ -485,10 +490,206 @@ Required permission: `dependent:read`
 
 ---
 
-### 6. Enrollment Summary
+### 6. Create Principal
 
 ```
-GET /api/v1/third-party/enrollments/{enrollmentTitle}/summary
+POST /api/v1/third-party/principals
+```
+
+Uses `provider` from body; backend resolves enrollment from API key allowed enrollments.
+
+Required permission: `principal:create`
+
+**Create/Update Principal Variables**
+
+| Field | Required on Create | Required on Update | Notes |
+|---|---|---|---|
+| `provider` | Yes | Yes | Provider title (mapped to allowed enrollment) |
+| `employee_id` | Yes | No | Employee ID for principal |
+| `first_name` | Yes | No | Principal first name |
+| `last_name` | Yes | No | Principal last name |
+| `suffix` | No | No | Optional suffix |
+| `birth_date` | Yes | No | Date format `YYYY-MM-DD` |
+| `gender` | No | No | Optional |
+| `marital_status` | No | No | Optional |
+| `email1` | Yes | No | Primary email |
+| `email2` | No | No | Optional secondary email |
+| `phone1` | No | No | Optional phone |
+| `phone2` | No | No | Optional phone |
+| `employee_start_date` | Yes | No | Employment start date (`YYYY-MM-DD`) |
+| `employee_end_date` | No | Special resigned update only | Use only for resigned transition update |
+
+Only the fields listed above are permitted for principal create/update.
+
+**Single Payload**
+
+```json
+{
+  "provider": "maxicare",
+  "employee_id": "EMP-0101",
+  "first_name": "JOHN",
+  "last_name": "DOE",
+  "suffix": "JR",
+  "birth_date": "1990-01-01",
+  "gender": "MALE",
+  "marital_status": "SINGLE",
+  "email1": "john.doe@example.com",
+  "email2": "john.alt@example.com",
+  "phone1": "09171234567",
+  "phone2": "0281234567",
+  "employee_start_date": "2022-05-01"
+}
+```
+
+Example `form-data` fields (same values):
+
+```text
+provider=maxicare
+employee_id=EMP-0101
+first_name=JOHN
+last_name=DOE
+suffix=JR
+birth_date=1990-01-01
+gender=MALE
+marital_status=SINGLE
+email1=john.doe@example.com
+email2=john.alt@example.com
+phone1=09171234567
+phone2=0281234567
+employee_start_date=2022-05-01
+```
+
+Additional example:
+
+```json
+{
+  "provider": "MAXICARE",
+  "employee_id": "EMP-1001",
+  "first_name": "JOHN",
+  "last_name": "DOE",
+  "birth_date": "1990-01-15",
+  "email1": "john.doe@example.com",
+  "employee_start_date": "2021-01-01"
+}
+```
+
+**Batch Payload**
+
+```json
+{
+  "data": [
+    {
+      "provider": "MAXICARE",
+      "employee_id": "EMP-1001",
+      "first_name": "JOHN",
+      "last_name": "DOE",
+      "birth_date": "1990-01-15",
+      "email1": "john.doe@example.com",
+      "employee_start_date": "2021-01-01"
+    },
+    {
+      "provider": "PHILCARE",
+      "employee_id": "EMP-1002",
+      "first_name": "JANE",
+      "last_name": "SMITH",
+      "birth_date": "1992-03-22",
+      "email1": "jane.smith@example.com",
+      "employee_start_date": "2022-09-15"
+    }
+  ]
+}
+```
+
+**Batch Insert Note**
+
+Use `data: []` with one object per principal to insert multiple principals in one request.
+
+**Resigned Update Example (employee_id + employee_end_date only)**
+
+```json
+{
+  "provider": "MAXICARE",
+  "employee_id": "EMP-1001",
+  "employee_end_date": "2026-11-18"
+}
+```
+
+When `employee_end_date` is provided, principal status is updated to `INACTIVE`, enrollment status is set to `RESIGNED`, and `back_date` is set to the same `employee_end_date` value.
+
+### 7. Update Principal
+
+```
+PUT /api/v1/third-party/principals/{principalEmployeeId}
+PUT /api/v1/third-party/principals
+```
+
+For batch/no-path usage, pass `principal_employee_id` per item.
+
+Required permission: `principal:update`
+
+If payload includes `employee_end_date`, credential must also include: `principal:resigned:update`
+
+If using no-path update (`PUT /api/v1/third-party/principals`), you may send `employee_id` as the lookup key (or `principal_employee_id`).
+
+Working single update with path ID:
+
+`PUT /api/v1/third-party/principals/EMP-1001`
+
+If using `PUT /api/v1/third-party/principals` (without path ID), include `principal_employee_id` in payload.
+
+### 8. Create Dependent
+
+```
+POST /api/v1/third-party/principals/{principalEmployeeId?}/dependents
+```
+
+For batch/no-path usage, pass `principal_employee_id` per item.
+
+Working single create with path ID:
+
+`POST /api/v1/third-party/principals/EMP-1001/dependents`
+
+If using `POST /api/v1/third-party/principals/dependents`, include `principal_employee_id` in payload.
+
+### 9. Update Dependent
+
+```
+PUT /api/v1/third-party/principals/{principalEmployeeId}/dependents/{dependentId?}
+```
+
+For batch/no-path dependent id, pass `dependent_id` per item.
+
+Working single update with full path IDs:
+
+`PUT /api/v1/third-party/principals/EMP-1001/dependents/2001`
+
+If route omits dependent id, include `dependent_id` in payload.
+
+### Provider Validation Errors (`422`)
+
+If provider is invalid or missing, response includes `allowed_providers`:
+
+```json
+{
+  "success": false,
+  "message": "Provider is not allowed for this API key.",
+  "errors": [
+    {
+      "index": 0,
+      "provider": "UNKNOWN_PROVIDER",
+      "message": "Provider is not allowed for this API key.",
+      "allowed_providers": ["MAXICARE", "PHILCARE"]
+    }
+  ]
+}
+```
+
+Batch partial success uses `207` and returns `summary` + itemized `errors`.
+
+### 10. Enrollment Summary
+
+```
+GET /api/v1/third-party/enrollments/summary
 ```
 
 Returns quick statistics for an enrollment: total principals, total dependents, and a breakdown of principals grouped by `enrollment_status`.
