@@ -133,7 +133,10 @@ class EnrollmentApiController extends Controller
      *
      * Returns a paginated list of principals grouped by enrollment title.
      * The result is always scoped by the API key's `params.enrollment_titles`
-     * when configured.
+        * when configured.
+        *
+        * Principal responses include top-level `certificate_number` and `premium`.
+        * Nested dependents include top-level `certificate_number` only.
      *
      * @authenticated
     *
@@ -151,7 +154,7 @@ class EnrollmentApiController extends Controller
      *     {
      *       "enrollment_title": "Acme 2026 Enrollment",
      *       "total": 1,
-     *       "principals": [{ "id": 10, "employee_id": "EMP-0042", "...": "..." }]
+    *       "principals": [{ "id": 10, "employee_id": "EMP-0042", "certificate_number": "CERT-001", "premium": 1200, "dependents": [{ "id": 20, "certificate_number": "DCERT-001" }], "...": "..." }]
      *     }
      *   ],
      *   "meta": {
@@ -186,7 +189,7 @@ class EnrollmentApiController extends Controller
         $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
 
         $query = Enrollee::query()
-            ->with(['enrollment:id,title', 'dependents'])
+            ->with(['enrollment:id,title', 'dependents.healthInsurance', 'healthInsurance'])
             ->when(!empty($allowedEnrollmentTitles), function ($q) use ($allowedEnrollmentTitles) {
                 $q->whereHas('enrollment', function ($enrollmentQuery) use ($allowedEnrollmentTitles) {
                     $this->applyEnrollmentTitleFilter($enrollmentQuery, $allowedEnrollmentTitles);
@@ -226,7 +229,7 @@ class EnrollmentApiController extends Controller
                 return [
                     'enrollment_title' => $title,
                     'total' => $items->count(),
-                    'principals' => $items->map(fn (Enrollee $principal) => $principal->toArray())->values()->all(),
+                    'principals' => $items->map(fn (Enrollee $principal) => $this->transformPrincipalForResponse($principal))->values()->all(),
                 ];
             })
             ->values()
@@ -254,6 +257,8 @@ class EnrollmentApiController extends Controller
      * Show Single Principal (Read)
      *
      * Returns one principal record by params, scoped to selected enrollments.
+        * Principal includes top-level `certificate_number` and `premium`.
+        * Nested dependents include top-level `certificate_number` only.
      *
      * @authenticated
     *
@@ -263,7 +268,14 @@ class EnrollmentApiController extends Controller
      *
      * @response 200 {
      *   "success": true,
-     *   "data": { "id": 10, "employee_id": "EMP-0042", "...": "..." }
+    *   "data": {
+    *     "id": 10,
+    *     "employee_id": "EMP-0042",
+    *     "certificate_number": "CERT-001",
+    *     "premium": 1200,
+    *     "dependents": [{ "id": 20, "certificate_number": "DCERT-001" }],
+    *     "...": "..."
+    *   }
      * }
      */
     public function showPrincipal(Request $request): JsonResponse
@@ -275,7 +287,7 @@ class EnrollmentApiController extends Controller
         $allowedEnrollmentTitles = $this->getAllowedEnrollmentTitles($request);
 
         $principal = Enrollee::query()
-            ->with(['enrollment:id,title', 'dependents'])
+            ->with(['enrollment:id,title', 'dependents.healthInsurance', 'healthInsurance'])
             ->where('employee_id', $validated['employee_id'])
             ->when(!empty($allowedEnrollmentTitles), function ($q) use ($allowedEnrollmentTitles) {
                 $q->whereHas('enrollment', function ($enrollmentQuery) use ($allowedEnrollmentTitles) {
@@ -297,10 +309,28 @@ class EnrollmentApiController extends Controller
             'enrollment' => [
                 'title' => $principal->enrollment?->title,
             ],
-            'data' => $principal,
+            'data' => $this->transformPrincipalForResponse($principal),
         ]);
     }
 
+    /**
+     * Create Principal
+     *
+     * Creates one or multiple principals for the resolved provider enrollment.
+    * Supports insurance payload fields (excluding premium).
+     *
+     * @authenticated
+    *
+    * Required API key permission: `principal:create`
+     *
+     * @bodyParam provider string required Insurance provider title. Example: MAXICARE
+     * @bodyParam employee_id string required Principal employee ID. Example: EMP-0042
+     * @bodyParam first_name string required Principal first name. Example: JOHN
+     * @bodyParam last_name string required Principal last name. Example: DOE
+     * @bodyParam birth_date string required Date format: Y-m-d. Example: 1990-01-15
+     * @bodyParam email1 string required Principal primary email. Example: john.doe@example.com
+     * @bodyParam employment_start_date string required Date format: Y-m-d. Example: 2024-01-01
+     */
     public function createPrincipal(Request $request): JsonResponse
     {
         [$items, $isBatch] = $this->extractDataItems($request);
@@ -350,7 +380,7 @@ class EnrollmentApiController extends Controller
             }
 
             $principalData = $this->validatePrincipalData($item, false);
-            $insuranceData = [];
+            $insuranceData = $this->validatePrincipalInsuranceData($item, false);
 
             if ($this->requiresResignedPermission($principalData) && !$this->hasCredentialPermission($request, 'principal:resigned:update')) {
                 $errors[] = [
@@ -386,12 +416,17 @@ class EnrollmentApiController extends Controller
                 'company_id' => $enrollment->company_id,
             ]));
 
+            $this->upsertPrincipalInsurance($principal, $insuranceData);
+
             $created[] = [
                 'provider' => $provider,
                 'enrollment' => [
                     'title' => $enrollment->title,
                 ],
-                'data' => $principal->fresh()->load(['enrollment:id,title', 'dependents', 'healthInsurance']),
+                'data' => $this->transformPrincipalForResponse(
+                    $principal->fresh()->load(['enrollment:id,title', 'dependents.healthInsurance', 'healthInsurance']),
+                    false
+                ),
             ];
         }
 
@@ -405,6 +440,19 @@ class EnrollmentApiController extends Controller
         );
     }
 
+    /**
+     * Update Principal
+     *
+     * Updates one or multiple principals for accessible enrollments.
+    * Supports insurance payload fields (excluding premium).
+     *
+     * @authenticated
+    *
+    * Required API key permission: `principal:update`
+     *
+     * @bodyParam provider string optional Insurance provider title. Example: MAXICARE
+     * @bodyParam principal_employee_id string optional Principal employee ID target. Example: EMP-0042
+     */
     public function updatePrincipal(Request $request, ?string $principalEmployeeId = null): JsonResponse
     {
         [$items, $isBatch] = $this->extractDataItems($request);
@@ -491,7 +539,7 @@ class EnrollmentApiController extends Controller
             }
 
             $principalData = $this->validatePrincipalData($item, true);
-            $insuranceData = [];
+            $insuranceData = $this->validatePrincipalInsuranceData($item, true);
 
             if ($this->requiresResignedPermission($principalData) && !$this->hasCredentialPermission($request, 'principal:resigned:update')) {
                 $errors[] = [
@@ -512,6 +560,8 @@ class EnrollmentApiController extends Controller
                     $principal->update($this->uppercaseStrings($currentPrincipalData));
                 }
 
+                $this->upsertPrincipalInsurance($principal, $currentInsuranceData);
+
                 $principal->load(['enrollment:id,title,insurance_provider_id', 'enrollment.insuranceProvider:id,title']);
 
                 $resolvedProvider = $provider !== ''
@@ -523,7 +573,10 @@ class EnrollmentApiController extends Controller
                     'enrollment' => [
                         'title' => $principal->enrollment?->title,
                     ],
-                    'data' => $principal->fresh()->load(['enrollment:id,title', 'dependents', 'healthInsurance']),
+                    'data' => $this->transformPrincipalForResponse(
+                        $principal->fresh()->load(['enrollment:id,title', 'dependents.healthInsurance', 'healthInsurance']),
+                        false
+                    ),
                 ];
             }
         }
@@ -542,7 +595,9 @@ class EnrollmentApiController extends Controller
      * List Dependents
      *
      * Returns all dependents registered under a specific principal
-     * within the given enrollment.
+        * within the given enrollment.
+        *
+        * Each dependent in this GET response includes top-level `certificate_number`.
      *
      * @authenticated
     *
@@ -553,7 +608,7 @@ class EnrollmentApiController extends Controller
      *
      * @response 200 {
      *   "success": true,
-     *   "data": [{ "id": 20, "principal_id": 10, "first_name": "Jane", "...": "..." }],
+    *   "data": [{ "id": 20, "principal_id": 10, "first_name": "Jane", "certificate_number": "DCERT-001", "...": "..." }],
      *   "total": 2
      * }
      */
@@ -589,18 +644,36 @@ class EnrollmentApiController extends Controller
             ], 404);
         }
 
-        $dependents = Dependent::where('principal_id', $principal->id)->get();
+        $dependents = Dependent::with('healthInsurance')
+            ->where('principal_id', $principal->id)
+            ->get();
 
         return response()->json([
             'success' => true,
             'enrollment' => [
                 'title' => $enrollment->title,
             ],
-            'data'    => $dependents,
+            'data'    => $dependents->map(fn (Dependent $dependent) => $this->transformDependentForResponse($dependent))->values()->all(),
             'total'   => $dependents->count(),
         ]);
     }
 
+    /**
+     * Create Dependent
+     *
+     * Creates one or multiple dependents under the resolved principal.
+    * Supports insurance payload fields (excluding premium).
+     *
+     * @authenticated
+    *
+    * Required API key permission: `dependent:create`
+     *
+     * @bodyParam provider string required Insurance provider title. Example: MAXICARE
+     * @bodyParam principal_employee_id string required Principal employee ID. Example: EMP-0042
+     * @bodyParam first_name string required Dependent first name. Example: JANE
+     * @bodyParam last_name string required Dependent last name. Example: DOE
+     * @bodyParam relation string required Relationship to principal. Example: SPOUSE
+     */
     public function createDependent(Request $request, ?string $principalEmployeeId = null): JsonResponse
     {
         [$items, $isBatch] = $this->extractDataItems($request);
@@ -678,7 +751,7 @@ class EnrollmentApiController extends Controller
                 'principal' => [
                     'employee_id' => $principal->employee_id,
                 ],
-                'data' => $dependent->fresh()->load('healthInsurance'),
+                'data' => $this->transformDependentForResponse($dependent->fresh()->load('healthInsurance')),
             ];
         }
 
@@ -692,6 +765,20 @@ class EnrollmentApiController extends Controller
         );
     }
 
+    /**
+     * Update Dependent
+     *
+     * Updates one or multiple dependents under the resolved principal.
+    * Supports insurance payload fields (excluding premium).
+     *
+     * @authenticated
+    *
+    * Required API key permission: `dependent:update`
+     *
+     * @bodyParam provider string required Insurance provider title. Example: MAXICARE
+     * @bodyParam principal_employee_id string required Principal employee ID. Example: EMP-0042
+     * @bodyParam dependent_id integer required Dependent id to update. Example: 20
+     */
     public function updateDependent(Request $request, ?string $principalEmployeeId = null, ?int $dependentId = null): JsonResponse
     {
         [$items, $isBatch] = $this->extractDataItems($request);
@@ -793,7 +880,7 @@ class EnrollmentApiController extends Controller
                 'principal' => [
                     'employee_id' => $principal->employee_id,
                 ],
-                'data' => $dependent->fresh()->load('healthInsurance'),
+                'data' => $this->transformDependentForResponse($dependent->fresh()->load('healthInsurance')),
             ];
         }
 
@@ -946,6 +1033,11 @@ class EnrollmentApiController extends Controller
             'phone1',
             'phone2',
             'employee_start_date',
+            'certificate_number',
+            'coverage_start_date',
+            'coverage_end_date',
+            'certificate_date_issued',
+            'is_company_paid',
         ];
 
         if ($isUpdate) {
@@ -967,6 +1059,19 @@ class EnrollmentApiController extends Controller
         }
 
         return null;
+    }
+
+    private function validatePrincipalInsuranceData(array $payload, bool $isUpdate): array
+    {
+        $prefix = $isUpdate ? 'sometimes|' : '';
+
+        return Validator::make($payload, [
+            'certificate_number' => 'nullable|string|max:255',
+            'coverage_start_date' => 'nullable|date_format:Y-m-d',
+            'coverage_end_date' => 'nullable|date_format:Y-m-d',
+            'certificate_date_issued' => 'nullable|date_format:Y-m-d',
+            'is_company_paid' => 'nullable',
+        ])->validate();
     }
 
     private function requiresResignedPermission(array $principalData): bool
@@ -1131,6 +1236,39 @@ class EnrollmentApiController extends Controller
         }
 
         return $this->normalizeInputTitles($credential->params['enrollment_titles'] ?? []);
+    }
+
+    private function transformPrincipalForResponse(Enrollee $principal, bool $includePremium = true): array
+    {
+        $principal->loadMissing(['healthInsurance', 'dependents.healthInsurance']);
+
+        $data = $principal->toArray();
+        $data['certificate_number'] = $principal->healthInsurance->certificate_number ?? null;
+
+        if ($includePremium) {
+            $data['premium'] = $principal->healthInsurance->premium ?? null;
+        }
+
+        $data['dependents'] = collect($principal->dependents)
+            ->map(fn (Dependent $dependent) => $this->transformDependentForResponse($dependent))
+            ->values()
+            ->all();
+
+        return $data;
+    }
+
+    private function transformDependentForResponse(Dependent $dependent, bool $includePremium = false): array
+    {
+        $dependent->loadMissing('healthInsurance');
+
+        $data = $dependent->toArray();
+        $data['certificate_number'] = $dependent->healthInsurance->certificate_number ?? null;
+
+        if ($includePremium) {
+            $data['premium'] = $dependent->healthInsurance->premium ?? null;
+        }
+
+        return $data;
     }
 
     private function normalizeInputTitles(mixed $value): array
