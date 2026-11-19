@@ -9,7 +9,7 @@ class EnrolleeExportDefinition
             'columns' => [
                 'enrollment_status', 'relation', 'premium', 'employee_id', 'first_name',
                 'last_name', 'middle_name', 'suffix', 'birth_date', 'marital_status',
-                'gender', 'email1', 'phone1', 'department', 'position', 'effective_date'
+                'gender', 'department', 'position', 'effective_date'
             ],
             'labels' => [
                 'remarks' => 'Remarks', 'reason_for_skipping' => 'Reason for Skipping',
@@ -40,8 +40,8 @@ class EnrolleeExportDefinition
                 'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
                 'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
                 'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
-                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
-                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
+                'maxicare_civil_status', 'maxicare_birth_date',
+                'maxicare_effective_date', 'maxicare_philhealth',
                 'maxicare_plan_code'
             ],
             'labels' => [
@@ -65,8 +65,8 @@ class EnrolleeExportDefinition
                 'maxicare_last_name', 'maxicare_middle_name', 'maxicare_extension',
                 'maxicare_gender', 'maxicare_member_type', 'maxicare_relation',
                 'maxicare_address_line_1', 'maxicare_city', 'maxicare_province',
-                'maxicare_civil_status', 'maxicare_birth_date', 'maxicare_mobile_no',
-                'maxicare_email', 'maxicare_effective_date', 'maxicare_philhealth',
+                'maxicare_civil_status', 'maxicare_birth_date',
+                'maxicare_effective_date', 'maxicare_philhealth',
                 'maxicare_plan_code', 'maxicare_plan_description', 'maxicare_plan_type_d'
             ],
             'labels' => [
@@ -91,7 +91,7 @@ class EnrolleeExportDefinition
                 'maxicare_employee_id', 'maxicare_last_name', 'maxicare_first_name',
                 'maxicare_middle_name', 'maxicare_extension', 'maxicare_gender',
                 'maxicare_street', 'maxicare_city', 'maxicare_province', 'maxicare_postal_code',
-                'maxicare_email', 'maxicare_mobile_no', 'maxicare_member_type',
+                'maxicare_member_type',
                 'maxicare_birth_date', 'relation', 'marital_status',
                 'maxicare_effective_date', 'maxicare_date_hired', 'maxicare_date_regularization',
                 'maxicare_is_philhealth_member', 'maxicare_philhealth_conditions',
