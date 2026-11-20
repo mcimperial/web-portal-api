@@ -11,9 +11,15 @@ class SmsHelper
 {
     public static function send(string $mobile, string $message): array
     {
-        $config = config('services.sms');
+        $config = array_merge([
+            'enabled' => true,
+            'url' => 'http://46.250.238.187/goip/sendsms/',
+            'username' => 'root',
+            'password' => 'LACSONSMS',
+            'timeout' => 20,
+        ], (array) config('services.sms', []));
 
-        if (! ($config['enabled'] ?? false)) {
+        if (! filter_var($config['enabled'], FILTER_VALIDATE_BOOLEAN)) {
             return self::failure('SMS notifications are disabled.');
         }
 
@@ -22,13 +28,14 @@ class SmsHelper
             return self::failure('Invalid mobile number. Expected 09XXXXXXXXX, 639XXXXXXXXX, or 9XXXXXXXXX.');
         }
 
-        if (blank($config['url'] ?? null) || blank($config['username'] ?? null) || blank($config['password'] ?? null)) {
-            return self::failure('SMS gateway is not configured.');
+        if (blank($config['url']) || blank($config['username']) || blank($config['password'])) {
+            return self::failure('GOIP SMS gateway credentials are missing.');
         }
 
         try {
             $response = Http::acceptJson()
                 ->asJson()
+                ->withoutVerifying()
                 ->connectTimeout(8)
                 ->timeout((int) ($config['timeout'] ?? 20))
                 ->post($config['url'], [

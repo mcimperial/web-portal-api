@@ -81,15 +81,17 @@ class DonorDonationDriveController extends Controller
             'expires_at' => now()->addMinutes(5)->timestamp,
         ], now()->addMinutes(5));
 
-        $sent = $channel === 'email'
-            ? $this->sendOtpEmail($identifier, $donor?->first_name, $otp)
-            : (SmsHelper::send($identifier, DonationOtpMessage::build($otp))['success'] ?? false);
+        $delivery = $channel === 'email'
+            ? ['success' => $this->sendOtpEmail($identifier, $donor?->first_name, $otp)]
+            : SmsHelper::send($identifier, DonationOtpMessage::build($otp));
+        $sent = $delivery['success'] ?? false;
 
         if (! $sent) {
             Cache::forget($cacheKey);
 
             return response()->json([
                 'message' => "Unable to send the OTP by {$channel}. Please check the {$channel} and try again.",
+                'delivery_error' => $delivery['error'] ?? 'The message provider rejected the request.',
             ], 502);
         }
 
