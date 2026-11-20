@@ -31,4 +31,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'sms' => [
+        'enabled' => env('SMS_ENABLED', true),
+        'url' => env('SMS_GATEWAY_URL'),
+        'username' => env('SMS_GATEWAY_USERNAME'),
+        'password' => env('SMS_GATEWAY_PASSWORD'),
+        'timeout' => env('SMS_GATEWAY_TIMEOUT', 20),
+    ],
+
 ];

@@ -16,11 +16,17 @@ class DonationDonor extends Authenticatable
         'first_name',
         'last_name',
         'normalized_name',
+        'phone',
+        'phone_verified_at',
+        'email',
+        'email_verified_at',
         'is_admin',
     ];
 
     protected $casts = [
         'is_admin' => 'boolean',
+        'phone_verified_at' => 'datetime',
+        'email_verified_at' => 'datetime',
     ];
 
     public function donations(): HasMany

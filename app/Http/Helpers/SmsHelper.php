@@ -2,134 +2,161 @@
 
 namespace App\Http\Helpers;
 
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class SmsHelper
 {
-    /**
-     * Validate and clean mobile number to 09XXXXXXXXX format
-     * 
-     * @param string $mobile The mobile number to clean
-     * @return string|null Cleaned mobile number or null if invalid
-     */
-    private static function cleanMobileNumber($mobile)
+    public static function send(string $mobile, string $message): array
     {
-        // Remove all non-numeric characters
-        $cleaned = preg_replace('/[^0-9]/', '', $mobile);
+        $config = config('services.sms');
 
-        // Handle different formats
-        if (strlen($cleaned) === 11 && substr($cleaned, 0, 2) === '09') {
-            // Already in 09XXXXXXXXX format
-            return $cleaned;
-        } elseif (strlen($cleaned) === 12 && substr($cleaned, 0, 3) === '639') {
-            // Convert 639XXXXXXXXX to 09XXXXXXXXX
-            return '0' . substr($cleaned, 2);
-        } elseif (strlen($cleaned) === 10 && substr($cleaned, 0, 1) === '9') {
-            // Convert 9XXXXXXXXX to 09XXXXXXXXX
-            return '0' . $cleaned;
+        if (! ($config['enabled'] ?? false)) {
+            return self::failure('SMS notifications are disabled.');
         }
 
-        // Invalid format
-        return null;
-    }
-
-    /**
-     * Send SMS notification via GOIP gateway
-     * 
-     * @param string $mobile The recipient's mobile number (will be cleaned to 09XXXXXXXXX format)
-     * @param string $message The SMS message content
-     * @return array Response from SMS gateway
-     */
-    public static function send($mobile, $message)
-    {
-        // Check if SMS is enabled
-        if (!env('SMS_ENABLED', true)) {
-            Log::info('SMS notification skipped: SMS_ENABLED is false');
-            return [
-                'success' => false,
-                'error' => 'SMS notifications are disabled',
-                'response' => null
-            ];
-        }
-
-        // Clean and validate mobile number
         $cleanedMobile = self::cleanMobileNumber($mobile);
-
         if ($cleanedMobile === null) {
-            Log::error('Invalid mobile number format: ' . $mobile);
-            return [
-                'success' => false,
-                'error' => 'Invalid mobile number format. Expected 09XXXXXXXXX, 639XXXXXXXXX, or 9XXXXXXXXX',
-                'response' => null
-            ];
+            return self::failure('Invalid mobile number. Expected 09XXXXXXXXX, 639XXXXXXXXX, or 9XXXXXXXXX.');
         }
 
-        $gatewayUrl = env('SMS_GATEWAY_URL', 'http://46.250.238.187/goip/sendsms/');
-        $gatewayUsername = env('SMS_GATEWAY_USERNAME', 'root');
-        $gatewayPassword = env('SMS_GATEWAY_PASSWORD', 'LACSONSMS');
+        if (blank($config['url'] ?? null) || blank($config['username'] ?? null) || blank($config['password'] ?? null)) {
+            return self::failure('SMS gateway is not configured.');
+        }
 
-        $ch = curl_init($gatewayUrl);
-
-        $parameters = array(
-            'auth' => array('username' => $gatewayUsername, 'password' => $gatewayPassword),
-            'provider' => "SIMNETWORK",
-            'number' => $cleanedMobile,
-            'content' => $message,
-        );
-
-        Log::info('SMS Notification - Original Mobile: ' . $mobile);
-        Log::info('SMS Notification - Cleaned Mobile: ' . $cleanedMobile);
-        Log::info('SMS Notification - Message: ' . $message);
-
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($parameters));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10); // Set timeout to 10 seconds
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5); // Set connection timeout to 5 seconds
-
-        // Receive response from server
-        $output = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError) {
-            Log::error('SMS Gateway Error: ' . $curlError, [
-                'mobile' => $cleanedMobile,
-                'http_code' => $httpCode,
-                'gateway_url' => $gatewayUrl
+        try {
+            $response = Http::acceptJson()
+                ->asJson()
+                ->connectTimeout(8)
+                ->timeout((int) ($config['timeout'] ?? 20))
+                ->post($config['url'], [
+                    'auth' => [
+                        'username' => $config['username'],
+                        'password' => $config['password'],
+                    ],
+                    'provider' => 'SIMNETWORK',
+                    'number' => $cleanedMobile,
+                    'content' => $message,
+                ]);
+        } catch (ConnectionException $exception) {
+            Log::error('SMS gateway connection failed.', [
+                'mobile' => self::maskMobileNumber($cleanedMobile),
+                'error' => $exception->getMessage(),
             ]);
+
+            return self::failure($exception->getMessage());
+        } catch (Throwable $exception) {
+            Log::error('SMS send failed unexpectedly.', [
+                'mobile' => self::maskMobileNumber($cleanedMobile),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return self::failure($exception->getMessage());
+        }
+
+        $body = $response->json();
+        $accepted = $response->successful() && ! self::responseIndicatesFailure($body);
+
+        if (! $accepted) {
+            $error = self::gatewayError($body) ?: "SMS gateway returned HTTP {$response->status()}.";
+            Log::warning('SMS gateway rejected the message.', [
+                'mobile' => self::maskMobileNumber($cleanedMobile),
+                'http_code' => $response->status(),
+                'error' => $error,
+            ]);
+
             return [
                 'success' => false,
-                'error' => $curlError,
-                'response' => null
+                'http_code' => $response->status(),
+                'error' => $error,
+                'response' => $body,
             ];
         }
 
-        Log::info('SMS Gateway Response: ' . $output, [
-            'http_code' => $httpCode,
-            'mobile' => $cleanedMobile
+        Log::info('SMS sent through gateway.', [
+            'mobile' => self::maskMobileNumber($cleanedMobile),
+            'http_code' => $response->status(),
         ]);
 
-        $response = json_decode($output, true);
-
         return [
-            'success' => $httpCode === 200,
-            'http_code' => $httpCode,
-            'response' => $response,
-            'raw_output' => $output
+            'success' => true,
+            'http_code' => $response->status(),
+            'response' => $body,
         ];
     }
 
-    /**
-     * Send SMS notification (instance method for backward compatibility)
-     * 
-     * @param string $mobile The recipient's mobile number
-     * @param string $message The SMS message content
-     * @return array Response from SMS gateway
-     */
-    public function sendSms($mobile, $message)
+    public function sendSms(string $mobile, string $message): array
     {
         return self::send($mobile, $message);
+    }
+
+    private static function cleanMobileNumber(string $mobile): ?string
+    {
+        $cleaned = preg_replace('/\D+/', '', $mobile) ?: '';
+
+        if (strlen($cleaned) === 11 && str_starts_with($cleaned, '09')) {
+            return $cleaned;
+        }
+
+        if (strlen($cleaned) === 12 && str_starts_with($cleaned, '639')) {
+            return '0'.substr($cleaned, 2);
+        }
+
+        if (strlen($cleaned) === 10 && str_starts_with($cleaned, '9')) {
+            return '0'.$cleaned;
+        }
+
+        return null;
+    }
+
+    private static function responseIndicatesFailure(mixed $body): bool
+    {
+        if (! is_array($body)) {
+            return false;
+        }
+
+        foreach (['success', 'status', 'code'] as $field) {
+            if (! array_key_exists($field, $body)) {
+                continue;
+            }
+
+            $value = $body[$field];
+            if ($value === false || in_array(strtolower((string) $value), ['false', 'error', 'failed', 'failure'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function gatewayError(mixed $body): ?string
+    {
+        if (! is_array($body)) {
+            return null;
+        }
+
+        foreach (['error', 'message', 'detail'] as $field) {
+            if (isset($body[$field]) && is_string($body[$field])) {
+                return $body[$field];
+            }
+        }
+
+        return null;
+    }
+
+    private static function maskMobileNumber(string $mobile): string
+    {
+        return substr($mobile, 0, 4).str_repeat('*', 5).substr($mobile, -2);
+    }
+
+    private static function failure(string $message): array
+    {
+        return [
+            'success' => false,
+            'error' => $message,
+            'response' => null,
+        ];
     }
 }

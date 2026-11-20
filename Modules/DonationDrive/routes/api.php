@@ -7,7 +7,8 @@ use Modules\DonationDrive\App\Http\Controllers\DonorDonationDriveController;
 
 Route::prefix('v1/donation-drive')->name('api.donation-drive.')->group(function () {
     Route::withoutMiddleware(EnsureFrontendRequestsAreStateful::class)->group(function () {
-        Route::post('login', [DonorDonationDriveController::class, 'login'])->name('login');
+        Route::post('login/request-otp', [DonorDonationDriveController::class, 'requestOtp'])->name('login.request-otp');
+        Route::post('login/verify-otp', [DonorDonationDriveController::class, 'verifyOtp'])->name('login.verify-otp');
         Route::get('documents/{document}/preview', [DonorDonationDriveController::class, 'preview'])
             ->middleware('signed')
             ->name('document.preview');
