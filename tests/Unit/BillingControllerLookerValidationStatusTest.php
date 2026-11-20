@@ -25,6 +25,10 @@ class BillingControllerLookerValidationStatusTest extends TestCase
             $table->string('employee_id')->nullable();
             $table->string('member_id')->nullable();
             $table->date('birth_date')->nullable();
+            $table->string('first_name')->nullable();
+            $table->string('middle_name')->nullable();
+            $table->string('last_name')->nullable();
+            $table->string('suffix')->nullable();
             $table->string('enrollment_status')->nullable();
             $table->dateTime('submission_date')->nullable();
             $table->softDeletes();
@@ -45,6 +49,10 @@ class BillingControllerLookerValidationStatusTest extends TestCase
             $table->unsignedInteger('principal_id');
             $table->string('employee_id')->nullable();
             $table->date('birth_date')->nullable();
+            $table->string('first_name')->nullable();
+            $table->string('middle_name')->nullable();
+            $table->string('last_name')->nullable();
+            $table->string('suffix')->nullable();
             $table->string('enrollment_status')->nullable();
             $table->softDeletes();
             $table->timestamps();
@@ -106,6 +114,129 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         $this->assertSame('1168011146916708', $result['row_data']['ACCOUNT_NO']);
         $this->assertSame('2026-11-01', $result['row_data']['COVERAGE_START_DATE']);
         $this->assertNull($result['row_data']['COVERAGE_END_DATE']);
+    }
+
+    public function test_modal_billing_recon_report_2_only_includes_certificated_open_principals_and_dependents(): void
+    {
+        DB::table('cm_principal')->insert([
+            [
+                'id' => 310,
+                'enrollment_id' => 99,
+                'employee_id' => 'principal-open',
+                'birth_date' => '1980-01-01',
+                'enrollment_status' => 'APPROVED',
+                'deleted_at' => null,
+            ],
+            [
+                'id' => 311,
+                'enrollment_id' => 99,
+                'employee_id' => 'principal-closed',
+                'birth_date' => '1981-01-01',
+                'enrollment_status' => 'APPROVED',
+                'deleted_at' => null,
+            ],
+        ]);
+
+        DB::table('cm_dependent')->insert([
+            [
+                'id' => 410,
+                'principal_id' => 310,
+                'employee_id' => 'dependent-open',
+                'birth_date' => '2000-01-01',
+                'enrollment_status' => 'APPROVED',
+                'deleted_at' => null,
+            ],
+            [
+                'id' => 411,
+                'principal_id' => 310,
+                'employee_id' => 'dependent-closed',
+                'birth_date' => '2001-01-01',
+                'enrollment_status' => 'APPROVED',
+                'deleted_at' => null,
+            ],
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            [
+                'principal_id' => 310,
+                'dependent_id' => null,
+                'certificate_number' => 'CERT-310',
+                'coverage_end_date' => null,
+            ],
+            [
+                'principal_id' => 311,
+                'dependent_id' => null,
+                'certificate_number' => 'CERT-311',
+                'coverage_end_date' => '2026-01-31',
+            ],
+            [
+                'principal_id' => null,
+                'dependent_id' => 410,
+                'certificate_number' => 'CERT-410',
+                'coverage_end_date' => null,
+            ],
+            [
+                'principal_id' => null,
+                'dependent_id' => 411,
+                'certificate_number' => null,
+                'coverage_end_date' => null,
+            ],
+        ]);
+
+        $controller = new BillingController();
+        $method = new \ReflectionMethod($controller, 'buildModalSystemNotFoundReport');
+        $method->setAccessible(true);
+
+        $rows = $method->invoke(
+            $controller,
+            99,
+            [],
+            'EMPLOYEE_ID',
+            'BIRTH_DATE'
+        );
+
+        $targets = array_map(
+            static fn ($row) => ($row['dependent_id'] ? 'dependent:' : 'principal:') .
+                ($row['dependent_id'] ?? $row['principal_id']),
+            $rows
+        );
+        sort($targets);
+
+        $this->assertSame(['dependent:410', 'principal:310'], $targets);
+
+        $resolveMethod = new \ReflectionMethod($controller, 'resolveModalBillingStatus');
+        $resolveMethod->setAccessible(true);
+
+        $closedPrincipal = $resolveMethod->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => 'principal-closed',
+                'BIRTH_DATE' => '1981-01-01',
+            ],
+            'EMPLOYEE_ID',
+            'BIRTH_DATE',
+            11,
+            2026
+        );
+
+        $uncertificatedDependent = $resolveMethod->invoke(
+            $controller,
+            99,
+            [
+                'EMPLOYEE_ID' => 'dependent-closed',
+                'BIRTH_DATE' => '2001-01-01',
+            ],
+            'EMPLOYEE_ID',
+            'BIRTH_DATE',
+            11,
+            2026
+        );
+
+        $this->assertSame('INACTIVE', $closedPrincipal['row_data']['SYSTEM_STATUS']);
+        $this->assertSame(311, $closedPrincipal['principal_id']);
+        $this->assertSame('PENDING_HMO', $uncertificatedDependent['row_data']['SYSTEM_STATUS']);
+        $this->assertSame(411, $uncertificatedDependent['dependent_id']);
     }
 
     public function test_looker_validation_marks_approved_without_end_date_as_active_and_matched(): void
