@@ -44,6 +44,10 @@ return [
             'driver' => 'sanctum',
             'provider' => 'users',
         ],
+        'donation' => [
+            'driver' => 'sanctum',
+            'provider' => 'donors',
+        ],
     ],
 
     /*
@@ -67,6 +71,10 @@ return [
         'users' => [
             'driver' => 'eloquent',
             'model' => App\Models\User::class,
+        ],
+        'donors' => [
+            'driver' => 'eloquent',
+            'model' => Modules\DonationDrive\App\Models\DonationDonor::class,
         ],
 
         // 'users' => [
