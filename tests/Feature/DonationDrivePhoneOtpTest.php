@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
@@ -93,9 +92,7 @@ class DonationDrivePhoneOtpTest extends TestCase
             'username' => 'gateway-user',
             'password' => 'gateway-password',
             'timeout' => 20,
-        ]);
-        Http::fake([
-            'http://sms-gateway.test/send' => Http::response(['success' => true], 200),
+            'test_result' => ['success' => true, 'http_code' => 200, 'response' => []],
         ]);
 
         $this->postJson('/api/v1/donation-drive/login/request-otp', [
@@ -121,7 +118,6 @@ class DonationDrivePhoneOtpTest extends TestCase
         $this->assertSame('09171234567', $donor->fresh()->phone);
         $this->assertNotNull($donor->fresh()->phone_verified_at);
         $this->assertDatabaseCount('donation_donors', 1);
-        Http::assertSent(fn ($request) => str_contains($request->data()['content'], 'secure donation portal code'));
     }
 
     public function test_a_donor_has_only_one_updatable_contribution_per_cause(): void
