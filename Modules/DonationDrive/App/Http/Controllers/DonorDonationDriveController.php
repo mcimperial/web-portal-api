@@ -74,6 +74,10 @@ class DonorDonationDriveController extends Controller
                     ->orderBy('cutoff')
                     ->get(['id', 'cutoff', 'amount', 'updated_at']);
 
+                if (! $donor->is_admin) {
+                    $drive->makeHidden(['donations_count', 'total_amount']);
+                }
+
                 return $drive;
             });
 
