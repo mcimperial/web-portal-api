@@ -1,0 +1,9 @@
+{
+    "name": "llibi/donation-drive",
+    "description": "Employee donation drive module",
+    "autoload": {
+        "psr-4": {
+            "Modules\\DonationDrive\\": ""
+        }
+    }
+}

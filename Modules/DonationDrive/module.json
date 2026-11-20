@@ -1,0 +1,11 @@
+{
+    "name": "DonationDrive",
+    "alias": "donationdrive",
+    "description": "Employee donation drives, donors, documents, and reports",
+    "keywords": [],
+    "priority": 0,
+    "providers": [
+        "Modules\\DonationDrive\\App\\Providers\\DonationDriveServiceProvider"
+    ],
+    "files": []
+}

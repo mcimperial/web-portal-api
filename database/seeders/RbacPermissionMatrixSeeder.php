@@ -216,6 +216,14 @@ class RbacPermissionMatrixSeeder extends Seeder
                 'sub_app' => 'page-account-settings',
                 'link' => 'settings/account',
             ],
+            [
+                'slug' => 'page.donation-drive.admin',
+                'name' => 'Donation Drives',
+                'description' => 'Manage employee donation drives and donor reports',
+                'app' => 'donation-drive',
+                'sub_app' => 'page-admin',
+                'link' => 'donation-drive/admin',
+            ],
         ];
 
         foreach ($pagePermissions as $permission) {

@@ -13,6 +13,7 @@ return [
         'action_logs',
         'third_party_api',
         'dashboard',
+        'donation_drives',
     ],
 
     'actions' => [
@@ -56,6 +57,9 @@ return [
         ],
         'page.self-enrollment.deleted-enrollees' => [
             'enrollments.view',
+        ],
+        'page.donation-drive.admin' => [
+            'donation_drives.view',
         ],
 
         'self-enrollment.enrollees.add' => ['applications.create', 'applications.view'],
