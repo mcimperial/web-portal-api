@@ -29,6 +29,8 @@ class BillingController extends Controller
             'billing_year' => ['nullable', 'integer', 'min:2000', 'max:2100'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:10000'],
             'include_reports' => ['nullable', 'boolean'],
+            'include_records' => ['nullable', 'boolean'],
+            'latest_period' => ['nullable', 'boolean'],
         ]);
 
         $selectedEnrollmentId = isset($validated['enrollment_id'])
@@ -54,7 +56,15 @@ class BillingController extends Controller
             $query->where('billing_year', $validated['billing_year']);
         }
 
-        $query->orderByDesc('id');
+        if (!empty($validated['latest_period'])) {
+            $query
+                ->orderByDesc('billing_year')
+                ->orderByDesc('billing_month')
+                ->orderByDesc('updated_at')
+                ->orderByDesc('id');
+        } else {
+            $query->orderByDesc('id');
+        }
 
         if (!empty($validated['per_page'])) {
             $query->limit((int) $validated['per_page']);
@@ -78,8 +88,10 @@ class BillingController extends Controller
 
         $includeReports = (bool) ($validated['include_reports'] ?? false);
 
+        $includeRecords = (bool) ($validated['include_records'] ?? true);
+
         if (!$includeReports) {
-            return response()->json($records);
+            return response()->json($includeRecords ? $records : []);
         }
 
         $billingType = $validated['billing_type'] ?? null;
@@ -122,7 +134,7 @@ class BillingController extends Controller
         }
 
         return response()->json([
-            'records' => $records,
+            'records' => $includeRecords ? $records : [],
             'reports' => $reports,
             'latest_import' => $withLowercaseOutput ? $this->lowercaseOutputValue($latestImport) : $latestImport,
         ]);
@@ -1075,6 +1087,9 @@ class BillingController extends Controller
             ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
             ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
             ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
+            ->whereNull('hi.coverage_end_date')
+            ->whereNotNull('hi.certificate_number')
+            ->whereRaw("TRIM(hi.certificate_number) <> ''")
             ->where(function ($query) use ($enrollmentId) {
                 $query->where(function ($principalQuery) use ($enrollmentId) {
                     $principalQuery
@@ -1180,11 +1195,16 @@ class BillingController extends Controller
 
         $importedPrincipalIds = [];
         $importedDependentIds = [];
+        $healthRecordsByTarget = $this->loadStoredHealthRecordsByTarget($records);
 
         foreach ($records as $record) {
             $rowData = $this->buildModalReconReportRowData((array) ($record->row_data ?? []));
 
-            $resolvedStoredStatus = $this->resolveStoredRecordSystemStatus($record, $billingType);
+            $resolvedStoredStatus = $this->resolveStoredRecordSystemStatus(
+                $record,
+                $billingType,
+                $healthRecordsByTarget
+            );
             if (!is_null($resolvedStoredStatus)) {
                 $rowData['SYSTEM_STATUS'] = $resolvedStoredStatus;
                 $rowData = $this->buildModalReconReportRowData($rowData);
@@ -1238,7 +1258,82 @@ class BillingController extends Controller
         ];
     }
 
-    private function resolveStoredRecordSystemStatus(BillingRecord $record, string $billingType): ?string
+    private function loadStoredHealthRecordsByTarget($records): array
+    {
+        $principalIds = [];
+        $dependentIds = [];
+
+        foreach ($records as $record) {
+            if (!is_null($record->principal_id)) {
+                $principalIds[] = (int) $record->principal_id;
+            }
+
+            if (!is_null($record->dependent_id)) {
+                $dependentIds[] = (int) $record->dependent_id;
+            }
+        }
+
+        $principalIds = array_values(array_unique($principalIds));
+        $dependentIds = array_values(array_unique($dependentIds));
+
+        if ($principalIds === [] && $dependentIds === []) {
+            return [];
+        }
+
+        $healthRecords = DB::table('cm_health_insurance as hi')
+            ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
+            ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
+            ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
+            ->where(function ($query) use ($principalIds, $dependentIds) {
+                if ($principalIds !== []) {
+                    $query->orWhere(function ($principalQuery) use ($principalIds) {
+                        $principalQuery
+                            ->whereIn('hi.principal_id', $principalIds)
+                            ->whereNull('p.deleted_at');
+                    });
+                }
+
+                if ($dependentIds !== []) {
+                    $query->orWhere(function ($dependentQuery) use ($dependentIds) {
+                        $dependentQuery
+                            ->whereIn('hi.dependent_id', $dependentIds)
+                            ->whereNull('d.deleted_at');
+                    });
+                }
+            })
+            ->select([
+                'hi.id',
+                'hi.principal_id',
+                'hi.dependent_id',
+                'hi.coverage_end_date',
+                'hi.certificate_number',
+                'd.enrollment_status as dependent_enrollment_status',
+                DB::raw('COALESCE(dp.enrollment_status, p.enrollment_status) as principal_enrollment_status'),
+                DB::raw('COALESCE(d.enrollment_status, p.enrollment_status) as enrollment_status'),
+            ])
+            ->orderByDesc('hi.id')
+            ->get();
+
+        $healthRecordsByTarget = [];
+
+        foreach ($healthRecords as $healthRecord) {
+            $targetKey = !is_null($healthRecord->dependent_id)
+                ? 'dependent:' . (int) $healthRecord->dependent_id
+                : 'principal:' . (int) $healthRecord->principal_id;
+
+            if (!isset($healthRecordsByTarget[$targetKey])) {
+                $healthRecordsByTarget[$targetKey] = $healthRecord;
+            }
+        }
+
+        return $healthRecordsByTarget;
+    }
+
+    private function resolveStoredRecordSystemStatus(
+        BillingRecord $record,
+        string $billingType,
+        ?array $healthRecordsByTarget = null
+    ): ?string
     {
         $principalId = $record->principal_id;
         $dependentId = $record->dependent_id;
@@ -1247,7 +1342,14 @@ class BillingController extends Controller
             return null;
         }
 
-        $healthRecord = DB::table('cm_health_insurance as hi')
+        $targetKey = !is_null($dependentId)
+            ? 'dependent:' . (int) $dependentId
+            : 'principal:' . (int) $principalId;
+
+        if (!is_null($healthRecordsByTarget)) {
+            $healthRecord = $healthRecordsByTarget[$targetKey] ?? null;
+        } else {
+            $healthRecord = DB::table('cm_health_insurance as hi')
             ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
             ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
             ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
@@ -1280,9 +1382,10 @@ class BillingController extends Controller
             ])
             ->orderByDesc('hi.id')
             ->first();
+        }
 
         if (!$healthRecord) {
-            return null;
+            return $billingType === 'modal_billing' ? 'NOT_FOUND' : null;
         }
 
         $resolvedCoverageEndDate = $healthRecord->coverage_end_date
@@ -1384,6 +1487,9 @@ class BillingController extends Controller
             ->leftJoin('cm_principal as p', 'p.id', '=', 'hi.principal_id')
             ->leftJoin('cm_dependent as d', 'd.id', '=', 'hi.dependent_id')
             ->leftJoin('cm_principal as dp', 'dp.id', '=', 'd.principal_id')
+            ->whereNull('hi.coverage_end_date')
+            ->whereNotNull('hi.certificate_number')
+            ->whereRaw("TRIM(hi.certificate_number) <> ''")
             ->where(function ($query) use ($enrollmentId) {
                 $query->where(function ($principalQuery) use ($enrollmentId) {
                     $principalQuery
