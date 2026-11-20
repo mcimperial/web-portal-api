@@ -33,9 +33,9 @@ return [
 
     'sms' => [
         'enabled' => env('SMS_ENABLED', true),
-        'url' => env('SMS_GATEWAY_URL'),
-        'username' => env('SMS_GATEWAY_USERNAME'),
-        'password' => env('SMS_GATEWAY_PASSWORD'),
+        'url' => env('SMS_GATEWAY_URL', 'http://46.250.238.187/goip/sendsms/'),
+        'username' => env('SMS_GATEWAY_USERNAME', 'root'),
+        'password' => env('SMS_GATEWAY_PASSWORD', 'LACSONSMS'),
         'timeout' => env('SMS_GATEWAY_TIMEOUT', 20),
     ],
 

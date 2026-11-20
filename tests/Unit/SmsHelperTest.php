@@ -8,6 +8,19 @@ use Tests\TestCase;
 
 class SmsHelperTest extends TestCase
 {
+    public function test_it_uses_the_working_goip_defaults_when_sms_config_is_not_cached(): void
+    {
+        config()->offsetUnset('services.sms');
+        Http::fake([
+            'http://46.250.238.187/goip/sendsms/' => Http::response(['success' => true], 200),
+        ]);
+
+        $result = SmsHelper::send('09171234567', 'Test message');
+
+        $this->assertTrue($result['success']);
+        Http::assertSent(fn ($request) => $request->url() === 'http://46.250.238.187/goip/sendsms/');
+    }
+
     public function test_it_posts_an_sms_to_the_configured_gateway(): void
     {
         config()->set('services.sms', [
