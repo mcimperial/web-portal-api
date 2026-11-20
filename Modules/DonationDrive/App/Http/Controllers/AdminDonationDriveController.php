@@ -27,7 +27,8 @@ class AdminDonationDriveController extends Controller
             ->withCount('documents')
             ->withCount('donations')
             ->withSum('donations as total_amount', 'amount')
-            ->latest()
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->get();
 
         return response()->json(['data' => $drives]);
@@ -163,7 +164,8 @@ class AdminDonationDriveController extends Controller
         $query = DonationDrive::query()
             ->withCount('donations')
             ->withSum('donations as total_amount', 'amount')
-            ->latest();
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
 
         if (!$this->canManageAll($request->user())) {
             $query->whereHas('reportUsers', fn ($users) => $users->whereKey($request->user()->id));

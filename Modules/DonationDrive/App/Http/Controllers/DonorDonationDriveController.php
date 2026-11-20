@@ -198,6 +198,7 @@ class DonorDonationDriveController extends Controller
             ->withCount('donations')
             ->withSum('donations as total_amount', 'amount')
             ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->get()
             ->map(function (DonationDrive $drive) use ($donor) {
                 $drive->documents->each(function (DonationDriveDocument $document) {
@@ -288,7 +289,8 @@ class DonorDonationDriveController extends Controller
             'data' => DonationDrive::query()
                 ->withCount('donations')
                 ->withSum('donations as total_amount', 'amount')
-                ->latest()
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
                 ->get(),
         ]);
     }
