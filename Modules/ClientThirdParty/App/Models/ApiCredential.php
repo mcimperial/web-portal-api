@@ -141,7 +141,88 @@ class ApiCredential extends Model
         if (empty($this->allowed_ips)) {
             return true;
         }
-        return in_array($ip, $this->allowed_ips, true);
+
+        $binaryIp = filter_var($ip, FILTER_VALIDATE_IP)
+            ? inet_pton($ip)
+            : false;
+
+        if ($binaryIp === false) {
+            return false;
+        }
+
+        foreach ($this->allowed_ips as $allowed) {
+            if (!is_string($allowed)) {
+                continue;
+            }
+
+            $allowed = trim($allowed);
+
+            if (filter_var($allowed, FILTER_VALIDATE_IP)) {
+                if ($binaryIp === inet_pton($allowed)) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            $range = self::parseIpv4Range($allowed);
+            $ipNumber = self::ipv4ToNumber($ip);
+
+            if ($range !== null && $ipNumber !== null
+                && $ipNumber >= $range[0] && $ipNumber <= $range[1]) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static function isValidIpRestriction(string $value): bool
+    {
+        $value = trim($value);
+
+        return filter_var($value, FILTER_VALIDATE_IP) !== false
+            || self::parseIpv4Range($value) !== null;
+    }
+
+    private static function parseIpv4Range(string $value): ?array
+    {
+        $parts = explode('-', $value);
+
+        if (count($parts) !== 2) {
+            return null;
+        }
+
+        $start = trim($parts[0]);
+        $end = trim($parts[1]);
+
+        if (preg_match('/^\d{1,3}$/', $end) === 1) {
+            $startOctets = explode('.', $start);
+
+            if (count($startOctets) !== 4) {
+                return null;
+            }
+
+            $end = implode('.', array_slice($startOctets, 0, 3)) . '.' . $end;
+        }
+
+        $startNumber = self::ipv4ToNumber($start);
+        $endNumber = self::ipv4ToNumber($end);
+
+        if ($startNumber === null || $endNumber === null || $startNumber > $endNumber) {
+            return null;
+        }
+
+        return [$startNumber, $endNumber];
+    }
+
+    private static function ipv4ToNumber(string $ip): ?int
+    {
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+            return null;
+        }
+
+        return unpack('Nnumber', inet_pton($ip))['number'];
     }
 
     /**
