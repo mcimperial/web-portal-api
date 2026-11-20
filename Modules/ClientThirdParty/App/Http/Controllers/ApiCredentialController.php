@@ -49,7 +49,15 @@ class ApiCredentialController extends Controller
             'permissions'   => 'nullable|array',
             'permissions.*' => 'string|in:enrollment:read,principal:list:read,principal:read,principal:create,principal:update,principal:resigned:update,dependent:read,dependent:create,dependent:update',
             'allowed_ips'   => 'nullable|array',
-            'allowed_ips.*' => 'ip',
+            'allowed_ips.*' => [
+                'bail',
+                'string',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    if (!is_string($value) || !ApiCredential::isValidIpRestriction($value)) {
+                        $fail("The {$attribute} field must be a valid IP address or IPv4 range (for example, 8.156.24.0-255).");
+                    }
+                },
+            ],
             'params'        => 'nullable|array',
             'params.enrollment_titles' => 'nullable|array',
             'params.enrollment_titles.*' => 'string|max:255',
@@ -60,6 +68,10 @@ class ApiCredentialController extends Controller
 
         if (array_key_exists('params', $validated)) {
             $validated['params'] = $this->normalizeParams($validated['params']);
+        }
+
+        if (array_key_exists('allowed_ips', $validated)) {
+            $validated['allowed_ips'] = $this->normalizeAllowedIps($validated['allowed_ips']);
         }
 
         // Store the plain-text secret temporarily to show it once
@@ -93,7 +105,15 @@ class ApiCredentialController extends Controller
             'permissions'   => 'nullable|array',
             'permissions.*' => 'string|in:enrollment:read,principal:list:read,principal:read,principal:create,principal:update,principal:resigned:update,dependent:read,dependent:create,dependent:update',
             'allowed_ips'   => 'nullable|array',
-            'allowed_ips.*' => 'ip',
+            'allowed_ips.*' => [
+                'bail',
+                'string',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    if (!is_string($value) || !ApiCredential::isValidIpRestriction($value)) {
+                        $fail("The {$attribute} field must be a valid IP address or IPv4 range (for example, 8.156.24.0-255).");
+                    }
+                },
+            ],
             'params'        => 'sometimes|nullable|array',
             'params.enrollment_titles' => 'nullable|array',
             'params.enrollment_titles.*' => 'string|max:255',
@@ -104,6 +124,10 @@ class ApiCredentialController extends Controller
 
         if (array_key_exists('params', $validated)) {
             $validated['params'] = $this->normalizeParams($validated['params']);
+        }
+
+        if (array_key_exists('allowed_ips', $validated)) {
+            $validated['allowed_ips'] = $this->normalizeAllowedIps($validated['allowed_ips']);
         }
 
         $credential->update($validated);
@@ -214,5 +238,21 @@ class ApiCredentialController extends Controller
         return [
             'enrollment_titles' => $enrollmentTitles,
         ];
+    }
+
+    private function normalizeAllowedIps(?array $allowedIps): ?array
+    {
+        if ($allowedIps === null) {
+            return null;
+        }
+
+        $normalized = collect($allowedIps)
+            ->map(fn ($ip) => trim((string) $ip))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        return $normalized === [] ? null : $normalized;
     }
 }
