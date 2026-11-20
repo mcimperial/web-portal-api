@@ -3,11 +3,22 @@
 namespace Tests\Unit;
 
 use App\Http\Helpers\SmsHelper;
+use Modules\DonationDrive\App\Support\DonationOtpMessage;
 use ReflectionClass;
 use Tests\TestCase;
 
 class SmsHelperTest extends TestCase
 {
+    public function test_donation_otp_sms_matches_the_enrollment_message_style(): void
+    {
+        $message = DonationOtpMessage::build('123456', 'Maria Santos');
+
+        $this->assertStringStartsWith('From: Lacson & Lacson Insurance Brokers, Inc.', $message);
+        $this->assertStringContainsString('Dear Maria Santos,', $message);
+        $this->assertStringContainsString('123456', $message);
+        $this->assertStringEndsWith('Please do not reply to this SMS.', $message);
+    }
+
     public function test_it_normalizes_supported_philippine_mobile_formats(): void
     {
         $method = (new ReflectionClass(SmsHelper::class))->getMethod('cleanMobileNumber');

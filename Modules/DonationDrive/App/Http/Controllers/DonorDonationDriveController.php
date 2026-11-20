@@ -83,7 +83,15 @@ class DonorDonationDriveController extends Controller
 
         $delivery = $channel === 'email'
             ? ['success' => $this->sendOtpEmail($identifier, $donor?->first_name, $otp)]
-            : SmsHelper::send($identifier, DonationOtpMessage::build($otp));
+            : SmsHelper::send(
+                $identifier,
+                DonationOtpMessage::build(
+                    $otp,
+                    $donor
+                        ? trim($donor->first_name.' '.$donor->last_name)
+                        : trim(($profile['first_name'] ?? '').' '.($profile['last_name'] ?? ''))
+                )
+            );
         $sent = $delivery['success'] ?? false;
 
         if (! $sent) {
