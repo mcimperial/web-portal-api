@@ -4,13 +4,14 @@ namespace Tests\Feature\Auth;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Auth;
 use Tests\TestCase;
 
 class AuthenticationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_users_can_authenticate_using_the_login_screen(): void
+    public function test_users_remain_authenticated_using_the_login_screen(): void
     {
         $user = User::factory()->create();
 
@@ -20,6 +21,8 @@ class AuthenticationTest extends TestCase
         ]);
 
         $this->assertAuthenticated();
+        $this->assertNotNull($user->fresh()->getRememberToken());
+        $response->assertCookie(Auth::guard('web')->getRecallerName());
         $response->assertNoContent();
     }
 
