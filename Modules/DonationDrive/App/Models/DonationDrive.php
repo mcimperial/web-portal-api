@@ -15,11 +15,13 @@ class DonationDrive extends Model
         'title',
         'description',
         'is_active',
+        'is_closed',
         'created_by',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'is_closed' => 'boolean',
     ];
 
     public function documents(): HasMany

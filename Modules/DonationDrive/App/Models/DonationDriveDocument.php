@@ -13,12 +13,13 @@ class DonationDriveDocument extends Model
         'drive_id',
         'original_name',
         'path',
+        'storage_disk',
         'mime_type',
         'size',
         'uploaded_by',
     ];
 
-    protected $hidden = ['path'];
+    protected $hidden = ['path', 'storage_disk'];
 
     public function drive(): BelongsTo
     {

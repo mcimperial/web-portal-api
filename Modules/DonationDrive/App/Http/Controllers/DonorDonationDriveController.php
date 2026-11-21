@@ -229,26 +229,32 @@ class DonorDonationDriveController extends Controller
     public function donate(Request $request, DonationDrive $drive): JsonResponse
     {
         $donor = $this->donor($request);
-        abort_unless($drive->is_active, 403, 'This donation drive is inactive.');
-
         $validated = $request->validate([
             'amount' => ['required', 'numeric', 'min:0.01', 'max:9999999.99'],
             'cutoff' => ['required', 'integer', 'in:1,2'],
         ]);
 
-        $donation = Donation::firstOrNew([
-            'drive_id' => $drive->id,
-            'donor_id' => $donor->id,
-        ]);
-        $previousAmount = $donation->exists ? (string) $donation->amount : null;
-        $donation->amount = $validated['amount'];
-        $donation->cutoff = $validated['cutoff'];
-        $donation->save();
+        [$donation, $previousAmount] = DB::transaction(function () use ($drive, $donor, $validated) {
+            $drive = DonationDrive::query()->lockForUpdate()->findOrFail($drive->id);
+            abort_unless($drive->is_active, 403, 'This donation drive is inactive.');
+            abort_if($drive->is_closed, 403, 'This donation drive is closed to contributions.');
 
-        $donation->histories()->create([
-            'previous_amount' => $previousAmount,
-            'new_amount' => $donation->amount,
-        ]);
+            $donation = Donation::firstOrNew([
+                'drive_id' => $drive->id,
+                'donor_id' => $donor->id,
+            ]);
+            $previousAmount = $donation->exists ? (string) $donation->amount : null;
+            $donation->amount = $validated['amount'];
+            $donation->cutoff = $validated['cutoff'];
+            $donation->save();
+
+            $donation->histories()->create([
+                'previous_amount' => $previousAmount,
+                'new_amount' => $donation->amount,
+            ]);
+
+            return [$donation, $previousAmount];
+        });
 
         return response()->json([
             'message' => $previousAmount === null ? 'Donation saved.' : 'Donation updated.',
@@ -271,9 +277,10 @@ class DonorDonationDriveController extends Controller
 
     public function preview(DonationDriveDocument $document)
     {
-        abort_unless(Storage::disk('local')->exists($document->path), 404);
+        $storage = Storage::disk($document->storage_disk);
+        abort_unless($storage->exists($document->path), 404);
 
-        return Storage::disk('local')->response(
+        return $storage->response(
             $document->path,
             $document->original_name,
             ['Content-Type' => $document->mime_type ?: 'application/octet-stream'],
