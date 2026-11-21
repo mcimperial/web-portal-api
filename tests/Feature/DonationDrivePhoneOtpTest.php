@@ -54,6 +54,7 @@ class DonationDrivePhoneOtpTest extends TestCase
             $table->text('description')->nullable();
             $table->boolean('is_active')->default(false);
             $table->boolean('is_closed')->default(false);
+            $table->unsignedBigInteger('created_by')->nullable();
             $table->timestamps();
         });
         Schema::create('donation_drive_documents', function (Blueprint $table) {
@@ -216,8 +217,9 @@ class DonationDrivePhoneOtpTest extends TestCase
     public function test_admin_can_close_and_reopen_a_visible_drive(): void
     {
         $this->withoutMiddleware(RequireModulePermission::class);
-        $admin = new User();
+        $admin = Mockery::mock(User::class)->makePartial();
         $admin->id = 1;
+        $admin->shouldReceive('isSuperAdmin')->andReturnTrue();
         Sanctum::actingAs($admin);
         $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
         $inactive = DonationDrive::create(['title' => 'Draft', 'is_active' => false]);
@@ -240,8 +242,9 @@ class DonationDrivePhoneOtpTest extends TestCase
         Storage::set('spaces', $spaces);
         Storage::set('local', $local);
         $this->withoutMiddleware(RequireModulePermission::class);
-        $admin = new User();
+        $admin = Mockery::mock(User::class)->makePartial();
         $admin->id = 1;
+        $admin->shouldReceive('isSuperAdmin')->andReturnTrue();
         Sanctum::actingAs($admin);
         $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
         $file = UploadedFile::fake()->createWithContent('brief.pdf', '%PDF-1.4 test document');
@@ -292,8 +295,9 @@ class DonationDrivePhoneOtpTest extends TestCase
     public function test_failed_document_deletion_keeps_the_database_record(): void
     {
         $this->withoutMiddleware(RequireModulePermission::class);
-        $admin = new User();
+        $admin = Mockery::mock(User::class)->makePartial();
         $admin->id = 1;
+        $admin->shouldReceive('isSuperAdmin')->andReturnTrue();
         Sanctum::actingAs($admin);
         $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
         $document = $drive->documents()->create([
@@ -407,6 +411,9 @@ class DonationDrivePhoneOtpTest extends TestCase
     public function test_admin_can_remove_only_donors_without_donations(): void
     {
         $this->withoutMiddleware([Authenticate::class, RequireModulePermission::class]);
+        $admin = Mockery::mock(User::class)->makePartial();
+        $admin->shouldReceive('isSuperAdmin')->andReturnTrue();
+        Sanctum::actingAs($admin);
         $emptyDonor = DonationDonor::create([
             'first_name' => 'Empty', 'last_name' => 'Donor', 'normalized_name' => 'empty donor',
         ]);
@@ -423,5 +430,107 @@ class DonationDrivePhoneOtpTest extends TestCase
         $this->deleteJson("/api/v1/donation-drive/admin/donors/{$emptyDonor->id}")->assertOk();
         $this->assertDatabaseMissing('donation_donors', ['id' => $emptyDonor->id]);
         $this->assertDatabaseMissing('personal_access_tokens', ['tokenable_type' => DonationDonor::class, 'tokenable_id' => $emptyDonor->id]);
+    }
+
+    public function test_donation_drive_admin_cannot_manage_donor_admin_access(): void
+    {
+        $this->withoutMiddleware([Authenticate::class, RequireModulePermission::class]);
+        $admin = Mockery::mock(User::class)->makePartial();
+        $admin->shouldReceive('isSuperAdmin')->andReturnFalse();
+        Sanctum::actingAs($admin);
+        $donor = DonationDonor::create([
+            'first_name' => 'Review', 'last_name' => 'Only', 'normalized_name' => 'review only',
+        ]);
+
+        $this->patchJson("/api/v1/donation-drive/admin/donors/{$donor->id}/admin", ['is_admin' => true])
+            ->assertForbidden();
+        $this->deleteJson("/api/v1/donation-drive/admin/donors/{$donor->id}")
+            ->assertForbidden();
+        $this->assertFalse($donor->fresh()->is_admin);
+    }
+
+    public function test_donation_drive_admin_cannot_reactivate_or_reopen_a_drive(): void
+    {
+        $this->withoutMiddleware([Authenticate::class, RequireModulePermission::class]);
+        $admin = Mockery::mock(User::class)->makePartial();
+        $admin->id = 1;
+        $admin->shouldReceive('isSuperAdmin')->andReturnFalse();
+        Sanctum::actingAs($admin);
+        $inactive = DonationDrive::create(['title' => 'Draft', 'is_active' => false]);
+        $closed = DonationDrive::create(['title' => 'Closed', 'is_active' => true, 'is_closed' => true]);
+
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$inactive->id}/status", ['is_active' => true])
+            ->assertForbidden();
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$closed->id}/closure", ['is_closed' => false])
+            ->assertForbidden();
+        $this->assertFalse($inactive->fresh()->is_active);
+        $this->assertTrue($closed->fresh()->is_closed);
+    }
+
+    public function test_donor_admin_can_manage_drives_and_view_donors_without_employee_identity(): void
+    {
+        $this->documentTestRoot = storage_path('framework/testing/donation-drive-'.Str::uuid());
+        $spaces = Storage::build(['driver' => 'local', 'root' => $this->documentTestRoot.'/spaces']);
+        Storage::set('spaces', $spaces);
+        $donor = DonationDonor::create([
+            'first_name' => 'Donor', 'last_name' => 'Admin', 'normalized_name' => 'donor admin', 'is_admin' => true,
+        ]);
+        Sanctum::actingAs($donor, ['donation-drive'], 'donation');
+
+        $driveId = $this->postJson('/api/v1/donation-drive/donor-admin/drives', [
+            'title' => 'Community Relief', 'is_active' => true,
+        ])->assertCreated()->json('data.id');
+        $this->assertDatabaseHas('donation_drives', ['id' => $driveId, 'created_by' => null]);
+        $this->assertDatabaseHas('donation_drive_histories', ['drive_id' => $driveId, 'user_id' => null, 'action' => 'created']);
+        $this->assertSame($donor->id, DonationDrive::findOrFail($driveId)->histories()->first()->details['donor_admin']['id']);
+
+        $this->postJson("/api/v1/donation-drive/donor-admin/drives/{$driveId}/documents", [
+            'document' => UploadedFile::fake()->createWithContent('brief.pdf', '%PDF-1.4 test document'),
+        ])->assertCreated()->assertJsonPath('data.uploaded_by', null);
+        $this->getJson('/api/v1/donation-drive/donor-admin/donors?page=1')->assertOk()->assertJsonCount(1, 'data');
+        $this->getJson('/api/v1/donation-drive/donor-admin/drives')->assertOk()
+            ->assertJsonPath('data.0.title', 'Community Relief')
+            ->assertJsonPath('data.0.report_users', []);
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$driveId}/closure", ['is_closed' => true])->assertOk();
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$driveId}/closure", ['is_closed' => false])->assertForbidden();
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$driveId}/status", ['is_active' => false])->assertOk();
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$driveId}/status", ['is_active' => true])->assertForbidden();
+        $this->getJson('/api/v1/donation-drive/donor-admin/drives')->assertOk()->assertJsonCount(1, 'data');
+    }
+
+    public function test_donor_management_requires_current_admin_access(): void
+    {
+        $donor = DonationDonor::create([
+            'first_name' => 'Regular', 'last_name' => 'Donor', 'normalized_name' => 'regular donor',
+        ]);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        Sanctum::actingAs($donor, ['donation-drive'], 'donation');
+
+        $this->getJson('/api/v1/donation-drive/donor-admin/drives')->assertForbidden();
+        $this->getJson('/api/v1/donation-drive/donor-admin/donors?page=1')->assertForbidden();
+        $this->postJson('/api/v1/donation-drive/donor-admin/drives', ['title' => 'Denied'])->assertForbidden();
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$drive->id}/status", ['is_active' => false])->assertForbidden();
+        $this->patchJson("/api/v1/donation-drive/donor-admin/drives/{$drive->id}/closure", ['is_closed' => true])->assertForbidden();
+        $this->postJson("/api/v1/donation-drive/donor-admin/drives/{$drive->id}/documents")->assertForbidden();
+        $this->assertTrue($drive->fresh()->is_active);
+    }
+
+    public function test_donor_admin_token_loses_management_access_when_role_is_removed(): void
+    {
+        $donor = DonationDonor::create([
+            'first_name' => 'Former', 'last_name' => 'Admin', 'normalized_name' => 'former admin', 'is_admin' => true,
+        ]);
+        $token = $donor->createToken('donation-drive', ['donation-drive'])->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/donation-drive/donor-admin/donors?page=1')->assertOk();
+        $this->withToken($token)->patchJson("/api/v1/donation-drive/admin/donors/{$donor->id}/admin", ['is_admin' => true])->assertUnauthorized();
+        $donor->update(['is_admin' => false]);
+        app('auth')->forgetGuards();
+        $this->withToken($token)->getJson('/api/v1/donation-drive/donor-admin/donors?page=1')->assertForbidden();
+    }
+
+    public function test_donor_management_requires_authentication(): void
+    {
+        $this->getJson('/api/v1/donation-drive/donor-admin/donors?page=1')->assertUnauthorized();
+        $this->postJson('/api/v1/donation-drive/donor-admin/drives', ['title' => 'Denied'])->assertUnauthorized();
     }
 }
