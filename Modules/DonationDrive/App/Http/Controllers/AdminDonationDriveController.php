@@ -17,20 +17,30 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class AdminDonationDriveController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request): JsonResponse
     {
+        $isSuperAdmin = $this->isSuperAdmin($request);
+        $relations = [
+            'documents',
+            'histories.user:id,name',
+        ];
+        if ($isSuperAdmin) {
+            $relations[] = 'reportUsers:id,name,email';
+        }
+
         $drives = DonationDrive::query()
-            ->with([
-                'documents',
-                'reportUsers:id,name,email',
-                'histories.user:id,name',
-            ])
+            ->with($relations)
             ->withCount('documents')
             ->withCount('donations')
             ->withSum('donations as total_amount', 'amount')
             ->orderByDesc('created_at')
             ->orderByDesc('id')
-            ->get();
+            ->get()
+            ->each(function (DonationDrive $drive) use ($isSuperAdmin) {
+                if (! $isSuperAdmin) {
+                    $drive->setAttribute('report_users', []);
+                }
+            });
 
         return response()->json(['data' => $drives]);
     }
@@ -45,7 +55,7 @@ class AdminDonationDriveController extends Controller
 
         $drive = DonationDrive::create([
             ...$validated,
-            'created_by' => $request->user()->id,
+            'created_by' => $request->user() instanceof User ? $request->user()->id : null,
             'is_active' => (bool) ($validated['is_active'] ?? false),
         ]);
         $this->record($drive, $request, 'created');
@@ -56,6 +66,11 @@ class AdminDonationDriveController extends Controller
     public function status(Request $request, DonationDrive $drive): JsonResponse
     {
         $validated = $request->validate(['is_active' => ['required', 'boolean']]);
+        abort_if(
+            (bool) $validated['is_active'] && ! $this->isSuperAdmin($request),
+            403,
+            'Only a superadmin can reactivate a donation drive.'
+        );
         $previous = $drive->is_active;
         $drive->update(['is_active' => $validated['is_active']]);
         $this->record($drive, $request, 'status_changed', $previous, [
@@ -68,6 +83,11 @@ class AdminDonationDriveController extends Controller
     public function closure(Request $request, DonationDrive $drive): JsonResponse
     {
         $validated = $request->validate(['is_closed' => ['required', 'boolean']]);
+        abort_if(
+            ! (bool) $validated['is_closed'] && ! $this->isSuperAdmin($request),
+            403,
+            'Only a superadmin can reopen contributions.'
+        );
         $drive = DB::transaction(function () use ($drive, $request, $validated) {
             $drive = DonationDrive::query()->lockForUpdate()->findOrFail($drive->id);
             abort_if($validated['is_closed'] && ! $drive->is_active, 422, 'Activate this drive before closing it so donors can still view it.');
@@ -101,7 +121,7 @@ class AdminDonationDriveController extends Controller
                     'storage_disk' => 'spaces',
                     'mime_type' => $file->getMimeType(),
                     'size' => $file->getSize(),
-                    'uploaded_by' => $request->user()->id,
+                    'uploaded_by' => $request->user() instanceof User ? $request->user()->id : null,
                 ]);
                 $this->record($drive, $request, 'document_uploaded', null, [
                     'document' => $document->original_name,
@@ -125,6 +145,7 @@ class AdminDonationDriveController extends Controller
 
     public function deleteDocument(Request $request, DonationDriveDocument $document): JsonResponse
     {
+        $this->authorizeSuperAdmin($request);
         $drive = $document->drive;
         DB::transaction(function () use ($document, $drive, $request) {
             $document->delete();
@@ -139,6 +160,7 @@ class AdminDonationDriveController extends Controller
 
     public function users(Request $request): JsonResponse
     {
+        $this->authorizeSuperAdmin($request);
         $search = trim((string) $request->query('search'));
 
         return response()->json([
@@ -159,6 +181,7 @@ class AdminDonationDriveController extends Controller
 
     public function updateReportUsers(Request $request, DonationDrive $drive): JsonResponse
     {
+        $this->authorizeSuperAdmin($request);
         $validated = $request->validate([
             'user_ids' => ['present', 'array'],
             'user_ids.*' => ['integer', 'exists:users,id'],
@@ -193,6 +216,7 @@ class AdminDonationDriveController extends Controller
 
     public function setDonorAdmin(Request $request, DonationDonor $donor): JsonResponse
     {
+        $this->authorizeSuperAdmin($request);
         $validated = $request->validate(['is_admin' => ['required', 'boolean']]);
         $donor->update(['is_admin' => $validated['is_admin']]);
 
@@ -202,8 +226,9 @@ class AdminDonationDriveController extends Controller
         ]);
     }
 
-    public function deleteDonor(DonationDonor $donor): JsonResponse
+    public function deleteDonor(Request $request, DonationDonor $donor): JsonResponse
     {
+        $this->authorizeSuperAdmin($request);
         DB::transaction(function () use ($donor) {
             $donor = DonationDonor::query()->lockForUpdate()->findOrFail($donor->id);
             abort_if($donor->donations()->exists(), 409, 'Donors with donations cannot be removed because their contribution history must be preserved.');
@@ -296,7 +321,19 @@ class AdminDonationDriveController extends Controller
 
     private function canManageAll(User $user): bool
     {
-        return $user->isSuperAdmin() || $user->hasModulePermission('donation_drives', 'view');
+        return $user->isSuperAdmin();
+    }
+
+    private function authorizeSuperAdmin(Request $request): void
+    {
+        abort_unless($this->isSuperAdmin($request), 403, 'Superadmin access is required.');
+    }
+
+    private function isSuperAdmin(Request $request): bool
+    {
+        $user = $request->user();
+
+        return $user instanceof User && $user->isSuperAdmin();
     }
 
     private function record(
@@ -306,8 +343,16 @@ class AdminDonationDriveController extends Controller
         ?bool $previous = null,
         array $details = []
     ): void {
+        $actor = $request->user();
+        if ($actor instanceof DonationDonor) {
+            $details['donor_admin'] = [
+                'id' => $actor->id,
+                'name' => trim($actor->first_name . ' ' . $actor->last_name),
+            ];
+        }
+
         $drive->histories()->create([
-            'user_id' => $request->user()->id,
+            'user_id' => $actor instanceof User ? $actor->id : null,
             'action' => $action,
             'previous_is_active' => $previous,
             'current_is_active' => $drive->is_active,
