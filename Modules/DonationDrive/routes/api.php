@@ -32,6 +32,8 @@ Route::prefix('v1/donation-drive')->name('api.donation-drive.')->group(function 
                 ->middleware('rbac:donation_drives,create');
             Route::patch('drives/{drive}/status', [AdminDonationDriveController::class, 'status'])
                 ->middleware('rbac:donation_drives,update');
+            Route::patch('drives/{drive}/closure', [AdminDonationDriveController::class, 'closure'])
+                ->middleware('rbac:donation_drives,update');
             Route::post('drives/{drive}/documents', [AdminDonationDriveController::class, 'uploadDocument'])
                 ->middleware('rbac:donation_drives,update');
             Route::delete('documents/{document}', [AdminDonationDriveController::class, 'deleteDocument'])
@@ -44,6 +46,8 @@ Route::prefix('v1/donation-drive')->name('api.donation-drive.')->group(function 
                 ->middleware('rbac:donation_drives,update');
             Route::patch('donors/{donor}/admin', [AdminDonationDriveController::class, 'setDonorAdmin'])
                 ->middleware('rbac:donation_drives,update');
+            Route::delete('donors/{donor}', [AdminDonationDriveController::class, 'deleteDonor'])
+                ->middleware('rbac:donation_drives,delete');
             Route::get('reports/drives', [AdminDonationDriveController::class, 'reportDrives'])
                 ->middleware('rbac:reports,view');
             Route::get('reports/drives/{drive}', [AdminDonationDriveController::class, 'report'])

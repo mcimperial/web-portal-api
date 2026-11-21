@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Modules\DonationDrive\App\Models\DonationDonor;
 use Modules\DonationDrive\App\Models\DonationDrive;
@@ -64,24 +65,60 @@ class AdminDonationDriveController extends Controller
         return response()->json(['message' => 'Donation drive status updated.', 'data' => $drive]);
     }
 
+    public function closure(Request $request, DonationDrive $drive): JsonResponse
+    {
+        $validated = $request->validate(['is_closed' => ['required', 'boolean']]);
+        $drive = DB::transaction(function () use ($drive, $request, $validated) {
+            $drive = DonationDrive::query()->lockForUpdate()->findOrFail($drive->id);
+            abort_if($validated['is_closed'] && ! $drive->is_active, 422, 'Activate this drive before closing it so donors can still view it.');
+
+            if ($drive->is_closed !== (bool) $validated['is_closed']) {
+                $drive->update(['is_closed' => $validated['is_closed']]);
+                $this->record($drive, $request, $drive->is_closed ? 'closed' : 'reopened');
+            }
+
+            return $drive;
+        });
+
+        return response()->json(['message' => $drive->is_closed ? 'Donation drive closed.' : 'Donation drive reopened.', 'data' => $drive]);
+    }
+
     public function uploadDocument(Request $request, DonationDrive $drive): JsonResponse
     {
         $validated = $request->validate([
             'document' => ['required', 'file', 'mimes:pdf,doc,docx,ppt,pptx', 'max:10240'],
         ]);
         $file = $validated['document'];
-        $path = $file->store("donation-drives/{$drive->id}", 'local');
+        $storage = Storage::disk('spaces');
+        $path = $storage->putFile("donation-drive/{$drive->id}", $file, 'private');
+        abort_if($path === false, 500, 'Unable to store the document in Spaces.');
 
-        $document = $drive->documents()->create([
-            'original_name' => $file->getClientOriginalName(),
-            'path' => $path,
-            'mime_type' => $file->getMimeType(),
-            'size' => $file->getSize(),
-            'uploaded_by' => $request->user()->id,
-        ]);
-        $this->record($drive, $request, 'document_uploaded', null, [
-            'document' => $document->original_name,
-        ]);
+        try {
+            $document = DB::transaction(function () use ($drive, $file, $path, $request) {
+                $document = $drive->documents()->create([
+                    'original_name' => $file->getClientOriginalName(),
+                    'path' => $path,
+                    'storage_disk' => 'spaces',
+                    'mime_type' => $file->getMimeType(),
+                    'size' => $file->getSize(),
+                    'uploaded_by' => $request->user()->id,
+                ]);
+                $this->record($drive, $request, 'document_uploaded', null, [
+                    'document' => $document->original_name,
+                ]);
+
+                return $document;
+            });
+        } catch (\Throwable $exception) {
+            try {
+                if (! $storage->delete($path)) {
+                    Log::error('Unable to remove a donation document after a failed upload.', ['path' => $path]);
+                }
+            } catch (\Throwable $cleanupError) {
+                Log::error('Unable to remove a donation document after a failed upload.', ['path' => $path, 'exception' => $cleanupError]);
+            }
+            throw $exception;
+        }
 
         return response()->json(['message' => 'Document uploaded.', 'data' => $document], 201);
     }
@@ -89,11 +126,13 @@ class AdminDonationDriveController extends Controller
     public function deleteDocument(Request $request, DonationDriveDocument $document): JsonResponse
     {
         $drive = $document->drive;
-        Storage::disk('local')->delete($document->path);
-        $document->delete();
-        $this->record($drive, $request, 'document_deleted', null, [
-            'document' => $document->original_name,
-        ]);
+        DB::transaction(function () use ($document, $drive, $request) {
+            $document->delete();
+            $this->record($drive, $request, 'document_deleted', null, [
+                'document' => $document->original_name,
+            ]);
+            abort_unless(Storage::disk($document->storage_disk)->delete($document->path), 500, 'Unable to delete the stored document.');
+        });
 
         return response()->json(['message' => 'Document deleted.']);
     }
@@ -136,16 +175,20 @@ class AdminDonationDriveController extends Controller
     {
         $search = trim((string) $request->query('search'));
 
-        return response()->json([
-            'data' => DonationDonor::query()
-                ->when($search !== '', function ($query) use ($search) {
-                    $query->where('normalized_name', 'like', '%' . mb_strtolower($search) . '%');
-                })
-                ->withCount('donations')
-                ->orderBy('last_name')
-                ->orderBy('first_name')
-                ->get(),
-        ]);
+        $query = DonationDonor::query()
+            ->when($search !== '', function ($query) use ($search) {
+                $query->where('normalized_name', 'like', '%' . mb_strtolower($search) . '%');
+            })
+            ->withCount('donations')
+            ->orderBy('last_name')
+            ->orderBy('first_name')
+            ->orderBy('id');
+
+        if ($request->has('page')) {
+            return response()->json($query->paginate(5));
+        }
+
+        return response()->json(['data' => $query->get()]);
     }
 
     public function setDonorAdmin(Request $request, DonationDonor $donor): JsonResponse
@@ -157,6 +200,18 @@ class AdminDonationDriveController extends Controller
             'message' => $donor->is_admin ? 'Donor promoted to administrator.' : 'Donor administrator access removed.',
             'data' => $donor,
         ]);
+    }
+
+    public function deleteDonor(DonationDonor $donor): JsonResponse
+    {
+        DB::transaction(function () use ($donor) {
+            $donor = DonationDonor::query()->lockForUpdate()->findOrFail($donor->id);
+            abort_if($donor->donations()->exists(), 409, 'Donors with donations cannot be removed because their contribution history must be preserved.');
+            $donor->tokens()->delete();
+            $donor->delete();
+        });
+
+        return response()->json(['message' => 'Donor account removed.']);
     }
 
     public function reportDrives(Request $request): JsonResponse

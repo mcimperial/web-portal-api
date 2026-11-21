@@ -2,10 +2,18 @@
 
 namespace Tests\Feature;
 
+use App\Http\Middleware\Authenticate;
+use App\Http\Middleware\RequireModulePermission;
+use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
 use Modules\DonationDrive\App\Models\DonationDonor;
@@ -14,11 +22,15 @@ use Tests\TestCase;
 
 class DonationDrivePhoneOtpTest extends TestCase
 {
+    private ?string $documentTestRoot = null;
+
     protected function setUp(): void
     {
         parent::setUp();
 
         Schema::dropIfExists('personal_access_tokens');
+        Schema::dropIfExists('donation_drive_histories');
+        Schema::dropIfExists('donation_drive_documents');
         Schema::dropIfExists('donation_drive_donation_histories');
         Schema::dropIfExists('donation_drive_donations');
         Schema::dropIfExists('donation_drives');
@@ -41,6 +53,28 @@ class DonationDrivePhoneOtpTest extends TestCase
             $table->string('title');
             $table->text('description')->nullable();
             $table->boolean('is_active')->default(false);
+            $table->boolean('is_closed')->default(false);
+            $table->timestamps();
+        });
+        Schema::create('donation_drive_documents', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('drive_id')->constrained('donation_drives')->cascadeOnDelete();
+            $table->string('original_name');
+            $table->string('path');
+            $table->string('storage_disk', 32)->default('local');
+            $table->string('mime_type')->nullable();
+            $table->unsignedBigInteger('size');
+            $table->unsignedBigInteger('uploaded_by')->nullable();
+            $table->timestamps();
+        });
+        Schema::create('donation_drive_histories', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('drive_id')->constrained('donation_drives')->cascadeOnDelete();
+            $table->unsignedBigInteger('user_id')->nullable();
+            $table->string('action');
+            $table->boolean('previous_is_active')->nullable();
+            $table->boolean('current_is_active');
+            $table->json('details')->nullable();
             $table->timestamps();
         });
         Schema::create('donation_drive_donations', function (Blueprint $table) {
@@ -69,6 +103,14 @@ class DonationDrivePhoneOtpTest extends TestCase
             $table->timestamp('expires_at')->nullable();
             $table->timestamps();
         });
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->documentTestRoot !== null) {
+            File::deleteDirectory($this->documentTestRoot);
+        }
+        parent::tearDown();
     }
 
     public function test_contact_number_requires_a_name_when_it_is_not_registered(): void
@@ -169,5 +211,217 @@ class DonationDrivePhoneOtpTest extends TestCase
 
         $cacheKey = 'donation-drive:otp:email:'.hash('sha256', 'donor.name@example.com');
         $this->assertNotNull(Cache::get($cacheKey));
+    }
+
+    public function test_admin_can_close_and_reopen_a_visible_drive(): void
+    {
+        $this->withoutMiddleware(RequireModulePermission::class);
+        $admin = new User();
+        $admin->id = 1;
+        Sanctum::actingAs($admin);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $inactive = DonationDrive::create(['title' => 'Draft', 'is_active' => false]);
+
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$inactive->id}/closure", ['is_closed' => true])
+            ->assertUnprocessable();
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$drive->id}/closure", ['is_closed' => true])
+            ->assertOk()->assertJsonPath('data.is_closed', true)->assertJsonPath('data.is_active', true);
+        $this->assertDatabaseHas('donation_drive_histories', ['drive_id' => $drive->id, 'action' => 'closed', 'user_id' => 1]);
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$drive->id}/closure", ['is_closed' => false])
+            ->assertOk()->assertJsonPath('data.is_closed', false);
+        $this->assertDatabaseHas('donation_drive_histories', ['drive_id' => $drive->id, 'action' => 'reopened', 'user_id' => 1]);
+    }
+
+    public function test_documents_are_stored_privately_in_spaces_and_legacy_files_remain_available(): void
+    {
+        $this->documentTestRoot = storage_path('framework/testing/donation-drive-'.Str::uuid());
+        $spaces = Storage::build(['driver' => 'local', 'root' => $this->documentTestRoot.'/spaces']);
+        $local = Storage::build(['driver' => 'local', 'root' => $this->documentTestRoot.'/local']);
+        Storage::set('spaces', $spaces);
+        Storage::set('local', $local);
+        $this->withoutMiddleware(RequireModulePermission::class);
+        $admin = new User();
+        $admin->id = 1;
+        Sanctum::actingAs($admin);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $file = UploadedFile::fake()->createWithContent('brief.pdf', '%PDF-1.4 test document');
+
+        $response = $this->postJson("/api/v1/donation-drive/admin/drives/{$drive->id}/documents", ['document' => $file])
+            ->assertCreated()->assertJsonMissingPath('data.path')->assertJsonMissingPath('data.storage_disk');
+        $document = $drive->documents()->findOrFail($response->json('data.id'));
+        $this->assertSame('spaces', $document->storage_disk);
+        $this->assertStringStartsWith("donation-drive/{$drive->id}/", $document->path);
+        $this->assertTrue($spaces->exists($document->path));
+        $this->assertSame('private', $spaces->getVisibility($document->path));
+
+        $local->put('donation-drives/legacy.pdf', '%PDF-1.4 legacy');
+        $legacy = $drive->documents()->create([
+            'original_name' => 'legacy.pdf',
+            'path' => 'donation-drives/legacy.pdf',
+            'mime_type' => 'application/pdf',
+            'size' => 15,
+        ])->fresh();
+        $this->assertSame('local', $legacy->storage_disk);
+        foreach ([$document, $legacy] as $entry) {
+            $url = URL::temporarySignedRoute('api.donation-drive.document.preview', now()->addMinutes(30), ['document' => $entry->id]);
+            $this->assertStringStartsWith('%PDF-', $this->get($url)->assertOk()->streamedContent());
+            $this->deleteJson("/api/v1/donation-drive/admin/documents/{$entry->id}")->assertOk();
+        }
+        $this->assertFalse($spaces->exists($document->path));
+        $this->assertFalse($local->exists($legacy->path));
+        $this->assertDatabaseCount('donation_drive_documents', 0);
+    }
+
+    public function test_failed_document_storage_does_not_create_a_record(): void
+    {
+        $this->withoutMiddleware(RequireModulePermission::class);
+        $admin = new User();
+        $admin->id = 1;
+        Sanctum::actingAs($admin);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $disk = Mockery::mock(\Illuminate\Filesystem\FilesystemAdapter::class);
+        $disk->shouldReceive('putFile')->once()->andReturn(false);
+        Storage::set('spaces', $disk);
+
+        $this->postJson("/api/v1/donation-drive/admin/drives/{$drive->id}/documents", [
+            'document' => UploadedFile::fake()->createWithContent('brief.pdf', '%PDF-1.4 test document'),
+        ])->assertStatus(500)->assertJsonPath('message', 'Unable to store the document in Spaces.');
+        $this->assertDatabaseCount('donation_drive_documents', 0);
+    }
+
+    public function test_failed_document_deletion_keeps_the_database_record(): void
+    {
+        $this->withoutMiddleware(RequireModulePermission::class);
+        $admin = new User();
+        $admin->id = 1;
+        Sanctum::actingAs($admin);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $document = $drive->documents()->create([
+            'original_name' => 'brief.pdf', 'path' => 'donation-drive/1/brief.pdf',
+            'storage_disk' => 'spaces', 'mime_type' => 'application/pdf', 'size' => 100,
+        ]);
+        $disk = Mockery::mock(\Illuminate\Filesystem\FilesystemAdapter::class);
+        $disk->shouldReceive('delete')->once()->andReturn(false);
+        Storage::set('spaces', $disk);
+
+        $this->deleteJson("/api/v1/donation-drive/admin/documents/{$document->id}")
+            ->assertStatus(500)->assertJsonPath('message', 'Unable to delete the stored document.');
+        $this->assertDatabaseHas('donation_drive_documents', ['id' => $document->id]);
+        $this->assertDatabaseCount('donation_drive_histories', 0);
+    }
+
+    public function test_document_storage_migration_keeps_existing_documents_local(): void
+    {
+        Schema::table('donation_drive_documents', fn (Blueprint $table) => $table->dropColumn('storage_disk'));
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $documentId = \Illuminate\Support\Facades\DB::table('donation_drive_documents')->insertGetId([
+            'drive_id' => $drive->id, 'original_name' => 'legacy.pdf',
+            'path' => 'donation-drives/legacy.pdf', 'size' => 100,
+        ]);
+        $migration = require base_path('Modules/DonationDrive/Database/migrations/2026_11_21_010000_add_storage_disk_to_donation_drive_documents.php');
+
+        $migration->up();
+        $this->assertDatabaseHas('donation_drive_documents', ['id' => $documentId, 'storage_disk' => 'local']);
+        $migration->down();
+        $this->assertFalse(Schema::hasColumn('donation_drive_documents', 'storage_disk'));
+    }
+
+    public function test_closure_requires_an_authenticated_administrator(): void
+    {
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $this->patchJson("/api/v1/donation-drive/admin/drives/{$drive->id}/closure", ['is_closed' => true])->assertUnauthorized();
+        $this->assertFalse($drive->fresh()->is_closed);
+    }
+
+    public function test_closure_migration_preserves_existing_drives_as_open(): void
+    {
+        Schema::table('donation_drives', fn (Blueprint $table) => $table->dropColumn('is_closed'));
+        $driveId = \Illuminate\Support\Facades\DB::table('donation_drives')->insertGetId(['title' => 'Existing', 'is_active' => true]);
+        $migration = require base_path('Modules/DonationDrive/Database/migrations/2026_11_21_000000_add_closed_status_to_donation_drives.php');
+
+        $migration->up();
+        $this->assertDatabaseHas('donation_drives', ['id' => $driveId, 'is_active' => true, 'is_closed' => false]);
+        $migration->down();
+        $this->assertFalse(Schema::hasColumn('donation_drives', 'is_closed'));
+    }
+
+    public function test_closed_drives_remain_visible_but_reject_new_and_changed_contributions(): void
+    {
+        $donor = DonationDonor::create(['first_name' => 'Maria', 'last_name' => 'Santos', 'normalized_name' => 'maria santos']);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true, 'is_closed' => true]);
+        $other = DonationDrive::create(['title' => 'Other', 'is_active' => true, 'is_closed' => true]);
+        DonationDrive::create(['title' => 'Hidden', 'is_active' => false, 'is_closed' => true]);
+        $donor->donations()->create(['drive_id' => $drive->id, 'amount' => 500, 'cutoff' => 1]);
+        Sanctum::actingAs($donor, ['donation-drive'], 'donation');
+
+        $this->getJson('/api/v1/donation-drive/drives')->assertOk()->assertJsonCount(2, 'data')
+            ->assertJsonFragment(['id' => $drive->id, 'title' => 'Relief'])
+            ->assertJsonFragment(['is_closed' => true])
+            ->assertJsonFragment(['amount' => '500.00']);
+        $this->getJson('/api/v1/donation-drive/my-donations')->assertOk()->assertJsonCount(1, 'data');
+        foreach ([$drive, $other] as $closedDrive) {
+            $this->postJson("/api/v1/donation-drive/drives/{$closedDrive->id}/donations", ['amount' => 750, 'cutoff' => 2])
+                ->assertForbidden()->assertJsonPath('message', 'This donation drive is closed to contributions.');
+        }
+        $this->assertDatabaseCount('donation_drive_donations', 1);
+        $this->assertDatabaseHas('donation_drive_donations', ['drive_id' => $drive->id, 'amount' => 500, 'cutoff' => 1]);
+        $this->assertDatabaseCount('donation_drive_donation_histories', 0);
+
+        $drive->update(['is_closed' => false]);
+        $this->postJson("/api/v1/donation-drive/drives/{$drive->id}/donations", ['amount' => 750, 'cutoff' => 2])->assertOk();
+    }
+
+    public function test_admin_donor_list_paginates_and_filters(): void
+    {
+        $this->withoutMiddleware([Authenticate::class, RequireModulePermission::class]);
+        for ($i = 1; $i <= 6; $i++) {
+            DonationDonor::create([
+                'first_name' => "Donor{$i}",
+                'last_name' => 'Example',
+                'normalized_name' => "donor{$i} example",
+                'email' => "donor{$i}@example.test",
+                'email_verified_at' => now(),
+            ]);
+        }
+
+        $this->getJson('/api/v1/donation-drive/admin/donors?page=1')
+            ->assertOk()->assertJsonCount(5, 'data')
+            ->assertJsonPath('total', 6)->assertJsonPath('last_page', 2)
+            ->assertJsonPath('data.0.email', 'donor1@example.test');
+        $this->getJson('/api/v1/donation-drive/admin/donors?page=2')
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('total', 6);
+        $this->getJson('/api/v1/donation-drive/admin/donors?page=1&search=donor6')
+            ->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('total', 1);
+    }
+
+    public function test_removing_a_donor_requires_authentication(): void
+    {
+        $donor = DonationDonor::create([
+            'first_name' => 'Empty', 'last_name' => 'Donor', 'normalized_name' => 'empty donor',
+        ]);
+
+        $this->deleteJson("/api/v1/donation-drive/admin/donors/{$donor->id}")->assertUnauthorized();
+        $this->assertDatabaseHas('donation_donors', ['id' => $donor->id]);
+    }
+
+    public function test_admin_can_remove_only_donors_without_donations(): void
+    {
+        $this->withoutMiddleware([Authenticate::class, RequireModulePermission::class]);
+        $emptyDonor = DonationDonor::create([
+            'first_name' => 'Empty', 'last_name' => 'Donor', 'normalized_name' => 'empty donor',
+        ]);
+        $emptyDonor->createToken('donation-drive');
+        $donor = DonationDonor::create([
+            'first_name' => 'Existing', 'last_name' => 'Donor', 'normalized_name' => 'existing donor',
+        ]);
+        $drive = DonationDrive::create(['title' => 'Relief', 'is_active' => true]);
+        $donor->donations()->create(['drive_id' => $drive->id, 'amount' => 100, 'cutoff' => 1]);
+
+        $this->deleteJson("/api/v1/donation-drive/admin/donors/{$donor->id}")->assertStatus(409);
+        $this->assertDatabaseHas('donation_drive_donations', ['donor_id' => $donor->id]);
+        $this->assertDatabaseHas('donation_donors', ['id' => $donor->id]);
+        $this->deleteJson("/api/v1/donation-drive/admin/donors/{$emptyDonor->id}")->assertOk();
+        $this->assertDatabaseMissing('donation_donors', ['id' => $emptyDonor->id]);
+        $this->assertDatabaseMissing('personal_access_tokens', ['tokenable_type' => DonationDonor::class, 'tokenable_id' => $emptyDonor->id]);
     }
 }
