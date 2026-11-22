@@ -242,6 +242,13 @@ class LoaRequestController extends Controller
                 'member_id' => $member->member_id,
                 'request_hash' => $requestHash,
                 'status' => 'processing',
+                'details' => $backend === 'third_party' ? [
+                    'loa_type' => $validated['loa_type'],
+                    'provider_id' => $provider->id,
+                    'doctor_id' => $doctor?->id,
+                    'complaint' => $complaintTitle,
+                    'mobile_details' => $mobileDetails,
+                ] : null,
             ]);
         } catch (QueryException $exception) {
             $submission = MobileLoaRequestSubmission::query()
@@ -307,7 +314,7 @@ class LoaRequestController extends Controller
             }
 
             try {
-                $clientCareResponse = $this->submitThirdPartyRequest(
+                $this->submitThirdPartyRequest(
                     $clientCareApi,
                     $configuration,
                     $request,
@@ -341,33 +348,13 @@ class LoaRequestController extends Controller
             }
 
             $this->deleteAttachment($attachmentPath);
-            $clientCareRequestId = filter_var(
-                $clientCareResponse->json('data.id'),
-                FILTER_VALIDATE_INT,
-                ['options' => ['min_range' => 1]]
-            );
-            if ($clientCareRequestId === false) {
-                Log::warning('ClientCare accepted a mobile LOA request without returning data.id.');
+            $submission->status = 'completed';
+            $submission->save();
 
-                return response()->json([
-                    'message' => 'ClientCare accepted the LOA request but did not return its request ID. Do not resubmit; contact support.',
-                ], 502);
-            }
-
-            $loaRequest = PortalRequest::query()
-                ->whereIn('member_id', array_unique([$member->member_id, $patient->member_id]))
-                ->where('provider_id', $provider->id)
-                ->where('loa_type', $validated['loa_type'])
-                ->find($clientCareRequestId);
-            if (! $loaRequest) {
-                Log::warning('ClientCare returned a mobile LOA ID that did not match the submitted request.', [
-                    'portal_request_id' => $clientCareRequestId,
-                ]);
-
-                return response()->json([
-                    'message' => 'ClientCare accepted the LOA request, but the matching portal record could not be verified. Do not resubmit; contact support.',
-                ], 503);
-            }
+            return response()->json([
+                'message' => 'LOA request submitted successfully.',
+                'request' => null,
+            ], 201);
         }
 
         $submission->portal_request_id = $loaRequest->id;
@@ -401,11 +388,18 @@ class LoaRequestController extends Controller
 
     private function existingSubmissionResponse(MobileLoaRequestSubmission $submission): JsonResponse
     {
-        if ($submission->status !== 'completed' || $submission->portal_request_id === null) {
+        if ($submission->status !== 'completed') {
             return response()->json([
                 'message' => 'This LOA submission is already being processed or was saved. Do not submit it again.',
                 'portal_request_id' => $submission->portal_request_id,
             ], 409);
+        }
+
+        if ($submission->portal_request_id === null) {
+            return response()->json([
+                'message' => 'LOA request submitted successfully.',
+                'request' => null,
+            ], 200);
         }
 
         $loaRequest = PortalRequest::query()

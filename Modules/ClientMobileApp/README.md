@@ -21,15 +21,15 @@ These migrations target the application's `mysql` connection
 `mysql_sync` and `mysql_masterlist` without adding or altering their schema.
 Each mobile account has a unique UUID used as its public Account ID; the
 numeric primary key remains internal to mobile authentication and relations.
-Mobile-only LOA details are stored in the `mobile_loa_request_details` table
-on `mysql`. The consultation and laboratory request forms mirror the client
+In `system` mode, mobile-only LOA details are stored in the
+`mobile_loa_request_details` table on `mysql`. The consultation and laboratory request forms mirror the client
 portal fields; they do not resubmit the mobile account email. Alternate email
 and contact number are optional. Contact numbers display as
 `+63 000-000-0000` and are submitted as local digits (for example,
 `09989829829`). An optional number entered during sign-up is stored with the
-mobile account and prefilled in both LOA forms. Laboratory request attachments
-are stored on the private local disk and their path is written to the existing
-`mysql_masterlist.app_portal_requests.loa_attachment` column. Consultation
+mobile account and prefilled in both LOA forms. In `system` mode laboratory
+request attachments are stored on the private local disk and their path is
+written to the existing `mysql_masterlist.app_portal_requests.loa_attachment` column. Consultation
 complaints are searched from active `mysql_masterlist.app_portal_complaints`
 records without modifying that table. Mobile users may also create shared
 complaints in `mysql.mobile_complaints`; the app searches both sources. These
@@ -45,8 +45,10 @@ LOA submissions can be routed using the `loa_request_backend` row in the
 app-owned `mysql.mobile_configuration` key/value table. The migration seeds
 this setting as `system` to preserve current behavior. Set it to `third_party`
 to submit consultation and laboratory requests only through ClientCare. The API
-uses ClientCare's returned `data.id` to link mobile-only details to the created
-portal request and does not create a second local portal row. The same row's
+does not create a second local portal row or require an ID in ClientCare's
+response. Mobile-only details are saved in `mysql.mobile_loa_request_submissions`
+but cannot be linked to the portal request without its ID, so they will not
+appear in LOA details returned by the mobile API. The same row's
 `api_url`, `api_header`, and `api_key` columns hold the ClientCare base URL and
 credentials. The key is stored as plaintext and hidden from model serialization;
 restrict database access accordingly. The migration that converts an existing
@@ -78,8 +80,9 @@ even when ClientCare returns HTTP 200.
 LOA API submissions require an `Idempotency-Key` UUID header. The app reuses
 the same key when retrying an unchanged submission; the API records keys and
 request results in the app-owned `mysql.mobile_loa_request_submissions` table,
-so replaying a request returns the original LOA instead of inserting another
-portal row. Apply the mobile-owned migration before deploying the updated app.
+so replaying a request does not submit another LOA. In `third_party` mode the
+response's `request` is null, including on replay. Apply the mobile-owned
+migrations before deploying the updated API.
 
 Member-specific data is linked to the mobile account through
 `POST /api/v1/mobile/member/link`, which verifies the member ID and birth date

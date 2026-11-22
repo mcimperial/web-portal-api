@@ -11,4 +11,8 @@ class MobileLoaRequestSubmission extends Model
     protected $table = 'mobile_loa_request_submissions';
 
     protected $guarded = [];
+
+    protected $casts = [
+        'details' => 'array',
+    ];
 }
