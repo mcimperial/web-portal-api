@@ -11,12 +11,14 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Modules\ClientMobileApp\App\Models\MobileConfiguration;
 use Modules\ClientMobileData\App\Models\Doctor;
 use Modules\ClientMobileData\App\Models\Hospital;
 use Modules\ClientMobileData\App\Models\Masterlist;
 use Modules\ClientMobileData\App\Models\MobileComplaint;
 use Modules\ClientMobileData\App\Models\MobileLoaRequestDetail;
+use Modules\ClientMobileData\App\Models\MobileLoaRequestSubmission;
 use Modules\ClientMobileData\App\Models\PortalComplaint;
 use Modules\ClientMobileData\App\Models\PortalRequest;
 use Modules\ClientMobileData\App\Services\ClientCareAuthenticationException;
@@ -98,6 +100,13 @@ class LoaRequestController extends Controller
 
     public function store(Request $request, ClientCareLoaApiService $clientCareApi): JsonResponse
     {
+        $idempotencyKey = $request->header('Idempotency-Key');
+        if (! is_string($idempotencyKey) || ! Str::isUuid($idempotencyKey)) {
+            return response()->json([
+                'message' => 'A valid Idempotency-Key header is required.',
+            ], 422);
+        }
+
         $validated = $request->validate([
             'member_id' => ['sometimes', 'string', 'max:15'],
             'provider_id' => ['required', 'integer'],
@@ -216,6 +225,44 @@ class LoaRequestController extends Controller
                 $request->file('doctor_request')->getClientOriginalName();
         }
 
+        $requestHash = $this->requestHash(
+            $request,
+            $validated,
+            $member,
+            $provider,
+            $doctor,
+            $complaintTitle,
+            $mobileDetails
+        );
+
+        try {
+            $submission = MobileLoaRequestSubmission::create([
+                'idempotency_key' => $idempotencyKey,
+                'member_id' => $member->member_id,
+                'request_hash' => $requestHash,
+                'status' => 'processing',
+            ]);
+        } catch (QueryException $exception) {
+            $submission = MobileLoaRequestSubmission::query()
+                ->where('idempotency_key', $idempotencyKey)
+                ->first();
+
+            if (! $submission) {
+                $this->deleteAttachment($attachmentPath);
+                throw $exception;
+            }
+
+            $this->deleteAttachment($attachmentPath);
+
+            if (! hash_equals($submission->request_hash, $requestHash)) {
+                return response()->json([
+                    'message' => 'This Idempotency-Key was already used for a different LOA request.',
+                ], 409);
+            }
+
+            return $this->existingSubmissionResponse($submission);
+        }
+
         unset($validated['mobile_details']);
         unset($validated['doctor_request']);
         unset($validated['complaint_id']);
@@ -242,9 +289,13 @@ class LoaRequestController extends Controller
             ]);
         } catch (QueryException $exception) {
             $this->deleteAttachment($attachmentPath);
+            $submission->delete();
 
             throw $exception;
         }
+
+        $submission->portal_request_id = $loaRequest->id;
+        $submission->save();
 
         try {
             MobileLoaRequestDetail::create([
@@ -305,6 +356,9 @@ class LoaRequestController extends Controller
             }
         }
 
+        $submission->status = 'completed';
+        $submission->save();
+
         return response()->json([
             'message' => 'LOA request submitted successfully.',
             'request' => [
@@ -312,6 +366,80 @@ class LoaRequestController extends Controller
                 'mobile_details' => $mobileDetails,
             ],
         ], 201);
+    }
+
+    private function existingSubmissionResponse(MobileLoaRequestSubmission $submission): JsonResponse
+    {
+        if ($submission->status !== 'completed' || $submission->portal_request_id === null) {
+            return response()->json([
+                'message' => 'This LOA submission is already being processed or was saved. Do not submit it again.',
+                'portal_request_id' => $submission->portal_request_id,
+            ], 409);
+        }
+
+        $loaRequest = PortalRequest::query()
+            ->select(PortalRequest::PUBLIC_COLUMNS)
+            ->find($submission->portal_request_id);
+
+        if (! $loaRequest) {
+            return response()->json([
+                'message' => 'The original LOA submission was recorded but could not be retrieved. Do not submit it again; contact support.',
+            ], 503);
+        }
+
+        $details = MobileLoaRequestDetail::query()
+            ->where('portal_request_id', $loaRequest->id)
+            ->where('member_id', $submission->member_id)
+            ->first();
+
+        return response()->json([
+            'message' => 'LOA request submitted successfully.',
+            'request' => [
+                ...$loaRequest->only(PortalRequest::PUBLIC_COLUMNS),
+                'mobile_details' => $details?->details,
+            ],
+        ], 200);
+    }
+
+    private function requestHash(
+        Request $request,
+        array $validated,
+        Masterlist $member,
+        Hospital $provider,
+        ?Doctor $doctor,
+        string $complaintTitle,
+        array $mobileDetails
+    ): string {
+        $data = [
+            'member_id' => $member->member_id,
+            'provider_id' => $provider->id,
+            'doctor_id' => $doctor?->id,
+            'loa_type' => $validated['loa_type'],
+            'complaint_id' => $validated['complaint_id'] ?? null,
+            'complaint_source' => $validated['complaint_source'] ?? null,
+            'complaint_title' => $complaintTitle,
+            'mobile_details' => $mobileDetails,
+            'attachment_hash' => $request->hasFile('doctor_request')
+                ? hash_file('sha256', $request->file('doctor_request')->getRealPath())
+                : null,
+        ];
+
+        return hash('sha256', json_encode($this->sortKeysRecursively($data), JSON_THROW_ON_ERROR));
+    }
+
+    private function sortKeysRecursively(array $data): array
+    {
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                $data[$key] = $this->sortKeysRecursively($value);
+            }
+        }
+
+        if (! array_is_list($data)) {
+            ksort($data);
+        }
+
+        return $data;
     }
 
     private function submitThirdPartyRequest(

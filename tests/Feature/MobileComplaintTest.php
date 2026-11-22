@@ -4,9 +4,11 @@ namespace Tests\Feature;
 
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Request as ClientRequest;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileData\App\Models\Masterlist;
 use Tests\TestCase;
@@ -80,19 +82,78 @@ class MobileComplaintTest extends TestCase
             ->assertJsonPath('complaint.id', 1);
 
         Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
-        $this->postJson('/api/v1/mobile/loa/requests', $this->loaPayload(['complaint_source' => 'custom']))
+        $this->withHeader('Idempotency-Key', '53c98094-0f65-45f2-8082-ef21c2b85408')
+            ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload(['complaint_source' => 'custom']))
             ->assertCreated()
             ->assertJsonPath('request.complaint', 'Eye strain');
         Http::assertSent(fn (ClientRequest $request) => $request->data()['complaint'] === [['label' => 'Eye strain']]);
 
-        $this->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
+        $this->withHeader('Idempotency-Key', '687de31f-e52b-4dd1-8c43-ebcb80d3e259')
+            ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
             ->assertCreated()
             ->assertJsonPath('request.complaint', 'Headache');
-        $this->postJson('/api/v1/mobile/loa/requests', $this->loaPayload([
-            'complaint_id' => 999,
-            'complaint_source' => 'custom',
-        ]))->assertUnprocessable();
+        $this->withHeader('Idempotency-Key', '401df042-b7fb-4155-93f6-ddb88df3794a')
+            ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload([
+                'complaint_id' => 999,
+                'complaint_source' => 'custom',
+            ]))->assertUnprocessable();
         $this->assertSame(2, DB::connection('mysql_masterlist')->table('app_portal_requests')->count());
+    }
+
+    public function test_replayed_consultation_and_laboratory_submissions_create_one_portal_row_each(): void
+    {
+        $this->createLoaTables();
+        Storage::fake('local');
+        $this->actingAs($this->mobileUser('member@example.test', 'MEM001'), 'mobile');
+        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+
+        $this->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
+            ->assertUnprocessable();
+
+        $consultationKey = '53c98094-0f65-45f2-8082-ef21c2b85408';
+        $firstConsultation = $this->withHeader('Idempotency-Key', $consultationKey)
+            ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
+            ->assertCreated();
+        $replayedConsultation = $this->withHeader('Idempotency-Key', $consultationKey)
+            ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
+            ->assertOk();
+        $this->assertSame(
+            $firstConsultation->json('request.id'),
+            $replayedConsultation->json('request.id')
+        );
+        $changedConsultation = $this->loaPayload();
+        $changedConsultation['mobile_details']['notes'] = 'Different request';
+        $this->withHeader('Idempotency-Key', $consultationKey)
+            ->postJson('/api/v1/mobile/loa/requests', $changedConsultation)
+            ->assertConflict();
+
+        $laboratoryKey = '687de31f-e52b-4dd1-8c43-ebcb80d3e259';
+        $laboratoryPayload = $this->loaPayload(['loa_type' => 'laboratory']);
+        unset($laboratoryPayload['complaint_id']);
+        $laboratoryPayload['doctor_request'] = UploadedFile::fake()->createWithContent(
+            'doctor-request.pdf',
+            'test laboratory request'
+        );
+        $firstLaboratory = $this->withHeader('Idempotency-Key', $laboratoryKey)
+            ->post('/api/v1/mobile/loa/requests', $laboratoryPayload)
+            ->assertCreated();
+
+        $laboratoryPayload['doctor_request'] = UploadedFile::fake()->createWithContent(
+            'doctor-request.pdf',
+            'test laboratory request'
+        );
+        $replayedLaboratory = $this->withHeader('Idempotency-Key', $laboratoryKey)
+            ->post('/api/v1/mobile/loa/requests', $laboratoryPayload)
+            ->assertOk();
+        $this->assertSame(
+            $firstLaboratory->json('request.id'),
+            $replayedLaboratory->json('request.id')
+        );
+
+        $this->assertSame(2, DB::connection('mysql_masterlist')->table('app_portal_requests')->count());
+        $this->assertSame(2, DB::connection('mysql')->table('mobile_loa_request_details')->count());
+        $this->assertSame(2, DB::connection('mysql')->table('mobile_loa_request_submissions')->count());
+        Http::assertSentCount(2);
     }
 
     private function mobileUser(string $email, ?string $memberId = null): MobileUser
@@ -135,9 +196,18 @@ class MobileComplaintTest extends TestCase
         ]);
         Schema::connection('mysql')->create('mobile_loa_request_details', function (Blueprint $table) {
             $table->id();
-            $table->unsignedBigInteger('portal_request_id');
+            $table->unsignedBigInteger('portal_request_id')->unique();
             $table->string('member_id');
             $table->json('details');
+            $table->timestamps();
+        });
+        Schema::connection('mysql')->create('mobile_loa_request_submissions', function (Blueprint $table) {
+            $table->id();
+            $table->uuid('idempotency_key')->unique();
+            $table->string('member_id', 15);
+            $table->char('request_hash', 64);
+            $table->unsignedBigInteger('portal_request_id')->nullable()->unique();
+            $table->string('status', 20)->default('processing');
             $table->timestamps();
         });
         Schema::connection('mysql_sync')->create('masterlist', function (Blueprint $table) {
