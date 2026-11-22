@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\Client\Response;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -269,29 +270,104 @@ class LoaRequestController extends Controller
         unset($validated['complaint_source']);
         unset($validated['doctor_id']);
 
-        try {
-            $loaRequest = PortalRequest::create([
-                ...$validated,
-                'member_id' => $member->member_id,
-                'provider_id' => $provider->id,
-                'provider' => $provider->name,
-                'doctor_id' => $doctor?->id,
-                'doctor_name' => $doctor
-                    ? trim(implode(' ', array_filter([
-                        $doctor->first,
-                        $doctor->middle,
-                        $doctor->last,
-                    ])))
-                    : null,
-                'complaint' => $complaintTitle,
-                'loa_attachment' => $attachmentPath,
-                'loa_status' => 'Pending Approval',
-            ]);
-        } catch (QueryException $exception) {
-            $this->deleteAttachment($attachmentPath);
-            $submission->delete();
+        if ($backend === 'system') {
+            try {
+                $loaRequest = PortalRequest::create([
+                    ...$validated,
+                    'member_id' => $member->member_id,
+                    'provider_id' => $provider->id,
+                    'provider' => $provider->name,
+                    'doctor_id' => $doctor?->id,
+                    'doctor_name' => $doctor
+                        ? trim(implode(' ', array_filter([
+                            $doctor->first,
+                            $doctor->middle,
+                            $doctor->last,
+                        ])))
+                        : null,
+                    'complaint' => $complaintTitle,
+                    'loa_attachment' => $attachmentPath,
+                    'loa_status' => 'Pending Approval',
+                ]);
+            } catch (QueryException $exception) {
+                $this->deleteAttachment($attachmentPath);
+                $submission->delete();
 
-            throw $exception;
+                throw $exception;
+            }
+        } else {
+            $employee = $this->resolveEmployee($member);
+            if (! $employee) {
+                $this->deleteAttachment($attachmentPath);
+                $submission->delete();
+
+                return response()->json([
+                    'message' => 'The employee record could not be found for the ClientCare request.',
+                ], 422);
+            }
+
+            try {
+                $clientCareResponse = $this->submitThirdPartyRequest(
+                    $clientCareApi,
+                    $configuration,
+                    $request,
+                    $validated['loa_type'],
+                    $patient,
+                    $employee,
+                    $provider,
+                    $doctor,
+                    $complaintTitle,
+                    $attachmentPath
+                );
+            } catch (ClientCareAuthenticationException $exception) {
+                $this->deleteAttachment($attachmentPath);
+                $submission->delete();
+                Log::warning('ClientCare rejected the credentials for a mobile LOA request.');
+
+                return response()->json([
+                    'message' => 'ClientCare rejected the API credentials. No LOA was submitted; contact support.',
+                ], 502);
+            } catch (ConnectionException|RequestException $exception) {
+                $this->deleteAttachment($attachmentPath);
+                Log::warning('ClientCare LOA request could not be confirmed.', [
+                    'status' => $exception instanceof RequestException
+                        ? $exception->response->status()
+                        : null,
+                ]);
+
+                return response()->json([
+                    'message' => 'ClientCare submission could not be confirmed. Do not resubmit; contact support.',
+                ], 502);
+            }
+
+            $this->deleteAttachment($attachmentPath);
+            $clientCareRequestId = filter_var(
+                $clientCareResponse->json('data.id'),
+                FILTER_VALIDATE_INT,
+                ['options' => ['min_range' => 1]]
+            );
+            if ($clientCareRequestId === false) {
+                Log::warning('ClientCare accepted a mobile LOA request without returning data.id.');
+
+                return response()->json([
+                    'message' => 'ClientCare accepted the LOA request but did not return its request ID. Do not resubmit; contact support.',
+                ], 502);
+            }
+
+            $loaRequest = PortalRequest::query()
+                ->whereIn('member_id', array_unique([$member->member_id, $patient->member_id]))
+                ->where('provider_id', $provider->id)
+                ->where('loa_type', $validated['loa_type'])
+                ->find($clientCareRequestId);
+            if (! $loaRequest) {
+                Log::warning('ClientCare returned a mobile LOA ID that did not match the submitted request.', [
+                    'portal_request_id' => $clientCareRequestId,
+                ]);
+
+                return response()->json([
+                    'message' => 'ClientCare accepted the LOA request, but the matching portal record could not be verified. Do not resubmit; contact support.',
+                ], 503);
+            }
         }
 
         $submission->portal_request_id = $loaRequest->id;
@@ -307,53 +383,8 @@ class LoaRequestController extends Controller
             report($exception);
 
             return response()->json([
-                'message' => "LOA request {$loaRequest->id} was saved to the portal, but its mobile details could not be saved."
-                    .($backend === 'third_party' ? ' It was not sent to the third-party service.' : '')
-                    .' Do not resubmit; contact support.',
+                'message' => "LOA request {$loaRequest->id} was saved, but its mobile details could not be saved. Do not resubmit; contact support.",
             ], 503);
-        }
-
-        if ($backend === 'third_party') {
-            $employee = $this->resolveEmployee($member);
-            if (! $employee) {
-                return response()->json([
-                    'message' => "LOA request {$loaRequest->id} was saved to the portal, but the employee record could not be found for the third-party request. Do not resubmit; contact support.",
-                ], 503);
-            }
-
-            try {
-                $this->submitThirdPartyRequest(
-                    $clientCareApi,
-                    $configuration,
-                    $request,
-                    $validated['loa_type'],
-                    $patient,
-                    $employee,
-                    $provider,
-                    $doctor,
-                    $complaintTitle,
-                    $attachmentPath
-                );
-            } catch (ClientCareAuthenticationException $exception) {
-                Log::warning('Third-party LOA credentials were rejected after the portal request was saved.', [
-                    'portal_request_id' => $loaRequest->id,
-                ]);
-
-                return response()->json([
-                    'message' => "LOA request {$loaRequest->id} was saved to the portal, but the third-party service rejected the API credentials. Do not resubmit; contact support.",
-                ], 502);
-            } catch (ConnectionException|RequestException $exception) {
-                Log::warning('Third-party LOA request failed after the portal request was saved.', [
-                    'portal_request_id' => $loaRequest->id,
-                    'status' => $exception instanceof RequestException
-                        ? $exception->response->status()
-                        : null,
-                ]);
-
-                return response()->json([
-                    'message' => "LOA request {$loaRequest->id} was saved to the portal, but the third-party submission could not be confirmed. Do not resubmit; contact support.",
-                ], 502);
-            }
         }
 
         $submission->status = 'completed';
@@ -453,7 +484,7 @@ class LoaRequestController extends Controller
         ?Doctor $doctor,
         string $complaintTitle,
         ?string $attachmentPath
-    ): void {
+    ): Response {
         $doctorName = $doctor
             ? trim(implode(' ', array_filter([
                 $doctor->first,
@@ -481,9 +512,8 @@ class LoaRequestController extends Controller
 
         if ($loaType === 'consultation') {
             $payload['complaint'] = [['label' => $complaintTitle]];
-            $clientCareApi->submitConsultation($configuration, $payload);
 
-            return;
+            return $clientCareApi->submitConsultation($configuration, $payload);
         }
 
         $file = $request->file('doctor_request');
@@ -492,7 +522,8 @@ class LoaRequestController extends Controller
         }
 
         $payload['cceId'] = 'null';
-        $clientCareApi->submitLaboratory(
+
+        return $clientCareApi->submitLaboratory(
             $configuration,
             $payload,
             Storage::disk('local')->get($attachmentPath),
