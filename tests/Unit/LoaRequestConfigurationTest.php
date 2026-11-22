@@ -60,6 +60,7 @@ class LoaRequestConfigurationTest extends TestCase
                 'patient_birth_date' => '1990-01-01',
             ],
         ]);
+        $request->headers->set('Idempotency-Key', '53c98094-0f65-45f2-8082-ef21c2b85408');
 
         return app(LoaRequestController::class)->store($request, app(ClientCareLoaApiService::class));
     }

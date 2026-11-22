@@ -74,6 +74,12 @@ that the portal copy was saved and instructs the user not to resubmit. An
 `Unauthorized` response is treated as an authentication failure even when
 ClientCare returns HTTP 200.
 
+LOA API submissions require an `Idempotency-Key` UUID header. The app reuses
+the same key when retrying an unchanged submission; the API records keys and
+request results in the app-owned `mysql.mobile_loa_request_submissions` table,
+so replaying a request returns the original LOA instead of inserting another
+portal row. Apply the mobile-owned migration before deploying the updated app.
+
 Member-specific data is linked to the mobile account through
 `POST /api/v1/mobile/member/link`, which verifies the member ID and birth date
 against `mysql_sync.masterlist`. The mobile app links an activated member
