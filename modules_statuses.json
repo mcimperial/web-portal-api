@@ -6,5 +6,6 @@
     "ClientMasterlist": true,
     "ClientMobileApp": true,
     "ClientThirdParty": true,
-    "DonationDrive": true
+    "DonationDrive": true,
+    "ClientMobileData": true
 }

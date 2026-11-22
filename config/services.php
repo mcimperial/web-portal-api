@@ -39,4 +39,10 @@ return [
         'timeout' => env('SMS_GATEWAY_TIMEOUT', 20),
     ],
 
+    'clientcare' => [
+        'base_url' => env('CLIENTCARE_API_BASE_URL', 'https://clientcare-api.llibi.app/api/portal'),
+        'connect_timeout' => env('CLIENTCARE_CONNECT_TIMEOUT', 10),
+        'timeout' => env('CLIENTCARE_API_TIMEOUT', 30),
+    ],
+
 ];

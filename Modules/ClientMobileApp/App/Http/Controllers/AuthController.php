@@ -3,15 +3,14 @@
 namespace Modules\ClientMobileApp\App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
+use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
-use Illuminate\Validation\Rules\Password;
-use Illuminate\Auth\Events\Registered;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\View;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\Password;
+use Illuminate\Validation\ValidationException;
+use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileApp\App\Models\RegistrationOtp;
 
 class AuthController extends Controller
@@ -27,15 +26,15 @@ class AuthController extends Controller
             'device_name' => 'nullable|string',
         ]);
 
-        $user = User::where('email', $request->email)->first();
+        $user = MobileUser::where('email', strtolower($request->email))->first();
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (! $user || ! $user->is_active || ! Hash::check($request->password, $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
         }
 
-        $deviceName = $request->deviceName ?? 'mobile-app';
+        $deviceName = $request->device_name ?? $request->deviceName ?? 'mobile-app';
 
         // Update user's device_name
         $user->update(['device_name' => $deviceName]);
@@ -46,8 +45,10 @@ class AuthController extends Controller
             'token' => $token,
             'user' => [
                 'id' => $user->id,
+                'uuid' => $user->uuid,
                 'name' => $user->name,
                 'email' => $user->email,
+                'contact_number' => $user->contact_number,
                 'device_name' => $user->device_name,
             ],
         ]);
@@ -95,7 +96,8 @@ class AuthController extends Controller
         $request->validate([
             'firstName' => ['required', 'string', 'max:255'],
             'lastName' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users,email'],
+            'email' => ['required', 'string', 'email', 'max:255', 'unique:mobile_users,email'],
+            'contact_number' => ['nullable', 'string', 'regex:/^09[0-9]{9}$/'],
             'password' => ['required', 'string', Password::min(8)],
             'passwordConfirmation' => ['required', 'string', 'same:password'],
             'deviceName' => ['nullable', 'string'],
@@ -109,17 +111,18 @@ class AuthController extends Controller
             ->where('verified', true)
             ->first();
 
-        if (!$otpRecord) {
+        if (! $otpRecord) {
             throw ValidationException::withMessages([
                 'email' => ['Please verify your email address first.'],
             ]);
         }
 
-        $fullName = trim($request->firstName . ' ' . $request->lastName);
+        $fullName = trim($request->firstName.' '.$request->lastName);
 
-        $user = User::create([
+        $user = MobileUser::create([
             'name' => $fullName,
             'email' => $email,
+            'contact_number' => $request->input('contact_number') ?: null,
             'password' => Hash::make($request->password),
             'device_name' => $request->deviceName ?? 'mobile-app',
             'email_verified_at' => now(), // Mark as verified since OTP was verified
@@ -137,8 +140,10 @@ class AuthController extends Controller
             'token' => $token,
             'user' => [
                 'id' => $user->id,
+                'uuid' => $user->uuid,
                 'name' => $user->name,
                 'email' => $user->email,
+                'contact_number' => $user->contact_number,
                 'deviceName' => $user->device_name,
             ],
         ], 201);
@@ -166,9 +171,15 @@ class AuthController extends Controller
         $deviceName = $request->device_name ?? 'mobile-app';
 
         // Check if user exists by email
-        $user = User::where('email', $email)->first();
+        $user = MobileUser::where('email', $email)->first();
 
         if ($user) {
+            if (! $user->is_active) {
+                throw ValidationException::withMessages([
+                    'email' => ['This mobile account is disabled.'],
+                ]);
+            }
+
             // User exists - update social provider info if needed
             $socialData = $user->social_providers ?? [];
             $socialData[$provider] = [
@@ -183,7 +194,7 @@ class AuthController extends Controller
             ]);
         } else {
             // Create new user with social login
-            $user = User::create([
+            $user = MobileUser::create([
                 'name' => $name,
                 'email' => $email,
                 'password' => Hash::make(Str::random(32)), // Random password for social users
@@ -209,8 +220,10 @@ class AuthController extends Controller
             'token' => $token,
             'user' => [
                 'id' => $user->id,
+                'uuid' => $user->uuid,
                 'name' => $user->name,
                 'email' => $user->email,
+                'contact_number' => $user->contact_number,
                 'device_name' => $user->device_name,
                 'avatar' => $avatar,
                 'provider' => $provider,
@@ -224,6 +237,7 @@ class AuthController extends Controller
     public function googleSignIn(Request $request)
     {
         $request->merge(['provider' => 'google']);
+
         return $this->socialLogin($request);
     }
 
@@ -233,6 +247,7 @@ class AuthController extends Controller
     public function facebookSignIn(Request $request)
     {
         $request->merge(['provider' => 'facebook']);
+
         return $this->socialLogin($request);
     }
 
@@ -242,6 +257,7 @@ class AuthController extends Controller
     public function appleSignIn(Request $request)
     {
         $request->merge(['provider' => 'apple']);
+
         return $this->socialLogin($request);
     }
 
@@ -254,10 +270,10 @@ class AuthController extends Controller
             'email' => ['required', 'string', 'email', 'max:255'],
         ]);
 
-        $exists = User::where('email', strtolower($request->email))->exists();
+        $exists = MobileUser::where('email', strtolower($request->email))->exists();
 
         return response()->json([
-            'available' => !$exists,
+            'available' => ! $exists,
             'message' => $exists ? 'Email is already registered' : 'Email is available',
         ]);
     }
@@ -282,10 +298,10 @@ class AuthController extends Controller
         ]);
 
         $email = strtolower($request->email);
-        $name = trim($request->firstName . ' ' . $request->lastName);
+        $name = trim($request->firstName.' '.$request->lastName);
 
         // Check if email is already registered
-        if (User::where('email', $email)->exists()) {
+        if (MobileUser::where('email', $email)->exists()) {
             throw ValidationException::withMessages([
                 'email' => ['This email is already registered. Please login instead.'],
             ]);
@@ -295,7 +311,7 @@ class AuthController extends Controller
         $existingOtp = RegistrationOtp::where('email', $email)->first();
 
         // Rate limiting: max 5 attempts
-        if ($existingOtp && $existingOtp->hasMaxAttempts() && !$existingOtp->isExpired()) {
+        if ($existingOtp && $existingOtp->hasMaxAttempts() && ! $existingOtp->isExpired()) {
             throw ValidationException::withMessages([
                 'email' => ['Too many OTP requests. Please try again later.'],
             ]);
@@ -350,7 +366,7 @@ class AuthController extends Controller
     /**
      * Send OTP email using LLIBI branding (for existing users).
      */
-    private function sendOtpEmail(User $user, string $otp): void
+    private function sendOtpEmail(MobileUser $user, string $otp): void
     {
         $this->sendRegistrationOtpEmail($user->email, $user->name, $otp);
     }
@@ -370,7 +386,7 @@ class AuthController extends Controller
         // Check for OTP record
         $otpRecord = RegistrationOtp::where('email', $email)->first();
 
-        if (!$otpRecord) {
+        if (! $otpRecord) {
             throw ValidationException::withMessages([
                 'otp' => ['No OTP has been sent. Please request a new one.'],
             ]);
@@ -427,7 +443,7 @@ class AuthController extends Controller
             ])
             ->first();
 
-        if (!$member) {
+        if (! $member) {
             throw ValidationException::withMessages([
                 'member_id' => ['No member found with the provided Member ID and Birth Date. Please check your details and try again.'],
             ]);
@@ -453,7 +469,7 @@ class AuthController extends Controller
         // Check for existing OTP record to get the name
         $existingOtp = RegistrationOtp::where('email', $email)->first();
 
-        if (!$existingOtp) {
+        if (! $existingOtp) {
             throw ValidationException::withMessages([
                 'email' => ['No pending verification found. Please start registration again.'],
             ]);

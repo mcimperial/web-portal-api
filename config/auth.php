@@ -44,6 +44,10 @@ return [
             'driver' => 'sanctum',
             'provider' => 'users',
         ],
+        'mobile' => [
+            'driver' => 'sanctum',
+            'provider' => 'mobile_users',
+        ],
         'donation' => [
             'driver' => 'sanctum',
             'provider' => 'donors',
@@ -71,6 +75,10 @@ return [
         'users' => [
             'driver' => 'eloquent',
             'model' => App\Models\User::class,
+        ],
+        'mobile_users' => [
+            'driver' => 'eloquent',
+            'model' => Modules\ClientMobileApp\App\Models\MobileUser::class,
         ],
         'donors' => [
             'driver' => 'eloquent',
