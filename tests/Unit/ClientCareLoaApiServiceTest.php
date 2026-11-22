@@ -8,6 +8,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Modules\ClientMobileApp\App\Models\MobileConfiguration;
+use Modules\ClientMobileApp\App\Models\MobileUser;
+use Modules\ClientMobileData\App\Http\Controllers\LoaRequestController;
+use Modules\ClientMobileData\App\Models\Doctor;
+use Modules\ClientMobileData\App\Models\Hospital;
+use Modules\ClientMobileData\App\Models\Masterlist;
 use Modules\ClientMobileData\App\Services\ClientCareAuthenticationException;
 use Modules\ClientMobileData\App\Services\ClientCareLoaApiService;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -83,18 +88,107 @@ class ClientCareLoaApiServiceTest extends TestCase
             'api_key' => 'test-only-key',
             'api_url' => 'https://clientcare-api.llibi.app/api/portal/',
         ]);
+        $payload = [
+            'verificationDetailsType' => 'insurance',
+            'erCardNumber' => 'TEST-MEMBER',
+            'dob' => '1990-01-01',
+            'patientType' => 'employee',
+            'patientFirstName' => 'Jane',
+            'patientLastName' => 'Doe',
+            'employeeFirstName' => 'Jane',
+            'employeeLastName' => 'Doe',
+            'email' => 'jane@example.test',
+            'provider' => '12||Test Hospital',
+            'loaType' => 'laboratory',
+            'cceId' => 'null',
+        ];
         app(ClientCareLoaApiService::class)->submitLaboratory(
             $configuration,
-            ['loaType' => 'laboratory', 'cceId' => 'null'],
+            $payload,
             'test PDF content',
             'request.pdf'
         );
 
-        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
-            && $request->url() === 'https://clientcare-api.llibi.app/api/portal/laboratory-request'
-            && $request->hasHeader('CORPORATE-API-KEY', 'test-only-key')
-            && str_contains($request->body(), 'name="files[]"')
-            && str_contains($request->body(), 'request.pdf'));
+        Http::assertSent(function (Request $request) use ($payload) {
+            $fields = collect($request->data())
+                ->filter(fn ($part) => $part['name'] !== 'files[]')
+                ->mapWithKeys(fn ($part) => [$part['name'] => $part['contents']])
+                ->all();
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://clientcare-api.llibi.app/api/portal/laboratory-request'
+                && $request->hasHeader('CORPORATE-API-KEY', 'test-only-key')
+                && $request->isMultipart()
+                && $fields === $payload
+                && $request->hasFile('files[]', 'test PDF content', 'request.pdf');
+        });
+    }
+
+    #[DataProvider('consultationDoctors')]
+    public function test_consultation_provider_includes_doctor_segment(?array $doctorData, string $expectedProvider): void
+    {
+        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+
+        $configuration = new MobileConfiguration([
+            'api_header' => 'CORPORATE-API-KEY',
+            'api_key' => 'test-only-key',
+            'api_url' => 'https://clientcare.example.test/api/portal',
+        ]);
+        $patient = new Masterlist([
+            'member_id' => 'TEST-MEMBER',
+            'birth_date' => '1990-01-01',
+            'relation' => 'EMPLOYEE',
+            'first_name' => 'Jane',
+            'last_name' => 'Doe',
+        ]);
+        $hospital = new Hospital(['id' => 12, 'name' => 'Test Hospital']);
+        $doctor = $doctorData ? new Doctor($doctorData) : null;
+        $request = \Illuminate\Http\Request::create('/');
+        $request->setUserResolver(fn () => new MobileUser(['email' => 'jane@example.test']));
+
+        $method = new \ReflectionMethod(LoaRequestController::class, 'submitThirdPartyRequest');
+        $method->invoke(
+            app(LoaRequestController::class),
+            app(ClientCareLoaApiService::class),
+            $configuration,
+            $request,
+            'consultation',
+            $patient,
+            $patient,
+            $hospital,
+            $doctor,
+            'HEADACHE',
+            null
+        );
+
+        Http::assertSent(fn (Request $outgoing) => $outgoing->isJson()
+            && $outgoing->url() === 'https://clientcare.example.test/api/portal/consultation-request'
+            && $outgoing->hasHeader('CORPORATE-API-KEY', 'test-only-key')
+            && $outgoing->data() === [
+                'verificationDetailsType' => 'insurance',
+                'erCardNumber' => 'TEST-MEMBER',
+                'dob' => '1990-01-01',
+                'patientType' => 'employee',
+                'patientFirstName' => 'Jane',
+                'patientLastName' => 'Doe',
+                'employeeFirstName' => 'Jane',
+                'employeeLastName' => 'Doe',
+                'email' => 'jane@example.test',
+                'provider' => $expectedProvider,
+                'loaType' => 'consultation',
+                'complaint' => [['label' => 'HEADACHE']],
+            ]);
+    }
+
+    public static function consultationDoctors(): array
+    {
+        return [
+            'without doctor' => [null, '12||Test Hospital--||'],
+            'with doctor' => [
+                ['id' => 34, 'first' => 'Pat', 'last' => 'Smith'],
+                '12||Test Hospital--34||Pat Smith',
+            ],
+        ];
     }
 
     public function test_missing_or_invalid_url_is_not_configured(): void
