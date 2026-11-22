@@ -3,10 +3,13 @@
 namespace Tests\Unit;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Http\Client\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Modules\ClientMobileApp\App\Models\MobileConfiguration;
 use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileData\App\Http\Controllers\LoaRequestController;
@@ -98,7 +101,7 @@ class ClientCareLoaApiServiceTest extends TestCase
             'employeeFirstName' => 'Jane',
             'employeeLastName' => 'Doe',
             'email' => 'jane@example.test',
-            'provider' => '12||Test Hospital',
+            'provider' => '12||Test Hospital--0||--',
             'loaType' => 'laboratory',
             'cceId' => 'null',
         ];
@@ -124,7 +127,7 @@ class ClientCareLoaApiServiceTest extends TestCase
         });
     }
 
-    #[DataProvider('consultationDoctors')]
+    #[DataProvider('providerDoctors')]
     public function test_consultation_provider_includes_doctor_segment(?array $doctorData, string $expectedProvider): void
     {
         Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
@@ -180,10 +183,65 @@ class ClientCareLoaApiServiceTest extends TestCase
             ]);
     }
 
-    public static function consultationDoctors(): array
+    #[DataProvider('providerDoctors')]
+    public function test_laboratory_provider_includes_doctor_segment(?array $doctorData, string $expectedProvider): void
+    {
+        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+        $disk = \Mockery::mock(FilesystemAdapter::class);
+        $disk->shouldReceive('get')->once()->with('request.pdf')->andReturn('test PDF content');
+        Storage::shouldReceive('disk')->once()->with('local')->andReturn($disk);
+
+        $configuration = new MobileConfiguration([
+            'api_header' => 'CORPORATE-API-KEY',
+            'api_key' => 'test-only-key',
+            'api_url' => 'https://clientcare.example.test/api/portal',
+        ]);
+        $patient = new Masterlist([
+            'member_id' => 'TEST-MEMBER',
+            'birth_date' => '1990-01-01',
+            'relation' => 'EMPLOYEE',
+            'first_name' => 'Jane',
+            'last_name' => 'Doe',
+        ]);
+        $hospital = new Hospital(['id' => 12, 'name' => 'Test Hospital']);
+        $doctor = $doctorData ? new Doctor($doctorData) : null;
+        $request = \Illuminate\Http\Request::create('/');
+        $request->files->set('doctor_request', UploadedFile::fake()->createWithContent('request.pdf', 'test PDF content'));
+        $request->setUserResolver(fn () => new MobileUser(['email' => 'jane@example.test']));
+
+        $method = new \ReflectionMethod(LoaRequestController::class, 'submitThirdPartyRequest');
+        $method->invoke(
+            app(LoaRequestController::class),
+            app(ClientCareLoaApiService::class),
+            $configuration,
+            $request,
+            'laboratory',
+            $patient,
+            $patient,
+            $hospital,
+            $doctor,
+            'Laboratory request',
+            'request.pdf'
+        );
+
+        Http::assertSent(function (Request $outgoing) use ($expectedProvider) {
+            $fields = collect($outgoing->data())
+                ->filter(fn ($part) => $part['name'] !== 'files[]')
+                ->mapWithKeys(fn ($part) => [$part['name'] => $part['contents']])
+                ->all();
+
+            return $outgoing->isMultipart()
+                && $outgoing->url() === 'https://clientcare.example.test/api/portal/laboratory-request'
+                && $fields['provider'] === $expectedProvider
+                && $fields['cceId'] === 'null'
+                && $outgoing->hasFile('files[]', 'test PDF content', 'request.pdf');
+        });
+    }
+
+    public static function providerDoctors(): array
     {
         return [
-            'without doctor' => [null, '12||Test Hospital--||'],
+            'without doctor' => [null, '12||Test Hospital--0||--'],
             'with doctor' => [
                 ['id' => 34, 'first' => 'Pat', 'last' => 'Smith'],
                 '12||Test Hospital--34||Pat Smith',
