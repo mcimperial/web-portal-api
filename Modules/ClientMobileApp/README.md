@@ -33,10 +33,10 @@ are stored on the private local disk and their path is written to the existing
 complaints are searched from active `mysql_masterlist.app_portal_complaints`
 records without modifying that table.
 Both consultation and laboratory requests can also select an optional doctor
-affiliated with the chosen hospital or clinic. ClientCare consultation requests
+affiliated with the chosen hospital or clinic. Both ClientCare request types
 use `hospital_id||hospital_name--doctor_id||doctor_name` for the provider;
-when no doctor is selected, the suffix is `--||`. Laboratory requests send
-`hospital_id||hospital_name` and the doctor's request as `files[]` multipart data.
+when no doctor is selected, the suffix is `--0||--`. Laboratory requests send
+the doctor's request as `files[]` multipart data.
 
 LOA submissions can be routed using the `loa_request_backend` row in the
 app-owned `mysql.mobile_configuration` key/value table. The migration seeds

@@ -323,17 +323,14 @@ class LoaRequestController extends Controller
         string $complaintTitle,
         ?string $attachmentPath
     ): void {
-        $providerValue = $provider->id.'||'.$provider->name;
-        if ($loaType === 'consultation') {
-            $doctorName = $doctor
-                ? trim(implode(' ', array_filter([
-                    $doctor->first,
-                    $doctor->middle,
-                    $doctor->last,
-                ])))
-                : '';
-            $providerValue .= '--'.($doctor?->id ?? '').'||'.$doctorName;
-        }
+        $doctorName = $doctor
+            ? trim(implode(' ', array_filter([
+                $doctor->first,
+                $doctor->middle,
+                $doctor->last,
+            ])))
+            : '--';
+        $providerValue = $provider->id.'||'.$provider->name.'--'.($doctor?->id ?? 0).'||'.$doctorName;
 
         $payload = [
             'verificationDetailsType' => 'insurance',
