@@ -324,13 +324,15 @@ class LoaRequestController extends Controller
         ?string $attachmentPath
     ): void {
         $providerValue = $provider->id.'||'.$provider->name;
-        if ($loaType === 'consultation' && $doctor) {
-            $doctorName = trim(implode(' ', array_filter([
-                $doctor->first,
-                $doctor->middle,
-                $doctor->last,
-            ])));
-            $providerValue .= '--'.$doctor->id.'||'.$doctorName;
+        if ($loaType === 'consultation') {
+            $doctorName = $doctor
+                ? trim(implode(' ', array_filter([
+                    $doctor->first,
+                    $doctor->middle,
+                    $doctor->last,
+                ])))
+                : '';
+            $providerValue .= '--'.($doctor?->id ?? '').'||'.$doctorName;
         }
 
         $payload = [
