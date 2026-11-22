@@ -31,7 +31,10 @@ mobile account and prefilled in both LOA forms. Laboratory request attachments
 are stored on the private local disk and their path is written to the existing
 `mysql_masterlist.app_portal_requests.loa_attachment` column. Consultation
 complaints are searched from active `mysql_masterlist.app_portal_complaints`
-records without modifying that table.
+records without modifying that table. Mobile users may also create shared
+complaints in `mysql.mobile_complaints`; the app searches both sources. These
+entries are visible to all mobile users and should not contain personal details.
+Run the mobile-owned migrations above before deploying this functionality.
 Both consultation and laboratory requests can also select an optional doctor
 affiliated with the chosen hospital or clinic. Both ClientCare request types
 use `hospital_id||hospital_name--doctor_id||doctor_name` for the provider;

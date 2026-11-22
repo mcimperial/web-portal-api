@@ -30,6 +30,8 @@ Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('ap
     Route::get('member/profile', [MemberController::class, 'profile'])->name('member.profile');
     Route::get('member/dependents', [MemberController::class, 'dependents'])->name('member.dependents');
     Route::get('complaints', [ComplaintController::class, 'index'])->name('complaints.index');
+    Route::get('complaints/custom', [ComplaintController::class, 'customIndex'])->name('complaints.custom.index');
+    Route::post('complaints/custom', [ComplaintController::class, 'store'])->name('complaints.custom.store');
 
     // Hospitals / find-hospital (llibiapp_sync.hospitals)
     Route::get('hospitals', [HospitalController::class, 'index'])->name('hospitals.index');

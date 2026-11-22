@@ -15,6 +15,7 @@ use Modules\ClientMobileApp\App\Models\MobileConfiguration;
 use Modules\ClientMobileData\App\Models\Doctor;
 use Modules\ClientMobileData\App\Models\Hospital;
 use Modules\ClientMobileData\App\Models\Masterlist;
+use Modules\ClientMobileData\App\Models\MobileComplaint;
 use Modules\ClientMobileData\App\Models\MobileLoaRequestDetail;
 use Modules\ClientMobileData\App\Models\PortalComplaint;
 use Modules\ClientMobileData\App\Models\PortalRequest;
@@ -103,6 +104,7 @@ class LoaRequestController extends Controller
             'doctor_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'loa_type' => ['required', 'string', 'in:consultation,laboratory'],
             'complaint_id' => ['required_if:loa_type,consultation', 'nullable', 'integer'],
+            'complaint_source' => ['sometimes', 'string', 'in:catalog,custom'],
             'mobile_details' => ['required', 'array'],
             'mobile_details.patient_member_id' => ['required', 'string', 'max:15'],
             'mobile_details.patient_details_source' => ['required', 'string', 'in:personal,insurance'],
@@ -175,9 +177,9 @@ class LoaRequestController extends Controller
 
         $complaintTitle = 'Laboratory request';
         if ($validated['loa_type'] === 'consultation') {
-            $complaint = PortalComplaint::query()
-                ->where('is_status', 1)
-                ->find($validated['complaint_id']);
+            $complaint = ($validated['complaint_source'] ?? 'catalog') === 'custom'
+                ? MobileComplaint::query()->find($validated['complaint_id'])
+                : PortalComplaint::query()->where('is_status', 1)->find($validated['complaint_id']);
 
             if (! $complaint) {
                 return response()->json(['message' => 'Select an active chief complaint.'], 422);
@@ -217,6 +219,7 @@ class LoaRequestController extends Controller
         unset($validated['mobile_details']);
         unset($validated['doctor_request']);
         unset($validated['complaint_id']);
+        unset($validated['complaint_source']);
         unset($validated['doctor_id']);
 
         try {
