@@ -11,6 +11,8 @@ class ClientMobileAppDatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // $this->call([]);
+        $this->call([
+            MobileConfigurationSeeder::class,
+        ]);
     }
 }
