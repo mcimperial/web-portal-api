@@ -81,7 +81,7 @@ class MobileComplaintTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('complaint.id', 1);
 
-        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+        $this->fakeClientCareLoaApi();
         $this->withHeader('Idempotency-Key', '53c98094-0f65-45f2-8082-ef21c2b85408')
             ->postJson('/api/v1/mobile/loa/requests', $this->loaPayload(['complaint_source' => 'custom']))
             ->assertCreated()
@@ -105,7 +105,7 @@ class MobileComplaintTest extends TestCase
         $this->createLoaTables();
         Storage::fake('local');
         $this->actingAs($this->mobileUser('member@example.test', 'MEM001'), 'mobile');
-        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+        $this->fakeClientCareLoaApi();
 
         $this->postJson('/api/v1/mobile/loa/requests', $this->loaPayload())
             ->assertUnprocessable();
@@ -159,6 +159,34 @@ class MobileComplaintTest extends TestCase
     private function mobileUser(string $email, ?string $memberId = null): MobileUser
     {
         return new MobileUser(['email' => $email, 'is_active' => true, 'member_id' => $memberId]);
+    }
+
+    private function fakeClientCareLoaApi(): void
+    {
+        Http::fake(function (ClientRequest $request) {
+            $payload = $request->data();
+            if ($request->isMultipart()) {
+                $payload = collect($payload)
+                    ->filter(fn (array $part) => $part['name'] !== 'files[]')
+                    ->mapWithKeys(fn (array $part) => [$part['name'] => $part['contents']])
+                    ->all();
+            }
+
+            $id = DB::connection('mysql_masterlist')
+                ->table('app_portal_requests')
+                ->insertGetId([
+                    'member_id' => $payload['erCardNumber'],
+                    'provider_id' => 1,
+                    'provider' => 'Test Hospital',
+                    'loa_type' => $payload['loaType'],
+                    'complaint' => $payload['loaType'] === 'consultation'
+                        ? $payload['complaint'][0]['label']
+                        : 'Laboratory request',
+                    'loa_status' => 'Pending Approval',
+                ]);
+
+            return Http::response(['data' => ['id' => $id]], 201);
+        });
     }
 
     private function loaPayload(array $overrides = []): array
@@ -237,15 +265,21 @@ class MobileComplaintTest extends TestCase
         ]);
         Schema::connection('mysql_masterlist')->create('app_portal_requests', function (Blueprint $table) {
             $table->id();
+            $table->string('client_id')->nullable();
             $table->string('member_id');
             $table->unsignedBigInteger('provider_id');
             $table->string('provider');
             $table->unsignedBigInteger('doctor_id')->nullable();
             $table->string('doctor_name')->nullable();
             $table->string('loa_type');
+            $table->string('provider_procedure_type')->nullable();
             $table->string('complaint');
+            $table->string('diagnosis')->nullable();
+            $table->string('loa_number')->nullable();
             $table->string('loa_attachment')->nullable();
+            $table->string('approval_code')->nullable();
             $table->string('loa_status');
+            $table->date('used_date')->nullable();
             $table->timestamps();
         });
     }

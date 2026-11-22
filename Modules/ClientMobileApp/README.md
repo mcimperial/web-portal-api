@@ -44,11 +44,13 @@ the doctor's request as `files[]` multipart data.
 LOA submissions can be routed using the `loa_request_backend` row in the
 app-owned `mysql.mobile_configuration` key/value table. The migration seeds
 this setting as `system` to preserve current behavior. Set it to `third_party`
-to also submit consultation and laboratory requests to ClientCare; the existing
-portal write remains enabled. The same row's `api_url`, `api_header`, and
-`api_key` columns hold the ClientCare base URL and credentials. The key is stored as plaintext and hidden from
-model serialization; restrict database access accordingly. The migration that
-converts an existing encrypted key to plaintext cannot be rolled back automatically.
+to submit consultation and laboratory requests only through ClientCare. The API
+uses ClientCare's returned `data.id` to link mobile-only details to the created
+portal request and does not create a second local portal row. The same row's
+`api_url`, `api_header`, and `api_key` columns hold the ClientCare base URL and
+credentials. The key is stored as plaintext and hidden from model serialization;
+restrict database access accordingly. The migration that converts an existing
+encrypted key to plaintext cannot be rolled back automatically.
 The migration and seeder use `CLIENTCARE_API_BASE_URL` as the initial URL;
 afterwards, change `api_url` in the database to update the endpoint. To seed the
 header and an initial API key, supply
@@ -68,11 +70,10 @@ SET config_value = 'third_party', updated_at = NOW()
 WHERE config_key = 'loa_request_backend';
 ```
 
-Missing ClientCare configuration is reported before saving the request. If
-ClientCare is unavailable after the portal write succeeds, the API reports
-that the portal copy was saved and instructs the user not to resubmit. An
-`Unauthorized` response is treated as an authentication failure even when
-ClientCare returns HTTP 200.
+Missing ClientCare configuration is reported before submitting the request. If
+ClientCare does not confirm the submission, the API instructs the user not to
+resubmit. An `Unauthorized` response is treated as an authentication failure
+even when ClientCare returns HTTP 200.
 
 LOA API submissions require an `Idempotency-Key` UUID header. The app reuses
 the same key when retrying an unchanged submission; the API records keys and
