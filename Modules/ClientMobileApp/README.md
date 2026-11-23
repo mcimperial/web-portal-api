@@ -89,6 +89,12 @@ Every update increments the document version. The mobile app reads active
 documents from `GET /api/v1/mobile/legal-documents` and records the accepted
 terms and privacy versions when a traditional account is created.
 
+Password recovery uses a random one-time token. Its SHA-256 hash is stored with
+the verified OTP on the app-owned `mysql` connection, so reset sessions do not
+depend on a specific API worker's encryption key. Apply
+`2026_11_24_130000_add_reset_token_to_registration_otps_table.php` before
+deploying the reset endpoint update.
+
 ### Callback requests
 
 Authenticated active mobile accounts can `POST /api/v1/mobile/callback-requests`
