@@ -501,7 +501,7 @@ class LoaRequestController extends Controller
             'employeeLastName' => $employee->last_name,
             'email' => (string) $request->user()->email,
             'alt_email' => $request->input('mobile_details.alternate_email') ?? NULL,
-            'contact' => $request->input('mobile_details.contact_number') ?? NULL,
+            //'contact' => $request->input('mobile_details.contact_number') ?? NULL,
             'platform' => 'mobile',
             'provider' => $providerValue,
             'loaType' => $loaType,
