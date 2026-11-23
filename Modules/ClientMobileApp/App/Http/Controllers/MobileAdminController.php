@@ -89,6 +89,7 @@ class MobileAdminController extends Controller
             'ends_at' => ['nullable', 'date', 'after_or_equal:starts_at'],
             'messages' => ['required', 'array', 'min:1'],
             'messages.*.id' => ['sometimes', 'integer', 'distinct'],
+            'messages.*.title' => ['nullable', 'string', 'max:255'],
             'messages.*.html_content' => ['nullable', 'string', 'required_without:messages.*.image_url'],
             'messages.*.image_url' => ['nullable', 'url', 'max:2048', 'required_without:messages.*.html_content'],
             'messages.*.sort_order' => ['required', 'integer', 'min:0'],

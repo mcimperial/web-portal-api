@@ -26,6 +26,7 @@ class PopupController extends Controller
                 'decline_label' => $popup->decline_label,
                 'messages' => $popup->messages->map(fn (MobilePopupMessage $message) => [
                     'id' => $message->id,
+                    'title' => filled($message->title) ? $message->title : $popup->title,
                     'html_content' => $message->html_content,
                     'image_url' => $message->image_url,
                 ])->values(),

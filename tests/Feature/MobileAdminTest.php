@@ -59,6 +59,8 @@ class MobileAdminTest extends TestCase
         });
         $migration = require base_path('Modules/ClientMobileApp/Database/migrations/2026_11_24_000000_create_mobile_popups_tables.php');
         $migration->up();
+        $titleMigration = require base_path('Modules/ClientMobileApp/Database/migrations/2026_11_25_000000_add_title_to_mobile_popup_messages_table.php');
+        $titleMigration->up();
     }
 
     private function loginAs(string $role = 'admin', bool $active = true): void
@@ -121,6 +123,34 @@ class MobileAdminTest extends TestCase
         $this->assertSame('existing-secret', DB::connection('mysql')->table('mobile_configuration')->value('api_key'));
         $this->putJson('/api/v1/mobile-admin/configuration', ['config_value' => 'third_party', 'api_header' => 'X-KEY', 'api_url' => 'https://example.test', 'api_key' => null])->assertUnprocessable();
         $this->putJson('/api/v1/mobile-admin/configuration', ['config_value' => 'third_party', 'api_header' => 'X-KEY', 'api_url' => 'ftp://example.test'])->assertUnprocessable();
+    }
+
+    public function test_message_titles_are_saved_as_overrides_and_blank_titles_follow_the_popup_title(): void
+    {
+        $this->loginAs();
+        $payload = [
+            'title' => 'Welcome', 'is_active' => true, 'show_decline_button' => false, 'sort_order' => 0,
+            'messages' => [
+                ['title' => '', 'html_content' => '<p><strong>Hello</strong></p>', 'sort_order' => 0],
+                ['title' => 'Details', 'html_content' => '<p>More</p>', 'sort_order' => 1],
+            ],
+        ];
+        $created = $this->postJson('/api/v1/mobile-admin/popups', $payload)
+            ->assertCreated()->assertJsonPath('data.messages.0.title', null)
+            ->assertJsonPath('data.messages.1.title', 'Details');
+        $id = $created->json('data.id');
+        $payload['title'] = 'New welcome';
+        $payload['messages'][0]['id'] = $created->json('data.messages.0.id');
+        $payload['messages'][1]['id'] = $created->json('data.messages.1.id');
+        $payload['messages'][1]['title'] = '';
+        $this->putJson("/api/v1/mobile-admin/popups/{$id}", $payload)->assertOk()
+            ->assertJsonPath('data.messages.1.title', null);
+        $this->getJson('/api/v1/mobile/popups')->assertOk()
+            ->assertJsonPath('popups.0.messages.0.title', 'New welcome')
+            ->assertJsonPath('popups.0.messages.0.html_content', '<p><strong>Hello</strong></p>')
+            ->assertJsonPath('popups.0.messages.1.title', 'New welcome');
+        $payload['messages'][1]['title'] = str_repeat('a', 256);
+        $this->putJson("/api/v1/mobile-admin/popups/{$id}", $payload)->assertUnprocessable();
     }
 
     public function test_users_can_be_searched_updated_deactivated_revoked_and_deleted(): void
