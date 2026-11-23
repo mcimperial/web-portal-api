@@ -12,9 +12,15 @@ Create/update mobile-owned tables with:
 ```sh
 php artisan migrate \
   --database=mysql \
-  --path=Modules/ClientMobileApp/Database/migrations \
-  --path=Modules/ClientMobileData/Database/migrations
+  --path=Modules/ClientMobileApp/Database/migrations
 ```
+
+The former `ClientMobileData` controllers, models, services, routes, and
+migrations are now part of `ClientMobileApp`. Existing migration filenames,
+mobile API URLs and route names are unchanged, so previously applied migrations
+are not rerun. The `clientmobiledata` configuration key remains supported for
+existing published settings; its defaults are in `config/mobile-data.php`.
+Update deployment scripts that reference the former module or migration path.
 
 These migrations target the application's `mysql` connection
 (`llibi_web_portal_3`) only. The mobile API uses existing tables on
@@ -73,6 +79,36 @@ verification. Deleting a mobile account is permanent. Apply the popup migration
 and the message title migration before using the popup administration or the
 public popup endpoint. Each popup message may have its own title; a blank
 message title uses the current popup title in the mobile API response.
+
+### Callback requests
+
+Authenticated active mobile accounts can `POST /api/v1/mobile/callback-requests`
+and view their own paginated history with `GET /api/v1/mobile/callback-requests`.
+Member activation is not required. Apply
+`2026_11_26_000000_create_mobile_callback_requests_table.php` before using these
+endpoints; the history table is on the app-owned `mysql` connection only.
+
+The POST accepts required `email`, `mobile` (11-digit `09...`), and `request`
+(up to 2,000 characters), plus optional `landline`, `alt_email`, `alt_landline`,
+and `alt_mobile`. Contacts may be edited for this request without modifying the
+account. The requestor name comes from the authenticated mobile account.
+A UUID `Idempotency-Key` header is required; retries of an unchanged submission
+must reuse it to prevent duplicate provider calls.
+
+Callback submissions always use the existing `loa_request_backend` row's
+`api_header` and `api_key`, independently of the LOA backend selection and URL.
+`CLIENTCARE_CALLBACK_URL` defaults to
+`https://provider-api.llibi.app/api/corporate/callback`. The backend adds
+`platform: "mobile"`, `user.provider_id: null`, and `user.keyword` containing
+the account's full name, with the request and alternate contacts under `data`.
+No provider credentials are exposed to the mobile app.
+
+An HTTP 2xx response counts as submitted unless it explicitly reports
+`success: false`, a failed/error/rejected `status`, or an Unauthorized message.
+Submitted means sent to the provider, not that a callback has been completed.
+Rejected requests are recorded as `failed`; timeouts and provider server errors
+are recorded as `unconfirmed` and must not be automatically resubmitted.
+History also includes `processing` requests, and is ordered newest first.
 
 The seeder leaves an existing backend selection, URL, header, and key unchanged. It
 warns if no key exists or is supplied. For example, to switch the backend:

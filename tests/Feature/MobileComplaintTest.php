@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Modules\ClientMobileApp\App\Models\MobileUser;
-use Modules\ClientMobileData\App\Models\Masterlist;
+use Modules\ClientMobileApp\App\Models\Masterlist;
 use Tests\TestCase;
 
 class MobileComplaintTest extends TestCase
@@ -28,7 +28,7 @@ class MobileComplaintTest extends TestCase
             DB::purge($connection);
         }
 
-        $migration = require base_path('Modules/ClientMobileData/Database/migrations/2026_11_22_000008_create_mobile_complaints_table.php');
+        $migration = require base_path('Modules/ClientMobileApp/Database/migrations/2026_11_22_000008_create_mobile_complaints_table.php');
         $migration->up();
         Schema::connection('mysql_masterlist')->create('app_portal_complaints', function (Blueprint $table) {
             $table->id();

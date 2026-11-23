@@ -12,12 +12,12 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Modules\ClientMobileApp\App\Models\MobileConfiguration;
 use Modules\ClientMobileApp\App\Models\MobileUser;
-use Modules\ClientMobileData\App\Http\Controllers\LoaRequestController;
-use Modules\ClientMobileData\App\Models\Doctor;
-use Modules\ClientMobileData\App\Models\Hospital;
-use Modules\ClientMobileData\App\Models\Masterlist;
-use Modules\ClientMobileData\App\Services\ClientCareAuthenticationException;
-use Modules\ClientMobileData\App\Services\ClientCareLoaApiService;
+use Modules\ClientMobileApp\App\Http\Controllers\LoaRequestController;
+use Modules\ClientMobileApp\App\Models\Doctor;
+use Modules\ClientMobileApp\App\Models\Hospital;
+use Modules\ClientMobileApp\App\Models\Masterlist;
+use Modules\ClientMobileApp\App\Services\ClientCareAuthenticationException;
+use Modules\ClientMobileApp\App\Services\ClientCareLoaApiService;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
