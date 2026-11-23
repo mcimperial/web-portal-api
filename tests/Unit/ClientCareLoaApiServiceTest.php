@@ -190,6 +190,50 @@ class ClientCareLoaApiServiceTest extends TestCase
             ]);
     }
 
+    public function test_blank_optional_contact_details_are_omitted_from_consultation_payload(): void
+    {
+        Http::fake(['https://clientcare.example.test/*' => Http::response([], 201)]);
+
+        $configuration = new MobileConfiguration([
+            'api_header' => 'CORPORATE-API-KEY',
+            'api_key' => 'test-only-key',
+            'api_url' => 'https://clientcare.example.test/api/portal',
+        ]);
+        $patient = new Masterlist([
+            'member_id' => 'TEST-MEMBER',
+            'birth_date' => '1990-01-01',
+            'relation' => 'EMPLOYEE',
+            'first_name' => 'Jane',
+            'last_name' => 'Doe',
+        ]);
+        $request = \Illuminate\Http\Request::create('/');
+        $request->merge(['mobile_details' => [
+            'alternate_email' => null,
+            'contact_number' => '',
+        ]]);
+        $request->setUserResolver(fn () => new MobileUser(['email' => 'jane@example.test']));
+
+        $method = new \ReflectionMethod(LoaRequestController::class, 'submitThirdPartyRequest');
+        $method->invoke(
+            app(LoaRequestController::class),
+            app(ClientCareLoaApiService::class),
+            $configuration,
+            $request,
+            'consultation',
+            $patient,
+            $patient,
+            new Hospital(['id' => 12, 'name' => 'Test Hospital']),
+            null,
+            'HEADACHE',
+            null
+        );
+
+        Http::assertSent(fn (Request $outgoing) => $outgoing->isJson()
+            && ! array_key_exists('alt_email', $outgoing->data())
+            && ! array_key_exists('contact', $outgoing->data())
+            && $outgoing->data()['platform'] === 'mobile');
+    }
+
     #[DataProvider('providerDoctors')]
     public function test_laboratory_provider_includes_doctor_segment(?array $doctorData, string $expectedProvider): void
     {
