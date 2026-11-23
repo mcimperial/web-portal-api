@@ -147,6 +147,10 @@ class ClientCareLoaApiServiceTest extends TestCase
         $hospital = new Hospital(['id' => 12, 'name' => 'Test Hospital']);
         $doctor = $doctorData ? new Doctor($doctorData) : null;
         $request = \Illuminate\Http\Request::create('/');
+        $request->merge(['mobile_details' => [
+            'alternate_email' => 'alternate@example.test',
+            'contact_number' => '09170000000',
+        ]]);
         $request->setUserResolver(fn () => new MobileUser(['email' => 'jane@example.test']));
 
         $method = new \ReflectionMethod(LoaRequestController::class, 'submitThirdPartyRequest');
@@ -177,6 +181,9 @@ class ClientCareLoaApiServiceTest extends TestCase
                 'employeeFirstName' => 'Jane',
                 'employeeLastName' => 'Doe',
                 'email' => 'jane@example.test',
+                'alt_email' => 'alternate@example.test',
+                'contact' => '09170000000',
+                'platform' => 'mobile',
                 'provider' => $expectedProvider,
                 'loaType' => 'consultation',
                 'complaint' => [['label' => 'HEADACHE']],
@@ -206,6 +213,10 @@ class ClientCareLoaApiServiceTest extends TestCase
         $hospital = new Hospital(['id' => 12, 'name' => 'Test Hospital']);
         $doctor = $doctorData ? new Doctor($doctorData) : null;
         $request = \Illuminate\Http\Request::create('/');
+        $request->merge(['mobile_details' => [
+            'alternate_email' => 'alternate@example.test',
+            'contact_number' => '09170000000',
+        ]]);
         $request->files->set('doctor_request', UploadedFile::fake()->createWithContent('request.pdf', 'test PDF content'));
         $request->setUserResolver(fn () => new MobileUser(['email' => 'jane@example.test']));
 
@@ -234,6 +245,9 @@ class ClientCareLoaApiServiceTest extends TestCase
                 && $outgoing->url() === 'https://clientcare.example.test/api/portal/laboratory-request'
                 && $fields['provider'] === $expectedProvider
                 && $fields['cceId'] === 'null'
+                && $fields['alt_email'] === 'alternate@example.test'
+                && $fields['contact'] === '09170000000'
+                && $fields['platform'] === 'mobile'
                 && $outgoing->hasFile('files[]', 'test PDF content', 'request.pdf');
         });
     }
