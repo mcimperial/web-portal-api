@@ -41,6 +41,7 @@ return [
 
     'clientcare' => [
         'base_url' => env('CLIENTCARE_API_BASE_URL', 'https://clientcare-api.llibi.app/api/portal'),
+        'callback_url' => env('CLIENTCARE_CALLBACK_URL', 'https://provider-api.llibi.app/api/corporate/callback'),
         'connect_timeout' => env('CLIENTCARE_CONNECT_TIMEOUT', 10),
         'timeout' => env('CLIENTCARE_API_TIMEOUT', 30),
     ],

@@ -6,8 +6,8 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Modules\ClientMobileData\App\Http\Controllers\LoaRequestController;
-use Modules\ClientMobileData\App\Services\ClientCareLoaApiService;
+use Modules\ClientMobileApp\App\Http\Controllers\LoaRequestController;
+use Modules\ClientMobileApp\App\Services\ClientCareLoaApiService;
 use Tests\TestCase;
 
 class LoaRequestConfigurationTest extends TestCase

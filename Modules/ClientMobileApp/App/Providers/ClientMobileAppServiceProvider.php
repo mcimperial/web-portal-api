@@ -74,6 +74,8 @@ class ClientMobileAppServiceProvider extends ServiceProvider
     {
         $this->publishes([module_path($this->moduleName, 'config/config.php') => config_path($this->moduleNameLower.'.php')], 'config');
         $this->mergeConfigFrom(module_path($this->moduleName, 'config/config.php'), $this->moduleNameLower);
+        $this->publishes([module_path($this->moduleName, 'config/mobile-data.php') => config_path('clientmobiledata.php')], 'config');
+        $this->mergeConfigFrom(module_path($this->moduleName, 'config/mobile-data.php'), 'clientmobiledata');
     }
 
     /**

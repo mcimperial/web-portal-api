@@ -3,6 +3,14 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Modules\ClientMobileApp\App\Http\Controllers\AuthController;
+use Modules\ClientMobileApp\App\Http\Controllers\CallbackRequestController;
+use Modules\ClientMobileApp\App\Http\Controllers\ClaimsController;
+use Modules\ClientMobileApp\App\Http\Controllers\ComplaintController;
+use Modules\ClientMobileApp\App\Http\Controllers\DoctorController;
+use Modules\ClientMobileApp\App\Http\Controllers\HealthController;
+use Modules\ClientMobileApp\App\Http\Controllers\HospitalController;
+use Modules\ClientMobileApp\App\Http\Controllers\LoaRequestController;
+use Modules\ClientMobileApp\App\Http\Controllers\MemberController;
 use Modules\ClientMobileApp\App\Http\Controllers\PopupController;
 use Modules\ClientMobileApp\App\Http\Controllers\MobileAdminController;
 
@@ -55,10 +63,37 @@ Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('ap
     Route::post('logout', [AuthController::class, 'logout'])->name('logout');
     Route::post('logout-all', [AuthController::class, 'logoutAll'])->name('logout.all');
     Route::get('me', [AuthController::class, 'me'])->name('me');
-    Route::post('member/link', [\Modules\ClientMobileData\App\Http\Controllers\MemberController::class, 'link'])->name('member.link');
+    Route::get('callback-requests', [CallbackRequestController::class, 'index'])->name('callback-requests.index');
+    Route::post('callback-requests', [CallbackRequestController::class, 'store'])->name('callback-requests.store');
+    Route::post('member/link', [MemberController::class, 'link'])->name('member.link');
 
     // Legacy route
     Route::get('clientmobileapp', fn (Request $request) => $request->user())->name('clientmobileapp');
+});
+
+Route::prefix('v1/mobile')->name('api.mobile.data.')->group(function () {
+    Route::get('health', [HealthController::class, 'index'])->name('health');
+});
+
+Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('api.mobile.data.')->group(function () {
+    Route::get('member/profile', [MemberController::class, 'profile'])->name('member.profile');
+    Route::get('member/dependents', [MemberController::class, 'dependents'])->name('member.dependents');
+    Route::get('complaints', [ComplaintController::class, 'index'])->name('complaints.index');
+    Route::get('complaints/custom', [ComplaintController::class, 'customIndex'])->name('complaints.custom.index');
+    Route::post('complaints/custom', [ComplaintController::class, 'store'])->name('complaints.custom.store');
+
+    Route::get('hospitals', [HospitalController::class, 'index'])->name('hospitals.index');
+    Route::get('hospitals/{id}', [HospitalController::class, 'show'])->whereNumber('id')->name('hospitals.show');
+    Route::get('hospitals/{id}/doctors', [HospitalController::class, 'doctors'])->whereNumber('id')->name('hospitals.doctors');
+
+    Route::get('doctors', [DoctorController::class, 'index'])->name('doctors.index');
+    Route::get('doctors/{id}', [DoctorController::class, 'show'])->whereNumber('id')->name('doctors.show');
+
+    Route::get('loa/requests', [LoaRequestController::class, 'index'])->name('loa.index');
+    Route::post('loa/requests', [LoaRequestController::class, 'store'])->name('loa.store');
+    Route::get('loa/requests/{id}', [LoaRequestController::class, 'show'])->whereNumber('id')->name('loa.show');
+
+    Route::get('claims/remaining', [ClaimsController::class, 'remaining'])->name('claims.remaining');
 });
 
 Route::middleware('auth:sanctum')->prefix('v1/mobile-admin')->group(function () {
