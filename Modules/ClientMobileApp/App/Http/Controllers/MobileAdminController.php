@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\Rule;
 use Modules\ClientMobileApp\App\Models\MobileConfiguration;
+use Modules\ClientMobileApp\App\Models\MobileLegalDocument;
 use Modules\ClientMobileApp\App\Models\MobilePopup;
 use Modules\ClientMobileApp\App\Models\MobileUser;
 
@@ -94,6 +95,34 @@ class MobileAdminController extends Controller
             'messages.*.image_url' => ['nullable', 'url', 'max:2048', 'required_without:messages.*.html_content'],
             'messages.*.sort_order' => ['required', 'integer', 'min:0'],
         ]);
+    }
+
+    public function legalDocuments(): JsonResponse
+    {
+        return response()->json([
+            'data' => MobileLegalDocument::query()
+                ->orderBy('id')
+                ->get(),
+        ]);
+    }
+
+    public function updateLegalDocument(Request $request, string $documentKey): JsonResponse
+    {
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'html_content' => ['required', 'string', 'max:100000'],
+            'is_active' => ['required', 'boolean'],
+        ]);
+
+        $document = DB::connection('mysql')->transaction(function () use ($documentKey, $data) {
+            $document = MobileLegalDocument::where('document_key', $documentKey)->firstOrFail();
+            $document->update($data);
+            $document->increment('version');
+
+            return $document->fresh();
+        });
+
+        return response()->json(['data' => $document]);
     }
 
     public function configuration(): JsonResponse

@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class RegistrationOtp extends Model
 {
+    protected $connection = 'mysql';
+
     protected $fillable = [
         'email',
         'name',

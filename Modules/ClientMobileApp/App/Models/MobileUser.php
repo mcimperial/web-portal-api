@@ -32,6 +32,9 @@ class MobileUser extends Authenticatable
         'social_providers',
         'member_id',
         'email_verified_at',
+        'terms_version',
+        'privacy_version',
+        'legal_accepted_at',
         'is_active',
     ];
 
@@ -47,6 +50,9 @@ class MobileUser extends Authenticatable
             'email_verified_at' => 'datetime',
             'social_providers' => 'array',
             'is_active' => 'boolean',
+            'terms_version' => 'integer',
+            'privacy_version' => 'integer',
+            'legal_accepted_at' => 'datetime',
         ];
     }
 
