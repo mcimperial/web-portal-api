@@ -63,6 +63,15 @@ Laravel config or a committed file) and run:
 php artisan db:seed --class='Modules\ClientMobileApp\Database\Seeders\ClientMobileAppDatabaseSeeder'
 ```
 
+The web portal's Mobile Administration page is available only to active portal
+users with the `admin` role. It manages startup popups and their ordered
+messages, the LOA backend and credentials, mobile accounts, and a catalog of
+registered mobile endpoints. An existing API key is never returned to the
+browser; leave the key field blank to retain it. Deactivating or deleting an
+account revokes its mobile tokens, and changing its email clears email
+verification. Deleting a mobile account is permanent. Apply the popup migration
+before using the popup administration or the public popup endpoint.
+
 The seeder leaves an existing backend selection, URL, header, and key unchanged. It
 warns if no key exists or is supplied. For example, to switch the backend:
 

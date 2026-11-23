@@ -3,6 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Modules\ClientMobileApp\App\Http\Controllers\AuthController;
+use Modules\ClientMobileApp\App\Http\Controllers\PopupController;
+use Modules\ClientMobileApp\App\Http\Controllers\MobileAdminController;
 
 /*
     |--------------------------------------------------------------------------
@@ -43,6 +45,9 @@ Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
     Route::post('google-signin', [AuthController::class, 'googleSignIn'])->name('google-signin');
     Route::post('facebook-signin', [AuthController::class, 'facebookSignIn'])->name('facebook-signin');
     Route::post('apple-signin', [AuthController::class, 'appleSignIn'])->name('apple-signin');
+
+    // Startup popups shown after the splash screen
+    Route::get('popups', [PopupController::class, 'index'])->name('popups.index');
 });
 
 // Protected routes (authentication required)
@@ -54,4 +59,18 @@ Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('ap
 
     // Legacy route
     Route::get('clientmobileapp', fn (Request $request) => $request->user())->name('clientmobileapp');
+});
+
+Route::middleware('auth:sanctum')->prefix('v1/mobile-admin')->group(function () {
+    Route::get('popups', [MobileAdminController::class, 'popups']);
+    Route::post('popups', [MobileAdminController::class, 'storePopup']);
+    Route::put('popups/{popup}', [MobileAdminController::class, 'updatePopup']);
+    Route::delete('popups/{popup}', [MobileAdminController::class, 'deletePopup']);
+    Route::get('configuration', [MobileAdminController::class, 'configuration']);
+    Route::put('configuration', [MobileAdminController::class, 'updateConfiguration']);
+    Route::get('users', [MobileAdminController::class, 'users']);
+    Route::put('users/{mobileUser}', [MobileAdminController::class, 'updateUser']);
+    Route::post('users/{mobileUser}/revoke', [MobileAdminController::class, 'revokeUser']);
+    Route::delete('users/{mobileUser}', [MobileAdminController::class, 'deleteUser']);
+    Route::get('apis', [MobileAdminController::class, 'apis']);
 });
