@@ -488,6 +488,14 @@ class LoaRequestController extends Controller
             : '--';
         $providerValue = $provider->id.'||'.$provider->name.'--'.($doctor?->id ?? 0).'||'.$doctorName;
 
+        $optionalContactDetails = [];
+        if ($request->filled('mobile_details.alternate_email')) {
+            $optionalContactDetails['alt_email'] = $request->input('mobile_details.alternate_email');
+        }
+        if ($request->filled('mobile_details.contact_number')) {
+            $optionalContactDetails['contact'] = $request->input('mobile_details.contact_number');
+        }
+
         $payload = [
             'verificationDetailsType' => 'insurance',
             'erCardNumber' => $patient->member_id,
@@ -500,8 +508,7 @@ class LoaRequestController extends Controller
             'employeeFirstName' => $employee->first_name,
             'employeeLastName' => $employee->last_name,
             'email' => (string) $request->user()->email,
-            'alt_email' => $request->input('mobile_details.alternate_email') ?? NULL,
-            //'contact' => $request->input('mobile_details.contact_number') ?? NULL,
+            ...$optionalContactDetails,
             'platform' => 'mobile',
             'provider' => $providerValue,
             'loaType' => $loaType,
