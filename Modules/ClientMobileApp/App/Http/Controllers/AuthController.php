@@ -4,9 +4,7 @@ namespace Modules\ClientMobileApp\App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Auth\Events\Registered;
-use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\View;
@@ -80,6 +78,7 @@ class AuthController extends Controller
                     'expires_at' => now()->addMinutes(10),
                     'attempts' => 0,
                     'verified' => false,
+                    'reset_token_hash' => null,
                 ]
             );
 
@@ -125,14 +124,15 @@ class AuthController extends Controller
             ]);
         }
 
-        $record->update(['verified' => true]);
+        $resetToken = bin2hex(random_bytes(32));
+        $record->update([
+            'verified' => true,
+            'reset_token_hash' => hash('sha256', $resetToken),
+            'expires_at' => now()->addMinutes(10),
+        ]);
 
         return response()->json([
-            'reset_token' => Crypt::encrypt([
-                'purpose' => 'password-reset',
-                'email' => $email,
-                'expires_at' => now()->addMinutes(10)->timestamp,
-            ]),
+            'reset_token' => $resetToken,
         ]);
     }
 
@@ -148,30 +148,14 @@ class AuthController extends Controller
             'password_confirmation' => ['required', 'string', 'same:password'],
         ]);
 
-        try {
-            $payload = Crypt::decrypt($data['token']);
-        } catch (DecryptException) {
-            throw ValidationException::withMessages([
-                'token' => ['The password reset session is invalid or has expired.'],
-            ]);
-        }
-
         $email = strtolower($data['email']);
-        $validPayload = is_array($payload)
-            && ($payload['purpose'] ?? null) === 'password-reset'
-            && hash_equals((string) ($payload['email'] ?? ''), $email)
-            && ($payload['expires_at'] ?? 0) >= now()->timestamp;
-
-        if (! $validPayload) {
-            throw ValidationException::withMessages([
-                'token' => ['The password reset session is invalid or has expired.'],
-            ]);
-        }
-
         $record = RegistrationOtp::where('email', $email)->first();
         $user = MobileUser::where('email', $email)->where('is_active', true)->first();
+        $tokenHash = hash('sha256', $data['token']);
+        $validToken = $record?->reset_token_hash
+            && hash_equals($record->reset_token_hash, $tokenHash);
 
-        if (! $record || ! $record->verified || $record->isExpired() || ! $user) {
+        if (! $record || ! $record->verified || ! $validToken || $record->isExpired() || ! $user) {
             throw ValidationException::withMessages([
                 'token' => ['The password reset session is invalid or has expired.'],
             ]);

@@ -72,6 +72,7 @@ class MobileAdminTest extends TestCase
             $table->timestamp('expires_at');
             $table->integer('attempts')->default(0);
             $table->boolean('verified')->default(false);
+            $table->string('reset_token_hash', 64)->nullable();
             $table->timestamps();
         });
         Schema::connection('mysql')->create('mobile_legal_documents', function (Blueprint $table) {
@@ -301,6 +302,13 @@ class MobileAdminTest extends TestCase
             'email' => 'reset@example.test',
             'otp' => $record->otp,
         ])->assertOk();
+
+        $this->postJson('/api/v1/mobile/reset-password', [
+            'email' => 'reset@example.test',
+            'token' => str_repeat('0', 64),
+            'password' => 'new-password',
+            'password_confirmation' => 'new-password',
+        ])->assertUnprocessable()->assertJsonValidationErrors('token');
 
         $this->postJson('/api/v1/mobile/reset-password', [
             'email' => 'reset@example.test',

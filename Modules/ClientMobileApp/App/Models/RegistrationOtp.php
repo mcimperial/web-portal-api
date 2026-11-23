@@ -15,6 +15,7 @@ class RegistrationOtp extends Model
         'expires_at',
         'attempts',
         'verified',
+        'reset_token_hash',
     ];
 
     protected $casts = [
@@ -24,6 +25,7 @@ class RegistrationOtp extends Model
 
     protected $hidden = [
         'otp',
+        'reset_token_hash',
     ];
 
     /**
