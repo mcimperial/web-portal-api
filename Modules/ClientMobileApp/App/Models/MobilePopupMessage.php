@@ -13,6 +13,7 @@ class MobilePopupMessage extends Model
 
     protected $fillable = [
         'mobile_popup_id',
+        'title',
         'html_content',
         'image_url',
         'sort_order',
