@@ -71,7 +71,8 @@ php artisan db:seed --class='Modules\ClientMobileApp\Database\Seeders\ClientMobi
 
 The web portal's Mobile Administration page is available only to active portal
 users with the `admin` role. It manages startup popups and their ordered
-messages, the LOA backend and credentials, mobile accounts, and a catalog of
+messages, Terms of Service and Privacy Policy wording, the LOA backend and
+credentials, mobile accounts, and a catalog of
 registered mobile endpoints. An existing API key is never returned to the
 browser; leave the key field blank to retain it. Deactivating or deleting an
 account revokes its mobile tokens, and changing its email clears email
@@ -79,6 +80,14 @@ verification. Deleting a mobile account is permanent. Apply the popup migration
 and the message title migration before using the popup administration or the
 public popup endpoint. Each popup message may have its own title; a blank
 message title uses the current popup title in the mobile API response.
+
+Terms of Service and Privacy Policy content is stored in
+`mobile_legal_documents` on the app-owned `mysql` connection. Administrators can
+read both records with `GET /api/v1/mobile-admin/legal-documents` and update
+`terms` or `privacy` with `PUT /api/v1/mobile-admin/legal-documents/{key}`.
+Every update increments the document version. The mobile app reads active
+documents from `GET /api/v1/mobile/legal-documents` and records the accepted
+terms and privacy versions when a traditional account is created.
 
 ### Callback requests
 

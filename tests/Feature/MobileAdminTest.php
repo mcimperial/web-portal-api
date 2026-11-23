@@ -5,9 +5,12 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Modules\ClientMobileApp\App\Http\Controllers\AuthController;
 use Modules\ClientMobileApp\App\Models\MobilePopup;
 use Modules\ClientMobileApp\App\Models\MobileUser;
+use Modules\ClientMobileApp\App\Models\RegistrationOtp;
 use Tests\TestCase;
 
 class MobileAdminTest extends TestCase
@@ -43,8 +46,12 @@ class MobileAdminTest extends TestCase
             $table->string('email')->unique();
             $table->string('contact_number', 11)->nullable();
             $table->string('password');
+            $table->string('device_name')->nullable();
             $table->string('member_id')->nullable();
             $table->timestamp('email_verified_at')->nullable();
+            $table->unsignedInteger('terms_version')->nullable();
+            $table->unsignedInteger('privacy_version')->nullable();
+            $table->timestamp('legal_accepted_at')->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();
         });
@@ -57,6 +64,29 @@ class MobileAdminTest extends TestCase
             $table->string('api_url')->nullable();
             $table->timestamps();
         });
+        Schema::connection('mysql')->create('registration_otps', function (Blueprint $table) {
+            $table->id();
+            $table->string('email')->index();
+            $table->string('name');
+            $table->string('otp', 6);
+            $table->timestamp('expires_at');
+            $table->integer('attempts')->default(0);
+            $table->boolean('verified')->default(false);
+            $table->timestamps();
+        });
+        Schema::connection('mysql')->create('mobile_legal_documents', function (Blueprint $table) {
+            $table->id();
+            $table->string('document_key')->unique();
+            $table->string('title');
+            $table->longText('html_content');
+            $table->unsignedInteger('version')->default(1);
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+        DB::connection('mysql')->table('mobile_legal_documents')->insert([
+            ['document_key' => 'terms', 'title' => 'Terms of Service', 'html_content' => '<p>Terms</p>', 'version' => 1, 'is_active' => true],
+            ['document_key' => 'privacy', 'title' => 'Privacy Policy', 'html_content' => '<p>Privacy</p>', 'version' => 1, 'is_active' => true],
+        ]);
         $migration = require base_path('Modules/ClientMobileApp/Database/migrations/2026_11_24_000000_create_mobile_popups_tables.php');
         $migration->up();
         $titleMigration = require base_path('Modules/ClientMobileApp/Database/migrations/2026_11_25_000000_add_title_to_mobile_popup_messages_table.php');
@@ -67,7 +97,7 @@ class MobileAdminTest extends TestCase
     {
         $roleId = DB::table('roles')->insertGetId(['slug' => $role]);
         DB::table('user_role')->insert(['user_id' => 1, 'role_id' => $roleId]);
-        $user = new User();
+        $user = new User;
         $user->forceFill(['id' => 1, 'is_active' => $active]);
         $this->actingAs($user, 'sanctum');
     }
@@ -125,6 +155,35 @@ class MobileAdminTest extends TestCase
         $this->putJson('/api/v1/mobile-admin/configuration', ['config_value' => 'third_party', 'api_header' => 'X-KEY', 'api_url' => 'ftp://example.test'])->assertUnprocessable();
     }
 
+    public function test_legal_documents_are_public_and_editable_by_mobile_administration(): void
+    {
+        $this->getJson('/api/v1/mobile/legal-documents')
+            ->assertOk()
+            ->assertJsonPath('documents.terms.title', 'Terms of Service')
+            ->assertJsonPath('documents.privacy.version', 1);
+
+        $this->loginAs();
+        $this->getJson('/api/v1/mobile-admin/legal-documents')->assertOk()->assertJsonCount(2, 'data');
+        $this->putJson('/api/v1/mobile-admin/legal-documents/terms', [
+            'title' => 'Updated Terms',
+            'html_content' => '<p>Updated wording</p>',
+            'is_active' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.title', 'Updated Terms')
+            ->assertJsonPath('data.version', 2);
+
+        $this->getJson('/api/v1/mobile/legal-documents')
+            ->assertJsonPath('documents.terms.html_content', '<p>Updated wording</p>')
+            ->assertJsonPath('documents.terms.version', 2);
+
+        $this->putJson('/api/v1/mobile-admin/legal-documents/privacy', [
+            'title' => 'Privacy',
+            'html_content' => '<p>Private</p>',
+            'is_active' => false,
+        ])->assertOk();
+        $this->getJson('/api/v1/mobile/legal-documents')->assertJsonMissingPath('documents.privacy');
+    }
+
     public function test_message_titles_are_saved_as_overrides_and_blank_titles_follow_the_popup_title(): void
     {
         $this->loginAs();
@@ -179,5 +238,133 @@ class MobileAdminTest extends TestCase
         $response = $this->getJson('/api/v1/mobile-admin/apis')->assertOk();
         $response->assertJsonFragment(['path' => '/api/v1/mobile/popups', 'authentication' => 'Public']);
         $response->assertJsonFragment(['path' => '/api/v1/mobile/me', 'authentication' => 'Mobile user']);
+        $response->assertJsonFragment(['path' => '/api/v1/mobile/account', 'authentication' => 'Mobile user']);
+    }
+
+    public function test_mobile_user_must_confirm_before_account_is_permanently_deleted(): void
+    {
+        $mobile = MobileUser::create([
+            'name' => 'Mobile User',
+            'email' => 'delete@example.test',
+            'password' => 'hash',
+            'is_active' => true,
+            'email_verified_at' => now(),
+        ]);
+        $mobile->createToken('phone');
+        $this->actingAs($mobile, 'mobile');
+
+        $this->deleteJson('/api/v1/mobile/account', ['confirmation' => 'delete'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('confirmation');
+        $this->assertNotNull($mobile->fresh());
+        $this->assertSame(1, $mobile->tokens()->count());
+
+        $this->deleteJson('/api/v1/mobile/account', ['confirmation' => 'delete-account'])
+            ->assertOk()
+            ->assertJsonPath('message', 'Account deleted successfully.');
+        $this->assertNull($mobile->fresh());
+        $this->assertSame(0, DB::connection('mysql')->table('personal_access_tokens')->count());
+    }
+
+    public function test_mobile_password_reset_requires_otp_and_consumes_all_sessions(): void
+    {
+        $this->app->bind(AuthController::class, fn () => new class extends AuthController
+        {
+            protected function sendPasswordResetOtpEmail(MobileUser $user, string $otp): void {}
+        });
+
+        $mobile = MobileUser::create([
+            'name' => 'Reset User',
+            'email' => 'reset@example.test',
+            'password' => Hash::make('old-password'),
+            'is_active' => true,
+            'email_verified_at' => now(),
+        ]);
+        $mobile->createToken('phone');
+        $mobile->createToken('tablet');
+
+        $this->postJson('/api/v1/mobile/forgot-password', ['email' => 'unknown@example.test'])
+            ->assertOk()
+            ->assertJsonPath('message', 'If an account matches that email, a reset code has been sent.');
+
+        $this->postJson('/api/v1/mobile/forgot-password', ['email' => 'reset@example.test'])
+            ->assertOk();
+        $record = DB::connection('mysql')->table('registration_otps')->where('email', 'reset@example.test')->first();
+        $this->assertNotNull($record);
+
+        $this->postJson('/api/v1/mobile/forgot-password/verify', [
+            'email' => 'reset@example.test',
+            'otp' => '000000',
+        ])->assertUnprocessable()->assertJsonValidationErrors('otp');
+
+        $verified = $this->postJson('/api/v1/mobile/forgot-password/verify', [
+            'email' => 'reset@example.test',
+            'otp' => $record->otp,
+        ])->assertOk();
+
+        $this->postJson('/api/v1/mobile/reset-password', [
+            'email' => 'reset@example.test',
+            'token' => $verified->json('reset_token'),
+            'password' => 'new-password',
+            'password_confirmation' => 'different-password',
+        ])->assertUnprocessable()->assertJsonValidationErrors('password_confirmation');
+
+        $this->postJson('/api/v1/mobile/reset-password', [
+            'email' => 'reset@example.test',
+            'token' => $verified->json('reset_token'),
+            'password' => 'new-password',
+            'password_confirmation' => 'new-password',
+        ])->assertOk();
+
+        $this->assertTrue(Hash::check('new-password', $mobile->fresh()->password));
+        $this->assertSame(0, $mobile->tokens()->count());
+        $this->assertDatabaseMissing('registration_otps', ['email' => 'reset@example.test'], 'mysql');
+    }
+
+    public function test_registration_records_the_accepted_legal_versions(): void
+    {
+        RegistrationOtp::create([
+            'email' => 'legal@example.test',
+            'name' => 'Legal Member',
+            'otp' => '123456',
+            'expires_at' => now()->addMinutes(10),
+            'attempts' => 1,
+            'verified' => true,
+        ]);
+
+        $payload = [
+            'firstName' => 'Legal',
+            'lastName' => 'Member',
+            'email' => 'legal@example.test',
+            'password' => 'StrongPassword1!',
+            'passwordConfirmation' => 'StrongPassword1!',
+            'deviceName' => 'Test phone',
+            'agreeToTerms' => true,
+            'terms_version' => 1,
+            'privacy_version' => 1,
+        ];
+
+        $this->postJson('/api/v1/mobile/register', $payload)
+            ->assertCreated()
+            ->assertJsonPath('user.email', 'legal@example.test');
+
+        $user = MobileUser::where('email', 'legal@example.test')->firstOrFail();
+        $this->assertSame(1, $user->terms_version);
+        $this->assertSame(1, $user->privacy_version);
+        $this->assertNotNull($user->legal_accepted_at);
+
+        RegistrationOtp::create([
+            'email' => 'stale@example.test',
+            'name' => 'Stale Member',
+            'otp' => '654321',
+            'expires_at' => now()->addMinutes(10),
+            'attempts' => 1,
+            'verified' => true,
+        ]);
+        $payload['email'] = 'stale@example.test';
+        $payload['terms_version'] = 99;
+        $this->postJson('/api/v1/mobile/register', $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('agreeToTerms');
     }
 }

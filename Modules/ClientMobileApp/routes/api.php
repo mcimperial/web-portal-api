@@ -9,10 +9,11 @@ use Modules\ClientMobileApp\App\Http\Controllers\ComplaintController;
 use Modules\ClientMobileApp\App\Http\Controllers\DoctorController;
 use Modules\ClientMobileApp\App\Http\Controllers\HealthController;
 use Modules\ClientMobileApp\App\Http\Controllers\HospitalController;
+use Modules\ClientMobileApp\App\Http\Controllers\LegalDocumentController;
 use Modules\ClientMobileApp\App\Http\Controllers\LoaRequestController;
 use Modules\ClientMobileApp\App\Http\Controllers\MemberController;
-use Modules\ClientMobileApp\App\Http\Controllers\PopupController;
 use Modules\ClientMobileApp\App\Http\Controllers\MobileAdminController;
+use Modules\ClientMobileApp\App\Http\Controllers\PopupController;
 
 /*
     |--------------------------------------------------------------------------
@@ -29,6 +30,9 @@ use Modules\ClientMobileApp\App\Http\Controllers\MobileAdminController;
 Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
     // Traditional login
     Route::post('login', [AuthController::class, 'login'])->name('login');
+    Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->name('forgot-password')->middleware('throttle:5,1');
+    Route::post('forgot-password/verify', [AuthController::class, 'verifyPasswordResetOtp'])->name('forgot-password.verify')->middleware('throttle:10,1');
+    Route::post('reset-password', [AuthController::class, 'resetPassword'])->name('reset-password')->middleware('throttle:10,1');
 
     // Account creation
     Route::post('register', [AuthController::class, 'createAccount'])->name('register');
@@ -56,12 +60,14 @@ Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
 
     // Startup popups shown after the splash screen
     Route::get('popups', [PopupController::class, 'index'])->name('popups.index');
+    Route::get('legal-documents', [LegalDocumentController::class, 'index'])->name('legal-documents.index');
 });
 
 // Protected routes (authentication required)
 Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('api.mobile.')->group(function () {
     Route::post('logout', [AuthController::class, 'logout'])->name('logout');
     Route::post('logout-all', [AuthController::class, 'logoutAll'])->name('logout.all');
+    Route::delete('account', [AuthController::class, 'deleteAccount'])->name('account.delete');
     Route::get('me', [AuthController::class, 'me'])->name('me');
     Route::get('callback-requests', [CallbackRequestController::class, 'index'])->name('callback-requests.index');
     Route::post('callback-requests', [CallbackRequestController::class, 'store'])->name('callback-requests.store');
@@ -101,6 +107,9 @@ Route::middleware('auth:sanctum')->prefix('v1/mobile-admin')->group(function () 
     Route::post('popups', [MobileAdminController::class, 'storePopup']);
     Route::put('popups/{popup}', [MobileAdminController::class, 'updatePopup']);
     Route::delete('popups/{popup}', [MobileAdminController::class, 'deletePopup']);
+    Route::get('legal-documents', [MobileAdminController::class, 'legalDocuments']);
+    Route::put('legal-documents/{documentKey}', [MobileAdminController::class, 'updateLegalDocument'])
+        ->whereIn('documentKey', ['terms', 'privacy']);
     Route::get('configuration', [MobileAdminController::class, 'configuration']);
     Route::put('configuration', [MobileAdminController::class, 'updateConfiguration']);
     Route::get('users', [MobileAdminController::class, 'users']);

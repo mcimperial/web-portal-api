@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Email Verification - LLIBI</title>
+    <title>{{ $heading ?? 'Email Verification' }} - LLIBI</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f4;">
     <table role="presentation" style="width: 100%; border-collapse: collapse;">
@@ -22,14 +22,14 @@
                     <!-- Content -->
                     <tr>
                         <td style="padding: 40px;">
-                            <h2 style="color: #1e3a5f; margin: 0 0 20px 0; font-size: 22px; font-weight: 600;">Email Verification</h2>
+                            <h2 style="color: #1e3a5f; margin: 0 0 20px 0; font-size: 22px; font-weight: 600;">{{ $heading ?? 'Email Verification' }}</h2>
                             
                             <p style="color: #555555; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
                                 Hello <strong>{{ $name }}</strong>,
                             </p>
                             
                             <p style="color: #555555; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-                                Thank you for registering with LLIBI. Please use the following One-Time Password (OTP) to verify your email address:
+                                {{ $message ?? 'Please use the following One-Time Password (OTP) to verify your email address:' }}
                             </p>
                             
                             <!-- OTP Box -->

@@ -4,12 +4,17 @@ namespace Modules\ClientMobileApp\App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Auth\Events\Registered;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\View;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
+use Modules\ClientMobileApp\App\Models\MobileLegalDocument;
 use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileApp\App\Models\RegistrationOtp;
 
@@ -55,6 +60,135 @@ class AuthController extends Controller
     }
 
     /**
+     * Send a password-reset code without revealing whether an account exists.
+     */
+    public function forgotPassword(Request $request)
+    {
+        $request->validate([
+            'email' => ['required', 'string', 'email', 'max:255'],
+        ]);
+
+        $email = strtolower($request->email);
+        $user = MobileUser::where('email', $email)->where('is_active', true)->first();
+
+        if ($user) {
+            RegistrationOtp::updateOrCreate(
+                ['email' => $email],
+                [
+                    'name' => $user->name,
+                    'otp' => $this->generateOtp(),
+                    'expires_at' => now()->addMinutes(10),
+                    'attempts' => 0,
+                    'verified' => false,
+                ]
+            );
+
+            $otp = RegistrationOtp::where('email', $email)->firstOrFail();
+            $this->sendPasswordResetOtpEmail($user, $otp->otp);
+        }
+
+        return response()->json([
+            'message' => 'If an account matches that email, a reset code has been sent.',
+        ]);
+    }
+
+    /**
+     * Verify a password-reset code and issue a short-lived encrypted token.
+     */
+    public function verifyPasswordResetOtp(Request $request)
+    {
+        $request->validate([
+            'email' => ['required', 'string', 'email', 'max:255'],
+            'otp' => ['required', 'string', 'size:6'],
+        ]);
+
+        $email = strtolower($request->email);
+        $record = RegistrationOtp::where('email', $email)->first();
+        $user = MobileUser::where('email', $email)->where('is_active', true)->first();
+
+        if (! $record || ! $user || $record->isExpired()) {
+            throw ValidationException::withMessages([
+                'otp' => ['The reset code is invalid or has expired. Request a new code.'],
+            ]);
+        }
+
+        if ($record->hasMaxAttempts()) {
+            throw ValidationException::withMessages([
+                'otp' => ['Too many invalid attempts. Request a new reset code.'],
+            ]);
+        }
+
+        if (! hash_equals($record->otp, $request->otp)) {
+            $record->increment('attempts');
+            throw ValidationException::withMessages([
+                'otp' => ['The reset code is invalid.'],
+            ]);
+        }
+
+        $record->update(['verified' => true]);
+
+        return response()->json([
+            'reset_token' => Crypt::encrypt([
+                'purpose' => 'password-reset',
+                'email' => $email,
+                'expires_at' => now()->addMinutes(10)->timestamp,
+            ]),
+        ]);
+    }
+
+    /**
+     * Set a new password after a verified reset.
+     */
+    public function resetPassword(Request $request)
+    {
+        $data = $request->validate([
+            'email' => ['required', 'string', 'email', 'max:255'],
+            'token' => ['required', 'string'],
+            'password' => ['required', 'string', Password::min(8)],
+            'password_confirmation' => ['required', 'string', 'same:password'],
+        ]);
+
+        try {
+            $payload = Crypt::decrypt($data['token']);
+        } catch (DecryptException) {
+            throw ValidationException::withMessages([
+                'token' => ['The password reset session is invalid or has expired.'],
+            ]);
+        }
+
+        $email = strtolower($data['email']);
+        $validPayload = is_array($payload)
+            && ($payload['purpose'] ?? null) === 'password-reset'
+            && hash_equals((string) ($payload['email'] ?? ''), $email)
+            && ($payload['expires_at'] ?? 0) >= now()->timestamp;
+
+        if (! $validPayload) {
+            throw ValidationException::withMessages([
+                'token' => ['The password reset session is invalid or has expired.'],
+            ]);
+        }
+
+        $record = RegistrationOtp::where('email', $email)->first();
+        $user = MobileUser::where('email', $email)->where('is_active', true)->first();
+
+        if (! $record || ! $record->verified || $record->isExpired() || ! $user) {
+            throw ValidationException::withMessages([
+                'token' => ['The password reset session is invalid or has expired.'],
+            ]);
+        }
+
+        DB::connection('mysql')->transaction(function () use ($user, $record, $data): void {
+            $user->update(['password' => Hash::make($data['password'])]);
+            $user->tokens()->delete();
+            $record->delete();
+        });
+
+        return response()->json([
+            'message' => 'Password reset successfully. You can now sign in.',
+        ]);
+    }
+
+    /**
      * Handle mobile app logout request.
      */
     public function logout(Request $request)
@@ -89,6 +223,26 @@ class AuthController extends Controller
     }
 
     /**
+     * Permanently delete the authenticated mobile account.
+     */
+    public function deleteAccount(Request $request)
+    {
+        $request->validate([
+            'confirmation' => ['required', 'string', 'in:delete-account'],
+        ]);
+
+        $user = $request->user();
+        DB::connection('mysql')->transaction(function () use ($user): void {
+            $user->tokens()->delete();
+            $user->delete();
+        });
+
+        return response()->json([
+            'message' => 'Account deleted successfully.',
+        ]);
+    }
+
+    /**
      * Handle mobile app account creation request.
      */
     public function createAccount(Request $request)
@@ -96,15 +250,30 @@ class AuthController extends Controller
         $request->validate([
             'firstName' => ['required', 'string', 'max:255'],
             'lastName' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:mobile_users,email'],
+            'email' => ['required', 'string', 'email', 'max:255', Rule::unique('mysql.mobile_users', 'email')],
             'contact_number' => ['nullable', 'string', 'regex:/^09[0-9]{9}$/'],
             'password' => ['required', 'string', Password::min(8)],
             'passwordConfirmation' => ['required', 'string', 'same:password'],
             'deviceName' => ['nullable', 'string'],
             'agreeToTerms' => ['required', 'accepted'],
+            'terms_version' => ['required', 'integer', 'min:1'],
+            'privacy_version' => ['required', 'integer', 'min:1'],
         ]);
 
         $email = strtolower($request->email);
+        $terms = MobileLegalDocument::where('document_key', 'terms')->where('is_active', true)->first();
+        $privacy = MobileLegalDocument::where('document_key', 'privacy')->where('is_active', true)->first();
+
+        if (
+            ! $terms
+            || ! $privacy
+            || $request->integer('terms_version') !== $terms->version
+            || $request->integer('privacy_version') !== $privacy->version
+        ) {
+            throw ValidationException::withMessages([
+                'agreeToTerms' => ['The legal documents have changed. Please review and accept the latest versions.'],
+            ]);
+        }
 
         // Check if email was verified via OTP
         $otpRecord = RegistrationOtp::where('email', $email)
@@ -126,6 +295,9 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
             'device_name' => $request->deviceName ?? 'mobile-app',
             'email_verified_at' => now(), // Mark as verified since OTP was verified
+            'terms_version' => $terms->version,
+            'privacy_version' => $privacy->version,
+            'legal_accepted_at' => now(),
         ]);
 
         // Clean up the OTP record
@@ -345,22 +517,42 @@ class AuthController extends Controller
     /**
      * Send OTP email for registration using LLIBI branding.
      */
-    private function sendRegistrationOtpEmail(string $email, string $name, string $otp): void
-    {
+    private function sendRegistrationOtpEmail(
+        string $email,
+        string $name,
+        string $otp,
+        string $subject = 'LLIBI - Email Verification Code',
+        string $heading = 'Email Verification',
+        string $message = 'Please use the following One-Time Password (OTP) to verify your email address:'
+    ): void {
         $emailBody = View::make('emails.otp-verification', [
             'name' => $name,
             'otp' => $otp,
             'expiresInMinutes' => 10,
+            'heading' => $heading,
+            'message' => $message,
         ])->render();
 
         // Use the existing EmailSender service
         $emailSender = new \Modules\ClientMasterlist\App\Services\EmailSender(
             email: $email,
             body: $emailBody,
-            subject: 'LLIBI - Email Verification Code'
+            subject: $subject
         );
 
         $emailSender->sendLlibi();
+    }
+
+    protected function sendPasswordResetOtpEmail(MobileUser $user, string $otp): void
+    {
+        $this->sendRegistrationOtpEmail(
+            $user->email,
+            $user->name,
+            $otp,
+            'LLIBI - Password Reset Code',
+            'Password Reset',
+            'Please use the following One-Time Password (OTP) to reset your LLIBI account password:'
+        );
     }
 
     /**
