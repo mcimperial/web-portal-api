@@ -115,6 +115,7 @@ Route::middleware('auth:sanctum')->prefix('v1/mobile-admin')->group(function () 
     Route::get('configuration', [MobileAdminController::class, 'configuration']);
     Route::put('configuration', [MobileAdminController::class, 'updateConfiguration']);
     Route::get('users', [MobileAdminController::class, 'users']);
+    Route::post('users/revoke-activations', [MobileAdminController::class, 'revokeUserActivations']);
     Route::put('users/{mobileUser}', [MobileAdminController::class, 'updateUser']);
     Route::post('users/{mobileUser}/revoke', [MobileAdminController::class, 'revokeUser']);
     Route::delete('users/{mobileUser}', [MobileAdminController::class, 'deleteUser']);

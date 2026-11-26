@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
@@ -11,6 +12,7 @@ use Modules\ClientMobileApp\App\Http\Controllers\AuthController;
 use Modules\ClientMobileApp\App\Models\MobilePopup;
 use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileApp\App\Models\RegistrationOtp;
+use Modules\ClientMobileApp\App\Services\MemberAccess;
 use Tests\TestCase;
 
 class MobileAdminTest extends TestCase
@@ -231,6 +233,46 @@ class MobileAdminTest extends TestCase
         $this->deleteJson("/api/v1/mobile-admin/users/{$mobile->id}")->assertOk();
         $this->assertSame(0, $mobile->tokens()->count());
         $this->assertNull($mobile->fresh());
+    }
+
+    public function test_admin_can_filter_and_revoke_member_activations_in_bulk(): void
+    {
+        $this->loginAs();
+        $activated = MobileUser::create([
+            'name' => 'Activated User',
+            'email' => 'activated@example.test',
+            'password' => 'hash',
+            'member_id' => 'MEM-001',
+            'is_active' => true,
+        ]);
+        $notActivated = MobileUser::create([
+            'name' => 'Not Activated User',
+            'email' => 'not-activated@example.test',
+            'password' => 'hash',
+            'member_id' => null,
+            'is_active' => true,
+        ]);
+        $activated->createToken('phone');
+
+        $this->getJson('/api/v1/mobile-admin/users?activation=activated')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $activated->id);
+        $this->getJson('/api/v1/mobile-admin/users?activation=not_activated')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $notActivated->id);
+
+        $this->postJson('/api/v1/mobile-admin/users/revoke-activations', [
+            'user_ids' => [$activated->id, $notActivated->id],
+        ])->assertOk()->assertJsonPath('revoked', 1);
+
+        $this->assertNull($activated->fresh()->member_id);
+        $this->assertSame(0, $activated->tokens()->count());
+        $this->assertNull($notActivated->fresh()->member_id);
+        $request = Request::create('/api/v1/mobile/member');
+        $request->setUserResolver(fn () => $activated->fresh());
+        $this->assertNull(MemberAccess::resolve($request));
     }
 
     public function test_api_catalog_includes_public_and_protected_mobile_routes(): void
