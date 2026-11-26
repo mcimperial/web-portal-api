@@ -152,11 +152,19 @@ class MobileAdminController extends Controller
 
     public function users(Request $request): JsonResponse
     {
-        $data = $request->validate(['search' => ['nullable', 'string', 'max:100']]);
+        $data = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'activation' => ['nullable', Rule::in(['all', 'activated', 'not_activated'])],
+        ]);
         $query = MobileUser::query()->select(['id', 'uuid', 'name', 'email', 'contact_number', 'member_id', 'is_active', 'email_verified_at', 'created_at']);
         if (! empty($data['search'])) {
             $term = '%'.$data['search'].'%';
             $query->where(fn ($q) => $q->where('name', 'like', $term)->orWhere('email', 'like', $term)->orWhere('member_id', 'like', $term));
+        }
+        if (($data['activation'] ?? 'all') === 'activated') {
+            $query->whereNotNull('member_id')->where('member_id', '!=', '');
+        } elseif (($data['activation'] ?? 'all') === 'not_activated') {
+            $query->where(fn ($q) => $q->whereNull('member_id')->orWhere('member_id', ''));
         }
 
         return response()->json($query->orderByDesc('id')->paginate(25));
@@ -188,6 +196,35 @@ class MobileAdminController extends Controller
         $mobileUser->tokens()->delete();
 
         return response()->json(['message' => 'Sessions revoked.']);
+    }
+
+    public function revokeUserActivations(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'user_ids' => ['required', 'array', 'min:1', 'max:100'],
+            'user_ids.*' => ['required', 'integer', 'distinct'],
+        ]);
+
+        $revoked = DB::connection('mysql')->transaction(function () use ($data): int {
+            $users = MobileUser::query()
+                ->whereKey($data['user_ids'])
+                ->whereNotNull('member_id')
+                ->where('member_id', '!=', '')
+                ->lockForUpdate()
+                ->get();
+
+            foreach ($users as $user) {
+                $user->tokens()->delete();
+                $user->forceFill(['member_id' => null])->save();
+            }
+
+            return $users->count();
+        });
+
+        return response()->json([
+            'message' => "{$revoked} member activation(s) revoked.",
+            'revoked' => $revoked,
+        ]);
     }
 
     public function deleteUser(MobileUser $mobileUser): JsonResponse

@@ -3,8 +3,8 @@
 namespace Modules\ClientMobileApp\App\Services;
 
 use Illuminate\Http\Request;
-use Modules\ClientMobileApp\App\Models\MobileUser;
 use Modules\ClientMobileApp\App\Models\Masterlist;
+use Modules\ClientMobileApp\App\Models\MobileUser;
 
 class MemberAccess
 {
@@ -18,32 +18,18 @@ class MemberAccess
 
         $linkedMemberId = $user->member_id;
 
-        if ($linkedMemberId !== null) {
-            if ($requestedMemberId !== null && trim($requestedMemberId) !== $linkedMemberId) {
-                return null;
-            }
-
-            return Masterlist::query()
-                ->select(Masterlist::PUBLIC_COLUMNS)
-                ->where('member_id', $linkedMemberId)
-                ->first();
-        }
-
-        $email = strtolower(trim($user->email));
-
-        if ($email === '') {
+        if (blank($linkedMemberId)) {
             return null;
         }
 
-        $query = Masterlist::query()
-            ->select(Masterlist::PUBLIC_COLUMNS)
-            ->whereRaw('LOWER(email) = ?', [$email]);
-
-        if ($requestedMemberId !== null) {
-            $query->where('member_id', trim($requestedMemberId));
+        if ($requestedMemberId !== null && trim($requestedMemberId) !== $linkedMemberId) {
+            return null;
         }
 
-        return $query->first();
+        return Masterlist::query()
+            ->select(Masterlist::PUBLIC_COLUMNS)
+            ->where('member_id', $linkedMemberId)
+            ->first();
     }
 
     public static function link(Request $request, string $memberId, string $birthDate): ?Masterlist

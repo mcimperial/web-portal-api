@@ -149,7 +149,9 @@ migrations before deploying the updated API.
 Member-specific data is linked to the mobile account through
 `POST /api/v1/mobile/member/link`, which verifies the member ID and birth date
 against `mysql_sync.masterlist`. The mobile app links an activated member
-after login or account registration.
+after login or account registration. Accounts without a linked `member_id`
+cannot resolve member-specific data; revoking an activation clears the link and
+all mobile tokens.
 
 The insurer LOA monitor (`app_loa_monitor`) is not exposed to mobile accounts
 until its insurer-side `inscode` can be safely mapped to a masterlist member;
