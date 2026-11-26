@@ -195,6 +195,67 @@ class AuthController extends Controller
     }
 
     /**
+     * Update the authenticated user's account details.
+     */
+    public function updateAccount(Request $request)
+    {
+        $user = $request->user();
+        $request->merge(['email' => strtolower((string) $request->input('email'))]);
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'email' => [
+                'required',
+                'string',
+                'email',
+                'max:255',
+                Rule::unique('mysql.mobile_users', 'email')->ignore($user->id),
+            ],
+            'contact_number' => ['nullable', 'string', 'regex:/^09[0-9]{9}$/'],
+        ]);
+
+        $firstName = ucwords(strtolower(trim($validated['first_name'])));
+        $lastName = ucwords(strtolower(trim($validated['last_name'])));
+
+        $user->update([
+            'name' => trim($firstName.' '.$lastName),
+            'email' => $validated['email'],
+            'contact_number' => $validated['contact_number'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Account updated successfully.',
+            'user' => $user->fresh(),
+        ]);
+    }
+
+    /**
+     * Change the authenticated user's password.
+     */
+    public function changePassword(Request $request)
+    {
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'string', Password::min(8), 'confirmed'],
+        ]);
+
+        $user = $request->user();
+        if (! Hash::check($validated['current_password'], $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['The current password is incorrect.'],
+            ]);
+        }
+
+        $user->update([
+            'password' => Hash::make($validated['password']),
+        ]);
+
+        return response()->json([
+            'message' => 'Password changed successfully.',
+        ]);
+    }
+
+    /**
      * Revoke all tokens for the authenticated user.
      */
     public function logoutAll(Request $request)

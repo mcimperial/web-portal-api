@@ -75,6 +75,12 @@ class MemberController extends Controller
             'birth_date' => ['required', 'date_format:Y-m-d'],
         ]);
 
+        if (\Carbon\Carbon::parse($validated['birth_date'])->age < 18) {
+            return response()->json([
+                'message' => 'Birth date cannot be for someone younger than 18 yrs old.',
+            ], 422);
+        }
+
         $member = MemberAccess::link(
             $request,
             $validated['member_id'],

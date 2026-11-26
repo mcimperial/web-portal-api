@@ -44,7 +44,7 @@ class CallbackRequestController extends Controller
             'alt_mobile' => ['nullable', 'string', 'regex:/^09[0-9]{9}$/'],
         ]);
         $attributes = [
-            'requestor_name' => $request->user()->name,
+            'requestor_name' => ucwords(strtolower(trim((string) $request->user()->name))),
             'email' => $validated['email'],
             'mobile' => $validated['mobile'],
             'landline' => $validated['landline'] ?? null,

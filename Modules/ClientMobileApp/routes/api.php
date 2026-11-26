@@ -67,6 +67,8 @@ Route::prefix('v1/mobile')->name('api.mobile.')->group(function () {
 Route::middleware(['auth:mobile', 'mobile.user'])->prefix('v1/mobile')->name('api.mobile.')->group(function () {
     Route::post('logout', [AuthController::class, 'logout'])->name('logout');
     Route::post('logout-all', [AuthController::class, 'logoutAll'])->name('logout.all');
+    Route::put('account', [AuthController::class, 'updateAccount'])->name('account.update');
+    Route::put('account/password', [AuthController::class, 'changePassword'])->name('account.password');
     Route::delete('account', [AuthController::class, 'deleteAccount'])->name('account.delete');
     Route::get('me', [AuthController::class, 'me'])->name('me');
     Route::get('callback-requests', [CallbackRequestController::class, 'index'])->name('callback-requests.index');
