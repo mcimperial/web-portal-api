@@ -1193,6 +1193,7 @@ class ImportEnrolleeController extends Controller
     private function resolveTempEndDateFromImport(array $enrolleeData, array $healthInsuranceData, string $dateFormat = 'auto'): ?string
     {
         $candidates = [
+            $enrolleeData['employee_end_date'] ?? null,
             $enrolleeData['employment_end_date'] ?? null,
             $healthInsuranceData['coverage_end_date'] ?? null,
         ];
@@ -1228,8 +1229,13 @@ class ImportEnrolleeController extends Controller
             return;
         }
 
+        if ($tempEndDate > now()->toDateString()) {
+            return;
+        }
+
         $enrolleeData['temp_end_date'] = $tempEndDate;
         unset($enrolleeData['employment_end_date']);
+        unset($enrolleeData['employee_end_date']);
         unset($healthInsuranceData['coverage_end_date']);
 
         $enrolleeData['status'] = 'ACTIVE';
