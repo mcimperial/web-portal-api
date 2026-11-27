@@ -187,6 +187,30 @@ class ApiCredential extends Model
 
     private static function parseIpv4Range(string $value): ?array
     {
+        $cidrParts = explode('/', $value);
+
+        if (count($cidrParts) === 2) {
+            $ipNumber = self::ipv4ToNumber(trim($cidrParts[0]));
+            $prefix = trim($cidrParts[1]);
+
+            if ($ipNumber === null || preg_match('/^(?:[0-9]|[12][0-9]|3[0-2])$/', $prefix) !== 1) {
+                return null;
+            }
+
+            $prefixLength = (int) $prefix;
+            $mask = $prefixLength === 0
+                ? 0
+                : (0xFFFFFFFF << (32 - $prefixLength)) & 0xFFFFFFFF;
+            $network = $ipNumber & $mask;
+            $broadcast = $network | (0xFFFFFFFF ^ $mask);
+
+            return [$network, $broadcast];
+        }
+
+        if (count($cidrParts) !== 1) {
+            return null;
+        }
+
         $parts = explode('-', $value);
 
         if (count($parts) !== 2) {

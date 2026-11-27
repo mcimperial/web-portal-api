@@ -54,7 +54,7 @@ class ApiCredentialController extends Controller
                 'string',
                 function (string $attribute, mixed $value, \Closure $fail) {
                     if (!is_string($value) || !ApiCredential::isValidIpRestriction($value)) {
-                        $fail("The {$attribute} field must be a valid IP address or IPv4 range (for example, 8.156.24.0-255).");
+                        $fail("The {$attribute} field must be a valid IP address, IPv4 range, or IPv4 CIDR block (for example, 8.156.24.0-255 or 163.116.128.0/17).");
                     }
                 },
             ],
@@ -110,7 +110,7 @@ class ApiCredentialController extends Controller
                 'string',
                 function (string $attribute, mixed $value, \Closure $fail) {
                     if (!is_string($value) || !ApiCredential::isValidIpRestriction($value)) {
-                        $fail("The {$attribute} field must be a valid IP address or IPv4 range (for example, 8.156.24.0-255).");
+                        $fail("The {$attribute} field must be a valid IP address, IPv4 range, or IPv4 CIDR block (for example, 8.156.24.0-255 or 163.116.128.0/17).");
                     }
                 },
             ],
