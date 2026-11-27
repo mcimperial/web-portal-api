@@ -116,6 +116,75 @@ class BillingControllerLookerValidationStatusTest extends TestCase
         $this->assertNull($result['row_data']['COVERAGE_END_DATE']);
     }
 
+    public function test_uploaded_employee_number_suffix_is_ignored_for_billing_validation(): void
+    {
+        DB::table('cm_principal')->insert([
+            'id' => 901,
+            'enrollment_id' => 99,
+            'employee_id' => 'mj6vn4w',
+            'member_id' => null,
+            'birth_date' => '1990-01-01',
+            'enrollment_status' => 'APPROVED',
+            'deleted_at' => null,
+        ]);
+
+        DB::table('cm_health_insurance')->insert([
+            'id' => 902,
+            'principal_id' => 901,
+            'coverage_start_date' => '2026-01-01',
+            'coverage_end_date' => null,
+            'certificate_number' => 'CERT-902',
+        ]);
+
+        $controller = new BillingController();
+        $modalMethod = new \ReflectionMethod($controller, 'resolveModalBillingStatus');
+        $modalMethod->setAccessible(true);
+        $modalResult = $modalMethod->invoke(
+            $controller,
+            99,
+            [
+                'EMP_NO' => 'mj6vn4w-5024',
+                'BIRTH_DATE' => '1990-01-01',
+            ],
+            'EMP_NO',
+            'BIRTH_DATE',
+            11,
+            2026
+        );
+
+        $lookerMethod = new \ReflectionMethod($controller, 'resolveLookerFileValidationStatus');
+        $lookerMethod->setAccessible(true);
+        $lookerResult = $lookerMethod->invoke(
+            $controller,
+            99,
+            [
+                'EMP_NO' => 'mj6vn4w-5024',
+                'STATUS' => 'ENROLLED',
+            ],
+            'EMP_NO',
+            'STATUS',
+            'looker_file_validation'
+        );
+        $activeListResult = $lookerMethod->invoke(
+            $controller,
+            99,
+            ['EMP_NO' => 'mj6vn4w-5024'],
+            'EMP_NO',
+            null,
+            'active_list_validation'
+        );
+
+        $this->assertSame(901, $modalResult['principal_id']);
+        $this->assertSame(901, $lookerResult['principal_id']);
+        $this->assertTrue($lookerResult['row_data']['MATCHED']);
+        $this->assertSame(901, $activeListResult['principal_id']);
+
+        $normalizeMethod = new \ReflectionMethod($controller, 'normalizeUploadedEmployeeId');
+        $normalizeMethod->setAccessible(true);
+        $this->assertSame('MJ6VN4W', $normalizeMethod->invoke($controller, 'mj6vn4w-5024'));
+        $this->assertSame('MJ6VN4W-AB', $normalizeMethod->invoke($controller, 'mj6vn4w-AB'));
+    }
+
     public function test_modal_billing_recon_report_2_only_includes_certificated_open_principals_and_dependents(): void
     {
         DB::table('cm_principal')->insert([
