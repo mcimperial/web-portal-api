@@ -585,7 +585,7 @@ class BillingController extends Controller
         int $billingMonth,
         int $billingYear
     ): array {
-        $employeeId = $this->normalizeIdentityValue($rowData[$employeeIdColumnKey] ?? null);
+        $employeeId = $this->normalizeUploadedEmployeeId($rowData[$employeeIdColumnKey] ?? null);
         $birthDateRaw = trim((string) ($rowData[$birthdateColumnKey] ?? ''));
         $birthDate = null;
 
@@ -706,7 +706,7 @@ class BillingController extends Controller
         ?string $statusColumnKey,
         string $billingType
     ): array {
-        $employeeId = $this->normalizeIdentityValue(
+        $employeeId = $this->normalizeUploadedEmployeeId(
             $employeeIdColumnKey ? ($rowData[$employeeIdColumnKey] ?? null) : null
         );
 
@@ -1073,7 +1073,7 @@ class BillingController extends Controller
 
         foreach ($uploadedRows as $row) {
             $rowData = $row['row_data'] ?? [];
-            $employeeId = $this->normalizeIdentityValue($rowData[$employeeIdColumnKey] ?? null);
+            $employeeId = $this->normalizeUploadedEmployeeId($rowData[$employeeIdColumnKey] ?? null);
             $birthDate = $this->normalizeDateValue($rowData[$birthdateColumnKey] ?? null);
 
             if ($employeeId === '' || $birthDate === null) {
@@ -1702,7 +1702,7 @@ class BillingController extends Controller
 
         foreach ($uploadedRows as $row) {
             $rowData = $row['row_data'] ?? [];
-            $employeeId = $this->normalizeIdentityValue($rowData[$employeeIdColumnKey] ?? null);
+            $employeeId = $this->normalizeUploadedEmployeeId($rowData[$employeeIdColumnKey] ?? null);
 
             if ($employeeId === '') {
                 continue;
@@ -1854,6 +1854,13 @@ class BillingController extends Controller
     private function normalizeIdentityValue(mixed $value): string
     {
         return strtoupper(trim((string) ($value ?? '')));
+    }
+
+    private function normalizeUploadedEmployeeId(mixed $value): string
+    {
+        $employeeId = $this->normalizeIdentityValue($value);
+
+        return preg_replace('/-\d+$/', '', $employeeId) ?? $employeeId;
     }
 
     private function normalizeDateValue(mixed $value): ?string
